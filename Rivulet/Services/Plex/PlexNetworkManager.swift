@@ -793,6 +793,113 @@ class PlexNetworkManager: NSObject {
         return container.MediaContainer.Metadata ?? []
     }
 
+    // MARK: - Live TV
+
+    /// Check if the Plex server supports Live TV
+    func getLiveTVCapabilities(
+        serverURL: String,
+        authToken: String
+    ) async throws -> PlexLiveTVCapabilities {
+        // Check for DVR/tuner capability by requesting the livetv endpoint
+        guard let url = URL(string: "\(serverURL)/livetv/dvrs") else {
+            throw PlexAPIError.invalidURL
+        }
+
+        do {
+            let container: PlexDVRContainer = try await request(
+                url,
+                headers: plexHeaders(authToken: authToken)
+            )
+
+            let hasDVRs = !(container.MediaContainer.Dvr?.isEmpty ?? true)
+            return PlexLiveTVCapabilities(
+                allowTuners: hasDVRs,
+                liveTVEnabled: hasDVRs,
+                hasDVR: hasDVRs
+            )
+        } catch {
+            // If the endpoint fails, Live TV is not available
+            return PlexLiveTVCapabilities()
+        }
+    }
+
+    /// Get all Live TV channels
+    func getLiveTVChannels(
+        serverURL: String,
+        authToken: String
+    ) async throws -> [PlexLiveTVChannel] {
+        guard let url = URL(string: "\(serverURL)/livetv/sessions") else {
+            throw PlexAPIError.invalidURL
+        }
+
+        let container: PlexLiveTVChannelContainer = try await request(
+            url,
+            headers: plexHeaders(authToken: authToken)
+        )
+
+        return container.MediaContainer.Metadata ?? []
+    }
+
+    /// Get Live TV guide (EPG) for specified channels and time range
+    func getLiveTVGuide(
+        serverURL: String,
+        authToken: String,
+        channelIds: [String]? = nil,
+        startTime: Date,
+        endTime: Date
+    ) async throws -> [PlexLiveTVGuideChannel] {
+        guard var components = URLComponents(string: "\(serverURL)/livetv/dvrs/1/channels") else {
+            throw PlexAPIError.invalidURL
+        }
+
+        let startTimestamp = Int(startTime.timeIntervalSince1970)
+        let endTimestamp = Int(endTime.timeIntervalSince1970)
+
+        var queryItems = [
+            URLQueryItem(name: "includeMeta", value: "1"),
+            URLQueryItem(name: "beginsAt>", value: "\(startTimestamp)"),
+            URLQueryItem(name: "endsAt<", value: "\(endTimestamp)")
+        ]
+
+        if let ids = channelIds, !ids.isEmpty {
+            queryItems.append(URLQueryItem(name: "channelId", value: ids.joined(separator: ",")))
+        }
+
+        components.queryItems = queryItems
+
+        guard let url = components.url else {
+            throw PlexAPIError.invalidURL
+        }
+
+        let container: PlexLiveTVGuideContainer = try await request(
+            url,
+            headers: plexHeaders(authToken: authToken)
+        )
+
+        return container.MediaContainer.Metadata ?? []
+    }
+
+    /// Build Live TV stream URL for a channel
+    func buildLiveTVStreamURL(
+        serverURL: String,
+        authToken: String,
+        channelKey: String
+    ) -> URL? {
+        guard var components = URLComponents(string: "\(serverURL)\(channelKey)") else {
+            return nil
+        }
+
+        components.queryItems = [
+            URLQueryItem(name: "X-Plex-Token", value: authToken),
+            URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
+            URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform),
+            URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName),
+            URLQueryItem(name: "X-Plex-Product", value: PlexAPI.productName)
+        ]
+
+        return components.url
+    }
+
     // MARK: - Helper Methods
 
     private func plexHeaders(authToken: String) -> [String: String] {

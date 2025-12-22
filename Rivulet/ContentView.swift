@@ -616,6 +616,8 @@ struct SettingsView: View {
     @AppStorage("showHomeHero") private var showHomeHero = true
     @AppStorage("showLibraryHero") private var showLibraryHero = true
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
+    @Environment(\.contentFocusVersion) private var contentFocusVersion
+    @State private var focusTrigger = 0  // Increment to trigger first row focus
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -636,10 +638,12 @@ struct SettingsView: View {
                                 icon: "server.rack",
                                 iconColor: .orange,
                                 title: "Plex Server",
-                                subtitle: "Media library connection"
-                            ) {
-                                navigationPath.append(SettingsDestination.plex)
-                            }
+                                subtitle: "Media library connection",
+                                action: {
+                                    navigationPath.append(SettingsDestination.plex)
+                                },
+                                focusTrigger: focusTrigger  // First row gets focus
+                            )
 
                             SettingsRow(
                                 icon: "antenna.radiowaves.left.and.right",
@@ -719,6 +723,10 @@ struct SettingsView: View {
                 }
             }
             .background(Color.black)
+            .onChange(of: contentFocusVersion) { _, _ in
+                // Trigger first row to claim focus when sidebar closes
+                focusTrigger += 1
+            }
             .navigationDestination(for: SettingsDestination.self) { destination in
                 switch destination {
                 case .plex:
@@ -737,31 +745,6 @@ enum SettingsDestination: Hashable {
     case plex
     case iptv
     case libraries
-}
-
-// MARK: - Settings Back Button
-
-struct SettingsBackButton: View {
-    let action: () -> Void
-    @FocusState private var isFocused: Bool
-    
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                Circle()
-                    .fill(isFocused ? Color.white : Color.white.opacity(0.15))
-                    .frame(width: 50, height: 50)
-                
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(isFocused ? .black : .white)
-            }
-        }
-        .buttonStyle(.plain)
-        .focused($isFocused)
-        .scaleEffect(isFocused ? 1.1 : 1.0)
-        .animation(.easeOut(duration: 0.15), value: isFocused)
-    }
 }
 
 // MARK: - Settings Components
@@ -792,6 +775,7 @@ struct SettingsRow: View {
     let title: String
     let subtitle: String
     let action: () -> Void
+    var focusTrigger: Int? = nil  // When non-nil and changes, claim focus
 
     @FocusState private var isFocused: Bool
 
@@ -836,6 +820,11 @@ struct SettingsRow: View {
         .focused($isFocused)
         .onTapGesture {
             action()
+        }
+        .onChange(of: focusTrigger) { _, newValue in
+            if newValue != nil {
+                isFocused = true
+            }
         }
         .animation(.easeOut(duration: 0.15), value: isFocused)
     }
@@ -927,16 +916,12 @@ struct PlexSettingsView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 32) {
-                // Back button and Header
-                HStack(spacing: 16) {
-                    SettingsBackButton(action: goBack)
-                    
-                    Text("Plex Server")
-                        .font(.system(size: 48, weight: .bold))
-                        .foregroundStyle(.white)
-                }
-                .padding(.horizontal, 80)
-                .padding(.top, 60)
+                // Header (Menu button on remote navigates back)
+                Text("Plex Server")
+                    .font(.system(size: 48, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 80)
+                    .padding(.top, 60)
 
                 VStack(spacing: 24) {
                     if authManager.isAuthenticated {
@@ -1092,16 +1077,12 @@ struct IPTVSettingsView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 32) {
-                // Back button and Header
-                HStack(spacing: 16) {
-                    SettingsBackButton(action: goBack)
-                    
-                    Text("Live TV Sources")
-                        .font(.system(size: 48, weight: .bold))
-                        .foregroundStyle(.white)
-                }
-                .padding(.horizontal, 80)
-                .padding(.top, 60)
+                // Header (Menu button on remote navigates back)
+                Text("Live TV Sources")
+                    .font(.system(size: 48, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 80)
+                    .padding(.top, 60)
 
                 // Placeholder
                 VStack(spacing: 28) {
@@ -1143,16 +1124,12 @@ struct LibrarySettingsView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 32) {
-                // Back button and Header
-                HStack(spacing: 16) {
-                    SettingsBackButton(action: goBack)
-                    
-                    Text("Sidebar Libraries")
-                        .font(.system(size: 48, weight: .bold))
-                        .foregroundStyle(.white)
-                }
-                .padding(.horizontal, 80)
-                .padding(.top, 60)
+                // Header (Menu button on remote navigates back)
+                Text("Sidebar Libraries")
+                    .font(.system(size: 48, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 80)
+                    .padding(.top, 60)
 
                 Text("Choose which libraries appear in the sidebar. Tap to toggle visibility, use arrows to reorder.")
                     .font(.system(size: 17))
