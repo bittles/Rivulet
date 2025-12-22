@@ -1,0 +1,204 @@
+//
+//  PlexModels.swift
+//  Rivulet
+//
+//  Ported from plex_watchOS - Models.swift
+//  Original created by Bain Gurley on 4/19/24.
+//
+
+import Foundation
+
+// MARK: - Plex API Configuration
+
+/// Plex API constants
+enum PlexAPI {
+    static let baseUrl = "https://plex.tv"
+    static let clientIdentifier = "com.gstudios.rivulet"
+    static let productName = "Rivulet"
+    static let deviceName = "Apple TV"
+    static let platform = "tvOS"
+}
+
+// MARK: - Server/Device Models
+
+struct PlexDevice: Codable, Sendable {
+    let name: String
+    let product: String
+    let productVersion: String
+    let platform: String
+    let platformVersion: String
+    let device: String
+    let clientIdentifier: String
+    let createdAt: String
+    let lastSeenAt: String
+    let provides: String
+    let ownerId: String?
+    let sourceTitle: String?
+    let publicAddress: String?
+    let accessToken: String?
+    let owned: Bool?
+    let home: Bool?
+    let synced: Bool?
+    let relay: Bool?
+    let presence: Bool?
+    let httpsRequired: Bool?
+    let publicAddressMatches: Bool?
+    let dnsRebindingProtection: Bool?
+    let natLoopbackSupported: Bool?
+    let connections: [PlexConnection]
+
+    enum CodingKeys: String, CodingKey {
+        case name, product, productVersion, platform, platformVersion, device
+        case clientIdentifier, createdAt, lastSeenAt, provides, ownerId
+        case sourceTitle, publicAddress, accessToken, owned, home, synced
+        case relay, presence, httpsRequired, publicAddressMatches
+        case dnsRebindingProtection, natLoopbackSupported, connections
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        product = try container.decode(String.self, forKey: .product)
+        productVersion = try container.decode(String.self, forKey: .productVersion)
+        platform = try container.decode(String.self, forKey: .platform)
+        platformVersion = try container.decode(String.self, forKey: .platformVersion)
+        device = try container.decode(String.self, forKey: .device)
+        clientIdentifier = try container.decode(String.self, forKey: .clientIdentifier)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        lastSeenAt = try container.decode(String.self, forKey: .lastSeenAt)
+        provides = try container.decode(String.self, forKey: .provides)
+
+        // Handle ownerId as either String or Int
+        if let ownerIdString = try? container.decode(String.self, forKey: .ownerId) {
+            ownerId = ownerIdString
+        } else if let ownerIdInt = try? container.decode(Int.self, forKey: .ownerId) {
+            ownerId = String(ownerIdInt)
+        } else {
+            ownerId = nil
+        }
+
+        sourceTitle = try container.decodeIfPresent(String.self, forKey: .sourceTitle)
+        publicAddress = try container.decodeIfPresent(String.self, forKey: .publicAddress)
+        accessToken = try container.decodeIfPresent(String.self, forKey: .accessToken)
+        owned = try container.decodeIfPresent(Bool.self, forKey: .owned)
+        home = try container.decodeIfPresent(Bool.self, forKey: .home)
+        synced = try container.decodeIfPresent(Bool.self, forKey: .synced)
+        relay = try container.decodeIfPresent(Bool.self, forKey: .relay)
+        presence = try container.decodeIfPresent(Bool.self, forKey: .presence)
+        httpsRequired = try container.decodeIfPresent(Bool.self, forKey: .httpsRequired)
+        publicAddressMatches = try container.decodeIfPresent(Bool.self, forKey: .publicAddressMatches)
+        dnsRebindingProtection = try container.decodeIfPresent(Bool.self, forKey: .dnsRebindingProtection)
+        natLoopbackSupported = try container.decodeIfPresent(Bool.self, forKey: .natLoopbackSupported)
+        connections = try container.decode([PlexConnection].self, forKey: .connections)
+    }
+}
+
+struct PlexConnection: Codable, Sendable {
+    let protocolType: String
+    let address: String
+    let port: Int
+    let uri: String
+    let local: Bool
+    let relay: Bool
+    let IPv6: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case protocolType = "protocol"
+        case address, port, uri, local, relay, IPv6
+    }
+
+    /// Full URL for this connection
+    var fullURL: String {
+        return uri
+    }
+}
+
+// MARK: - Library Models
+
+struct PlexLibraryContainer: Codable, Sendable {
+    let MediaContainer: PlexLibraryMediaContainer
+}
+
+struct PlexLibraryMediaContainer: Codable, Sendable {
+    let size: Int
+    let title1: String?
+    let Directory: [PlexLibrary]?
+}
+
+struct PlexLibrary: Codable, Identifiable, Sendable {
+    var id: String { key }
+    let key: String
+    let type: String          // "movie", "show", "artist", etc.
+    let title: String
+    let agent: String
+    let scanner: String
+    let language: String
+    let uuid: String
+    let updatedAt: Int?
+    let createdAt: Int?
+    let scannedAt: Int?
+    let Location: [PlexLibraryLocation]?
+
+    /// Check if this is a video library
+    var isVideoLibrary: Bool {
+        type == "movie" || type == "show"
+    }
+}
+
+struct PlexLibraryLocation: Codable, Sendable {
+    let id: Int
+    let path: String
+}
+
+// MARK: - Media Container (Generic Response Wrapper)
+
+struct PlexMediaContainer: Codable, Sendable {
+    var size: Int?
+    var Metadata: [PlexMetadata]?
+    var Hub: [PlexHub]?
+}
+
+struct PlexMediaContainerWrapper: Codable, Sendable {
+    var MediaContainer: PlexMediaContainer
+}
+
+// MARK: - Hub (for home screen sections)
+
+struct PlexHub: Codable, Identifiable, Sendable {
+    var id: String { hubIdentifier ?? title ?? UUID().uuidString }
+    var hubIdentifier: String?
+    var title: String?
+    var type: String?
+    var hubKey: String?
+    var key: String?
+    var more: Bool?
+    var size: Int?
+    var Metadata: [PlexMetadata]?
+}
+
+// MARK: - Media Item (Movie, Show, Episode, etc.)
+
+struct PlexMedia: Codable, Sendable {
+    let id: Int
+    let duration: Int?
+    let bitrate: Int?
+    let width: Int?
+    let height: Int?
+    let aspectRatio: Double?
+    let audioChannels: Int?
+    let audioCodec: String?
+    let videoCodec: String?
+    let videoResolution: String?
+    let container: String?
+    let videoFrameRate: String?
+    let Part: [PlexPart]?
+}
+
+struct PlexPart: Codable, Sendable {
+    let id: Int
+    let key: String
+    let duration: Int?
+    let file: String?
+    let size: Int?
+    let container: String?
+}
