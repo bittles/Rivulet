@@ -263,7 +263,7 @@ struct HeroView: View {
     let authToken: String
     let onSelect: () -> Void
 
-    @Environment(\.isFocused) private var isFocused
+    @FocusState private var isPlayButtonFocused: Bool
 
     private var artURL: URL? {
         // Prefer art (backdrop) over thumb (poster)
@@ -278,99 +278,115 @@ struct HeroView: View {
     }
 
     var body: some View {
-        Button(action: onSelect) {
-            GeometryReader { geo in
-                ZStack(alignment: .bottomLeading) {
-                    // Background art
-                    AsyncImage(url: artURL) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: geo.size.width, height: geo.size.height)
-                                .clipped()
-                        default:
-                            Rectangle()
-                                .fill(
-                                    LinearGradient(
-                                        colors: [Color(white: 0.15), Color(white: 0.08)],
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
+        GeometryReader { geo in
+            ZStack(alignment: .bottomLeading) {
+                // Background art - full width edge to edge
+                AsyncImage(url: artURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .clipped()
+                    default:
+                        Rectangle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color(white: 0.15), Color(white: 0.08)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
                                 )
-                        }
+                            )
                     }
-
-                    // Gradient overlay for text legibility
-                    LinearGradient(
-                        colors: [
-                            .clear,
-                            .black.opacity(0.3),
-                            .black.opacity(0.85)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-
-                    // Content info
-                    VStack(alignment: .leading, spacing: 12) {
-                        // Type badge
-                        if let type = item.type {
-                            Text(type.uppercased())
-                                .font(.system(size: 13, weight: .bold))
-                                .tracking(2)
-                                .foregroundStyle(.white.opacity(0.6))
-                        }
-
-                        // Title
-                        Text(item.title ?? "")
-                            .font(.system(size: 48, weight: .bold))
-                            .foregroundStyle(.white)
-                            .lineLimit(2)
-
-                        // Metadata row
-                        HStack(spacing: 16) {
-                            if let year = item.year {
-                                Text(String(year))
-                            }
-                            if let rating = item.contentRating {
-                                Text(rating)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 2)
-                                    .background(.white.opacity(0.2))
-                                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                            }
-                            if let duration = item.duration {
-                                Text(formatDuration(duration))
-                            }
-                        }
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.7))
-
-                        // Summary (truncated)
-                        if let summary = item.summary, !summary.isEmpty {
-                            Text(summary)
-                                .font(.system(size: 16))
-                                .foregroundStyle(.white.opacity(0.6))
-                                .lineLimit(2)
-                                .frame(maxWidth: 700, alignment: .leading)
-                        }
-                    }
-                    .padding(.horizontal, 80)
-                    .padding(.bottom, 60)
                 }
+
+                // Gradient overlay for text legibility
+                LinearGradient(
+                    colors: [
+                        .clear,
+                        .clear,
+                        .black.opacity(0.4),
+                        .black.opacity(0.9)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                // Content info
+                VStack(alignment: .leading, spacing: 16) {
+                    // Type badge
+                    if let type = item.type {
+                        Text(type.uppercased())
+                            .font(.system(size: 15, weight: .bold))
+                            .tracking(2)
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+
+                    // Title
+                    Text(item.title ?? "")
+                        .font(.system(size: 56, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+
+                    // Metadata row
+                    HStack(spacing: 16) {
+                        if let year = item.year {
+                            Text(String(year))
+                        }
+                        if let rating = item.contentRating {
+                            Text(rating)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(.white.opacity(0.2))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        if let duration = item.duration {
+                            Text(formatDuration(duration))
+                        }
+                    }
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.7))
+
+                    // Summary (truncated)
+                    if let summary = item.summary, !summary.isEmpty {
+                        Text(summary)
+                            .font(.system(size: 19))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .lineLimit(2)
+                            .frame(maxWidth: 800, alignment: .leading)
+                    }
+
+                    // Play button - this receives focus instead of the whole hero
+                    #if os(tvOS)
+                    Button(action: onSelect) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 20, weight: .semibold))
+                            Text("Play")
+                                .font(.system(size: 22, weight: .semibold))
+                        }
+                        .foregroundStyle(isPlayButtonFocused ? .black : .white)
+                        .padding(.horizontal, 36)
+                        .padding(.vertical, 16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(isPlayButtonFocused ? .white : .white.opacity(0.25))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .focused($isPlayButtonFocused)
+                    .padding(.top, 8)
+                    #endif
+                }
+                .padding(.horizontal, 80)
+                .padding(.bottom, 70)
             }
-            #if os(tvOS)
-            .frame(height: 600)
-            #else
-            .frame(height: 400)
-            #endif
         }
-        .buttonStyle(.plain)
         #if os(tvOS)
-        .scaleEffect(isFocused ? 1.01 : 1.0)
-        .animation(.easeOut(duration: 0.2), value: isFocused)
+        .frame(height: 700)
+        #else
+        .frame(height: 400)
         #endif
     }
 
@@ -395,16 +411,16 @@ struct ContentRow: View {
     var onItemSelected: ((PlexMetadata) -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 24) {
             // Section title
             Text(title)
-                .font(.system(size: 24, weight: .semibold))
+                .font(.system(size: 28, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.9))
                 .padding(.horizontal, 80)
 
             // Horizontal scroll of posters
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 20) {
+                LazyHStack(spacing: 24) {
                     ForEach(items, id: \.ratingKey) { item in
                         Button {
                             onItemSelected?(item)
@@ -415,10 +431,11 @@ struct ContentRow: View {
                                 authToken: authToken
                             )
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(CardButtonStyle())
                     }
                 }
                 .padding(.horizontal, 80)
+                .padding(.vertical, 24)  // Room for scale effect and shadow
             }
         }
     }
@@ -448,20 +465,20 @@ struct InfiniteContentRow: View {
     private let pageSize = 24
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 24) {
             // Section title with item count
             HStack(spacing: 12) {
                 Text(title)
-                    .font(.system(size: 24, weight: .semibold))
+                    .font(.system(size: 28, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.9))
 
                 if let total = totalSize, total > items.count {
                     Text("\(items.count) of \(total)")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(.white.opacity(0.4))
                 } else if hasReachedEnd && items.count > pageSize {
                     Text("All \(items.count)")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(.white.opacity(0.4))
                 }
             }
@@ -469,7 +486,7 @@ struct InfiniteContentRow: View {
 
             // Horizontal scroll of posters with infinite loading
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 20) {
+                LazyHStack(spacing: 24) {
                     ForEach(Array(items.enumerated()), id: \.element.ratingKey) { index, item in
                         Button {
                             onItemSelected?(item)
@@ -480,7 +497,7 @@ struct InfiniteContentRow: View {
                                 authToken: authToken
                             )
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(CardButtonStyle())
                         .focused($focusedIndex, equals: index)
                         .onMoveCommand { direction in
                             if direction == .left && index == 0 {
@@ -507,6 +524,7 @@ struct InfiniteContentRow: View {
                     }
                 }
                 .padding(.horizontal, 80)
+                .padding(.vertical, 24)  // Room for scale effect and shadow
             }
             // Removed .focusSection() to allow focus to escape to LeftEdgeTrigger when at leftmost position
         }

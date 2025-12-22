@@ -7,6 +7,36 @@
 
 import SwiftUI
 
+// MARK: - Card Button Style (tvOS - no focus ring, scale only)
+
+#if os(tvOS)
+/// A button style that removes the default tvOS focus ring and uses scale + shadow instead.
+/// The MediaPosterCard inside reads focus state from `@Environment(\.isFocused)`.
+struct CardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        CardButtonContent(configuration: configuration)
+    }
+}
+
+private struct CardButtonContent: View {
+    let configuration: ButtonStyleConfiguration
+    @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        configuration.label
+            .scaleEffect(isFocused ? 1.1 : 1.0)
+            .shadow(
+                color: .black.opacity(isFocused ? 0.6 : 0.25),
+                radius: isFocused ? 24 : 8,
+                y: isFocused ? 12 : 4
+            )
+            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isFocused)
+    }
+}
+#endif
+
+// MARK: - Media Poster Card
+
 struct MediaPosterCard: View {
     let item: PlexMetadata
     let serverURL: String
@@ -36,27 +66,26 @@ struct MediaPosterCard: View {
                 .overlay(alignment: .topTrailing) {
                     unwatchedBadge
                 }
-                #if os(tvOS)
-                .shadow(
-                    color: .black.opacity(isFocused ? 0.5 : 0.3),
-                    radius: isFocused ? 30 : 10,
-                    y: isFocused ? 15 : 5
-                )
-                .scaleEffect(isFocused ? 1.08 : 1.0)
-                .animation(.spring(response: 0.35, dampingFraction: 0.7), value: isFocused)
-                #endif
 
             // Metadata
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(item.title ?? "Unknown")
+                    #if os(tvOS)
+                    .font(.system(size: 19, weight: .medium))
+                    #else
                     .font(.system(size: 15, weight: .medium))
+                    #endif
                     .foregroundStyle(isFocused ? .white : .white.opacity(0.85))
                     .lineLimit(2)
                     .frame(width: posterWidth, alignment: .leading)
 
                 if let subtitle = subtitleText {
                     Text(subtitle)
+                        #if os(tvOS)
+                        .font(.system(size: 16, weight: .regular))
+                        #else
                         .font(.system(size: 13, weight: .regular))
+                        #endif
                         .foregroundStyle(.white.opacity(0.5))
                         .lineLimit(1)
                 }
@@ -153,8 +182,16 @@ struct MediaPosterCard: View {
     // MARK: - Computed Properties
 
     private var posterURL: URL? {
-        guard let thumb = item.thumb else { return nil }
-        var urlString = "\(serverURL)\(thumb)"
+        // For episodes, prefer the series poster (grandparentThumb) over episode thumbnail
+        let thumb: String?
+        if item.type == "episode" {
+            thumb = item.grandparentThumb ?? item.parentThumb ?? item.thumb
+        } else {
+            thumb = item.thumb
+        }
+
+        guard let thumbPath = thumb else { return nil }
+        var urlString = "\(serverURL)\(thumbPath)"
         if !urlString.contains("X-Plex-Token") {
             urlString += urlString.contains("?") ? "&" : "?"
             urlString += "X-Plex-Token=\(authToken)"
@@ -182,7 +219,15 @@ struct MediaPosterCard: View {
             }
             return nil
         case "episode":
-            return item.episodeString
+            // Show series name and episode info (e.g., "Breaking Bad · S1:E3")
+            var parts: [String] = []
+            if let seriesName = item.grandparentTitle {
+                parts.append(seriesName)
+            }
+            if let episodeInfo = item.episodeString {
+                parts.append(episodeInfo)
+            }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
         case "season":
             return item.title
         default:
@@ -219,10 +264,15 @@ struct MediaRow: View {
                                 authToken: authToken
                             )
                         }
+                        #if os(tvOS)
+                        .buttonStyle(CardButtonStyle())
+                        #else
                         .buttonStyle(.plain)
+                        #endif
                     }
                 }
                 .padding(.horizontal, 48)
+                .padding(.vertical, 20)  // Room for scale effect
             }
         }
     }
@@ -236,12 +286,18 @@ struct MediaGrid: View {
     let authToken: String
     var onItemSelected: ((PlexMetadata) -> Void)?
 
+    #if os(tvOS)
+    private let columns = [
+        GridItem(.adaptive(minimum: 220, maximum: 240), spacing: 32)
+    ]
+    #else
     private let columns = [
         GridItem(.adaptive(minimum: 200, maximum: 220), spacing: 24)
     ]
+    #endif
 
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 32) {
+        LazyVGrid(columns: columns, spacing: 40) {
             ForEach(items, id: \.ratingKey) { item in
                 Button {
                     onItemSelected?(item)
@@ -252,10 +308,15 @@ struct MediaGrid: View {
                         authToken: authToken
                     )
                 }
+                #if os(tvOS)
+                .buttonStyle(CardButtonStyle())
+                #else
                 .buttonStyle(.plain)
+                #endif
             }
         }
         .padding(.horizontal, 48)
+        .padding(.vertical, 20)  // Room for scale effect
     }
 }
 

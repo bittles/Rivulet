@@ -14,6 +14,7 @@ struct ContentView: View {
     var body: some View {
         #if os(tvOS)
         TVSidebarView()
+            .preferredColorScheme(.dark)  // Force dark mode on tvOS
         #else
         NavigationSplitViewContent()
         #endif
@@ -27,9 +28,10 @@ struct ContentView: View {
 /// Navigation destination for tvOS
 enum TVDestination: Hashable, CaseIterable {
     case home
+    case liveTV
     case settings
 
-    static var allCases: [TVDestination] { [.home, .settings] }
+    static var allCases: [TVDestination] { [.home, .liveTV, .settings] }
 }
 
 /// Environment key for opening sidebar from content views
@@ -56,13 +58,23 @@ extension EnvironmentValues {
     }
 }
 
+/// Preference key for nested navigation state (bubbles up from child views)
+struct IsInNestedNavigationKey: PreferenceKey {
+    static var defaultValue: Bool = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()  // True if any child is in nested nav
+    }
+}
+
 struct TVSidebarView: View {
     @StateObject private var authManager = PlexAuthManager.shared
     @StateObject private var dataStore = PlexDataStore.shared
+    @StateObject private var liveTVDataStore = LiveTVDataStore.shared
     @State private var selectedDestination: TVDestination = .home
     @State private var selectedLibraryKey: String?
     @State private var isSidebarVisible = false
     @State private var contentFocusVersion = 0
+    @State private var isInNestedNavigation = false  // True when inside nested settings views
     @FocusState private var focusedItem: String?
     @State private var highlightedItem: String = "home"  // Tracks which item is currently highlighted
 
@@ -72,6 +84,10 @@ struct TVSidebarView: View {
     private var allSidebarItems: [String] {
         var items = ["home"]
         items.append(contentsOf: dataStore.visibleVideoLibraries.map { $0.key })
+        // Only show Live TV in sidebar if sources are configured
+        if liveTVDataStore.hasConfiguredSources {
+            items.append("liveTV")
+        }
         items.append("settings")
         return items
     }
@@ -80,7 +96,8 @@ struct TVSidebarView: View {
         ZStack {
             // Full-screen content with left-edge trigger
             HStack(spacing: 0) {
-                if !isSidebarVisible {
+                // Only show left-edge trigger when not in nested navigation
+                if !isSidebarVisible && !isInNestedNavigation {
                     LeftEdgeTrigger {
                         openSidebar()
                     }
@@ -94,7 +111,8 @@ struct TVSidebarView: View {
             }
             .zIndex(0)
             .onMoveCommand { direction in
-                if direction == .left && !isSidebarVisible {
+                // Only open sidebar on left if not in nested navigation
+                if direction == .left && !isSidebarVisible && !isInNestedNavigation {
                     openSidebar()
                 }
             }
@@ -129,6 +147,9 @@ struct TVSidebarView: View {
         }
         .ignoresSafeArea()
         .animation(.easeOut(duration: 0.2), value: isSidebarVisible)
+        .onPreferenceChange(IsInNestedNavigationKey.self) { nested in
+            isInNestedNavigation = nested
+        }
         .onExitCommand(perform: handleExitCommand)
         .task(id: authManager.isAuthenticated) {
             if authManager.authToken != nil {
@@ -149,9 +170,9 @@ struct TVSidebarView: View {
             // App branding
             HStack(spacing: 14) {
                 Image(systemName: "play.rectangle.fill")
-                    .font(.system(size: 28, weight: .semibold))
+                    .font(.system(size: 30, weight: .semibold))
                 Text("Rivulet")
-                    .font(.system(size: 32, weight: .bold))
+                    .font(.system(size: 34, weight: .bold))
             }
             .foregroundStyle(.white)
             .padding(.top, 50)
@@ -196,18 +217,31 @@ struct TVSidebarView: View {
                                         ProgressView()
                                             .tint(.white.opacity(0.5))
                                         Text("Loading...")
-                                            .font(.system(size: 15))
+                                            .font(.system(size: 17))
                                             .foregroundStyle(.white.opacity(0.5))
                                     }
                                     .padding(.horizontal, 32)
                                     .padding(.vertical, 16)
                                 }
 
+                                // Live TV section (only if sources configured)
+                                if liveTVDataStore.hasConfiguredSources {
+                                    sectionHeader("LIVE TV")
+
+                                    SidebarRow(
+                                        icon: "tv.and.mediabox",
+                                        title: "Channels",
+                                        isHighlighted: highlightedItem == "liveTV",
+                                        isSelected: selectedDestination == .liveTV
+                                    )
+                                    .id("liveTV")
+                                }
+
                                 Spacer(minLength: 60)
 
                                 // Settings
                                 Divider()
-                                    .background(.white.opacity(0.15))
+                                    .background(.white.opacity(0.2))
                                     .padding(.horizontal, 24)
                                     .padding(.vertical, 20)
 
@@ -252,9 +286,9 @@ struct TVSidebarView: View {
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 12, weight: .bold))
+            .font(.system(size: 13, weight: .bold))
             .tracking(1.5)
-            .foregroundStyle(.white.opacity(0.4))
+            .foregroundStyle(.white.opacity(0.5))
             .padding(.horizontal, 36)
             .padding(.top, 24)
             .padding(.bottom, 8)
@@ -277,6 +311,8 @@ struct TVSidebarView: View {
                     } else {
                         welcomeView
                     }
+                case .liveTV:
+                    ChannelListView()
                 case .settings:
                     SettingsView()
                 }
@@ -311,23 +347,39 @@ struct TVSidebarView: View {
             highlightedItem = libraryKey
         } else if selectedDestination == .settings {
             highlightedItem = "settings"
+        } else if selectedDestination == .liveTV {
+            highlightedItem = "liveTV"
         } else {
             highlightedItem = "home"
         }
-        
+
         isSidebarVisible = true
     }
 
     private func closeSidebar() {
-        isSidebarVisible = false
-        focusedItem = nil
+        // First: tell content to prepare to claim focus
         contentFocusVersion &+= 1
+
+        // Then: hide sidebar
+        isSidebarVisible = false
+
+        // Delay releasing sidebar focus so content can claim it first
+        // This prevents the system from picking a random focus target
+        DispatchQueue.main.async {
+            focusedItem = nil
+        }
     }
     
     private func handleExitCommand() {
-        print("🟣 [DEBUG] handleExitCommand() called - sidebar visible: \(isSidebarVisible)")
-        // Back button (← on remote) toggles sidebar
-        // Note: Menu/Home button is a system button we cannot override
+        print("🟣 [DEBUG] handleExitCommand() called - sidebar visible: \(isSidebarVisible), nested: \(isInNestedNavigation)")
+
+        // If in nested navigation (e.g., Settings -> Plex Server), let NavigationStack handle back
+        // Don't intercept the Menu button - it should pop the nav stack
+        if isInNestedNavigation {
+            return  // Let the system/NavigationStack handle it
+        }
+
+        // At root level: Back button toggles sidebar
         if isSidebarVisible {
             closeSidebar()
         } else {
@@ -399,6 +451,8 @@ struct TVSidebarView: View {
             navigateToLibrary(library)
         } else if highlightedItem == "home" {
             navigateToHome()
+        } else if highlightedItem == "liveTV" {
+            navigateToLiveTV()
         } else if highlightedItem == "settings" {
             navigateToSettings()
         }
@@ -418,6 +472,11 @@ struct TVSidebarView: View {
         selectedLibraryKey = library.key
         // Keep destination as .home so library view shows (not .settings)
         selectedDestination = .home
+    }
+
+    private func navigateToLiveTV() {
+        selectedDestination = .liveTV
+        selectedLibraryKey = nil
     }
 
     private func navigateToSettings() {
@@ -524,13 +583,13 @@ struct SidebarRow: View {
     let isSelected: Bool
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             Image(systemName: icon)
-                .font(.system(size: 20, weight: .medium))
-                .frame(width: 24)
+                .font(.system(size: 22, weight: .medium))
+                .frame(width: 26)
 
             Text(title)
-                .font(.system(size: 19, weight: isSelected ? .semibold : .regular))
+                .font(.system(size: 21, weight: isSelected ? .semibold : .regular))
                 .lineLimit(1)
 
             Spacer(minLength: 4)
@@ -538,16 +597,16 @@ struct SidebarRow: View {
             if isSelected {
                 Circle()
                     .fill(.white)
-                    .frame(width: 5, height: 5)
+                    .frame(width: 6, height: 6)
             }
         }
-        .foregroundStyle(.white.opacity(isHighlighted || isSelected ? 1.0 : 0.7))
-        .padding(.leading, 14)
-        .padding(.trailing, 10)
-        .padding(.vertical, 11)
-        .glassEffect(
-            isHighlighted ? .regular.tint(.white.opacity(0.15)) : .identity,
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        .foregroundStyle(.white.opacity(isHighlighted || isSelected ? 1.0 : 0.6))
+        .padding(.leading, 16)
+        .padding(.trailing, 12)
+        .padding(.vertical, 13)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(isHighlighted ? .white.opacity(0.15) : .clear)
         )
         .padding(.horizontal, 16)
         .animation(.easeOut(duration: 0.15), value: isHighlighted)
@@ -594,7 +653,7 @@ struct ChannelListView: View {
         ContentUnavailableView(
             "Channels",
             systemImage: "tv",
-            description: Text("IPTV channels will appear here")
+            description: Text("Live TV channels will appear here")
         )
     }
 }
@@ -606,713 +665,6 @@ struct EPGGridView: View {
             systemImage: "calendar",
             description: Text("Electronic Program Guide will appear here")
         )
-    }
-}
-
-// MARK: - Settings Views
-
-struct SettingsView: View {
-    @State private var navigationPath = NavigationPath()
-    @AppStorage("showHomeHero") private var showHomeHero = true
-    @AppStorage("showLibraryHero") private var showLibraryHero = true
-    @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
-    @Environment(\.contentFocusVersion) private var contentFocusVersion
-    @State private var focusTrigger = 0  // Increment to trigger first row focus
-
-    var body: some View {
-        NavigationStack(path: $navigationPath) {
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 32) {
-                    // Header
-                    Text("Settings")
-                        .font(.system(size: 48, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 80)
-                        .padding(.top, 60)
-
-                    // Settings categories
-                    VStack(spacing: 24) {
-                        // Servers section
-                        SettingsSection(title: "Servers") {
-                            SettingsRow(
-                                icon: "server.rack",
-                                iconColor: .orange,
-                                title: "Plex Server",
-                                subtitle: "Media library connection",
-                                action: {
-                                    navigationPath.append(SettingsDestination.plex)
-                                },
-                                focusTrigger: focusTrigger  // First row gets focus
-                            )
-
-                            SettingsRow(
-                                icon: "antenna.radiowaves.left.and.right",
-                                iconColor: .blue,
-                                title: "Live TV Sources",
-                                subtitle: "IPTV and Dispatcharr"
-                            ) {
-                                navigationPath.append(SettingsDestination.iptv)
-                            }
-                        }
-
-                        // Appearance section
-                        SettingsSection(title: "Appearance") {
-                            SettingsRow(
-                                icon: "sidebar.squares.left",
-                                iconColor: .purple,
-                                title: "Sidebar Libraries",
-                                subtitle: "Show, hide, and reorder libraries"
-                            ) {
-                                navigationPath.append(SettingsDestination.libraries)
-                            }
-
-                            SettingsToggleRow(
-                                icon: "sparkles.rectangle.stack",
-                                iconColor: .indigo,
-                                title: "Home Hero",
-                                subtitle: "Featured content banner on Home",
-                                isOn: $showHomeHero
-                            )
-
-                            SettingsToggleRow(
-                                icon: "rectangle.stack",
-                                iconColor: .teal,
-                                title: "Library Hero",
-                                subtitle: "Featured content banner in libraries",
-                                isOn: $showLibraryHero
-                            )
-
-                            SettingsToggleRow(
-                                icon: "square.stack.3d.up",
-                                iconColor: .cyan,
-                                title: "Discovery Rows",
-                                subtitle: "Top Rated, Rediscover, and similar",
-                                isOn: $showLibraryRecommendations
-                            )
-                        }
-
-                        // Playback section (for future use)
-                        SettingsSection(title: "Playback") {
-                            SettingsRow(
-                                icon: "play.rectangle",
-                                iconColor: .purple,
-                                title: "Video",
-                                subtitle: "Quality and streaming options"
-                            ) {
-                                // Future: Video settings
-                            }
-
-                            SettingsRow(
-                                icon: "speaker.wave.3",
-                                iconColor: .pink,
-                                title: "Audio",
-                                subtitle: "Sound and language preferences"
-                            ) {
-                                // Future: Audio settings
-                            }
-                        }
-
-                        // About section
-                        SettingsSection(title: "About") {
-                            SettingsInfoRow(title: "App", value: "Rivulet")
-                            SettingsInfoRow(title: "Version", value: "1.0.0")
-                        }
-                    }
-                    .padding(.horizontal, 80)
-                    .padding(.bottom, 80)
-                }
-            }
-            .background(Color.black)
-            .onChange(of: contentFocusVersion) { _, _ in
-                // Trigger first row to claim focus when sidebar closes
-                focusTrigger += 1
-            }
-            .navigationDestination(for: SettingsDestination.self) { destination in
-                switch destination {
-                case .plex:
-                    PlexSettingsView(goBack: { navigationPath.removeLast() })
-                case .iptv:
-                    IPTVSettingsView(goBack: { navigationPath.removeLast() })
-                case .libraries:
-                    LibrarySettingsView(goBack: { navigationPath.removeLast() })
-                }
-            }
-        }
-    }
-}
-
-enum SettingsDestination: Hashable {
-    case plex
-    case iptv
-    case libraries
-}
-
-// MARK: - Settings Components
-
-struct SettingsSection<Content: View>: View {
-    let title: String
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title.uppercased())
-                .font(.system(size: 14, weight: .bold))
-                .tracking(1.5)
-                .foregroundStyle(.white.opacity(0.5))
-                .padding(.leading, 8)
-
-            VStack(spacing: 2) {
-                content
-            }
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        }
-    }
-}
-
-struct SettingsRow: View {
-    let icon: String
-    let iconColor: Color
-    let title: String
-    let subtitle: String
-    let action: () -> Void
-    var focusTrigger: Int? = nil  // When non-nil and changes, claim focus
-
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        HStack(spacing: 16) {
-            // Icon
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(iconColor.gradient)
-                    .frame(width: 44, height: 44)
-
-                Image(systemName: icon)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-
-            // Text
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 19, weight: .medium))
-                    .foregroundStyle(.white)
-
-                Text(subtitle)
-                    .font(.system(size: 14))
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-
-            Spacer()
-
-            // Chevron
-            Image(systemName: "chevron.right")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.3))
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(isFocused ? .white.opacity(0.15) : .clear)
-        )
-        .focusable()
-        .focused($isFocused)
-        .onTapGesture {
-            action()
-        }
-        .onChange(of: focusTrigger) { _, newValue in
-            if newValue != nil {
-                isFocused = true
-            }
-        }
-        .animation(.easeOut(duration: 0.15), value: isFocused)
-    }
-}
-
-struct SettingsInfoRow: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 17))
-                .foregroundStyle(.white.opacity(0.7))
-
-            Spacer()
-
-            Text(value)
-                .font(.system(size: 17))
-                .foregroundStyle(.white.opacity(0.5))
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-    }
-}
-
-struct SettingsToggleRow: View {
-    let icon: String
-    let iconColor: Color
-    let title: String
-    let subtitle: String
-    @Binding var isOn: Bool
-
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        HStack(spacing: 16) {
-            // Icon
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(iconColor.gradient)
-                    .frame(width: 44, height: 44)
-
-                Image(systemName: icon)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-
-            // Text
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 19, weight: .medium))
-                    .foregroundStyle(.white)
-
-                Text(subtitle)
-                    .font(.system(size: 14))
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-
-            Spacer()
-
-            // On/Off text (Apple tvOS Settings style)
-            Text(isOn ? "On" : "Off")
-                .font(.system(size: 17))
-                .foregroundStyle(.white.opacity(0.5))
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(isFocused ? .white.opacity(0.15) : .clear)
-        )
-        .focusable()
-        .focused($isFocused)
-        .onTapGesture {
-            isOn.toggle()
-        }
-        .animation(.easeOut(duration: 0.15), value: isFocused)
-    }
-}
-
-// MARK: - Plex Settings
-
-struct PlexSettingsView: View {
-    @StateObject private var authManager = PlexAuthManager.shared
-    @State private var showAuthSheet = false
-    var goBack: () -> Void = {}
-
-    var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 32) {
-                // Header (Menu button on remote navigates back)
-                Text("Plex Server")
-                    .font(.system(size: 48, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 80)
-                    .padding(.top, 60)
-
-                VStack(spacing: 24) {
-                    if authManager.isAuthenticated {
-                        // Connected server card
-                        SettingsSection(title: "Connected Server") {
-                            HStack(spacing: 16) {
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(.green.gradient)
-                                        .frame(width: 52, height: 52)
-
-                                    Image(systemName: "checkmark")
-                                        .font(.system(size: 24, weight: .bold))
-                                        .foregroundStyle(.white)
-                                }
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(authManager.savedServerName ?? "Plex Server")
-                                        .font(.system(size: 21, weight: .semibold))
-                                        .foregroundStyle(.white)
-
-                                    if let username = authManager.username {
-                                        Text("Signed in as \(username)")
-                                            .font(.system(size: 15))
-                                            .foregroundStyle(.white.opacity(0.5))
-                                    }
-                                }
-
-                                Spacer()
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 16)
-                        }
-
-                        // Connection details
-                        if let serverURL = authManager.selectedServerURL {
-                            SettingsSection(title: "Connection") {
-                                SettingsInfoRow(title: "Server URL", value: serverURL)
-                            }
-                        }
-
-                        // Sign out
-                        SettingsSection(title: "Account") {
-                            SettingsActionRow(
-                                title: "Sign Out",
-                                isDestructive: true
-                            ) {
-                                authManager.signOut()
-                            }
-                        }
-                    } else {
-                        // Not connected
-                        VStack(spacing: 28) {
-                            Image(systemName: "server.rack")
-                                .font(.system(size: 64, weight: .thin))
-                                .foregroundStyle(.white.opacity(0.3))
-
-                            VStack(spacing: 8) {
-                                Text("No Server Connected")
-                                    .font(.system(size: 28, weight: .semibold))
-                                    .foregroundStyle(.white)
-
-                                Text("Connect to your Plex server to browse and stream your media library.")
-                                    .font(.system(size: 17))
-                                    .foregroundStyle(.white.opacity(0.5))
-                                    .multilineTextAlignment(.center)
-                                    .frame(maxWidth: 400)
-                            }
-
-                            ConnectButton {
-                                showAuthSheet = true
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 60)
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    }
-                }
-                .padding(.horizontal, 80)
-                .padding(.bottom, 80)
-            }
-        }
-        .background(Color.black)
-        .sheet(isPresented: $showAuthSheet) {
-            PlexAuthView()
-        }
-    }
-}
-
-struct SettingsActionRow: View {
-    let title: String
-    var isDestructive: Bool = false
-    let action: () -> Void
-
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        HStack {
-            Spacer()
-            Text(title)
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(isDestructive ? .red : .white)
-            Spacer()
-        }
-        .padding(.vertical, 14)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(isFocused ? (isDestructive ? .red.opacity(0.2) : .white.opacity(0.15)) : .clear)
-        )
-        .focusable()
-        .focused($isFocused)
-        .onTapGesture {
-            action()
-        }
-        .animation(.easeOut(duration: 0.15), value: isFocused)
-    }
-}
-
-struct ConnectButton: View {
-    let action: () -> Void
-
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "link")
-                .font(.system(size: 18, weight: .semibold))
-            Text("Connect to Plex")
-                .font(.system(size: 18, weight: .semibold))
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 28)
-        .padding(.vertical, 14)
-        .glassEffect(
-            isFocused ? .regular.tint(.blue.opacity(0.3)) : .regular,
-            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-        )
-        .scaleEffect(isFocused ? 1.05 : 1.0)
-        .focusable()
-        .focused($isFocused)
-        .onTapGesture {
-            action()
-        }
-        .animation(.easeOut(duration: 0.15), value: isFocused)
-    }
-}
-
-// MARK: - IPTV Settings
-
-struct IPTVSettingsView: View {
-    var goBack: () -> Void = {}
-    
-    var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 32) {
-                // Header (Menu button on remote navigates back)
-                Text("Live TV Sources")
-                    .font(.system(size: 48, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 80)
-                    .padding(.top, 60)
-
-                // Placeholder
-                VStack(spacing: 28) {
-                    Image(systemName: "antenna.radiowaves.left.and.right")
-                        .font(.system(size: 64, weight: .thin))
-                        .foregroundStyle(.white.opacity(0.3))
-
-                    VStack(spacing: 8) {
-                        Text("Coming Soon")
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.white)
-
-                        Text("Dispatcharr and M3U source configuration will be available here.")
-                            .font(.system(size: 17))
-                            .foregroundStyle(.white.opacity(0.5))
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: 400)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 60)
-                .padding(.horizontal, 80)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .padding(.horizontal, 80)
-                .padding(.bottom, 80)
-            }
-        }
-        .background(Color.black)
-    }
-}
-
-// MARK: - Library Settings
-
-struct LibrarySettingsView: View {
-    @StateObject private var dataStore = PlexDataStore.shared
-    @StateObject private var librarySettings = LibrarySettingsManager.shared
-    var goBack: () -> Void = {}
-
-    var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 32) {
-                // Header (Menu button on remote navigates back)
-                Text("Sidebar Libraries")
-                    .font(.system(size: 48, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 80)
-                    .padding(.top, 60)
-
-                Text("Choose which libraries appear in the sidebar. Tap to toggle visibility, use arrows to reorder.")
-                    .font(.system(size: 17))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .padding(.horizontal, 80)
-
-                if dataStore.libraries.isEmpty {
-                    // No libraries
-                    VStack(spacing: 28) {
-                        Image(systemName: "folder")
-                            .font(.system(size: 64, weight: .thin))
-                            .foregroundStyle(.white.opacity(0.3))
-
-                        Text("No Libraries")
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.white)
-
-                        Text("Connect to a Plex server to manage library visibility.")
-                            .font(.system(size: 17))
-                            .foregroundStyle(.white.opacity(0.5))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 60)
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .padding(.horizontal, 80)
-                } else {
-                    // Library list
-                    VStack(spacing: 24) {
-                        SettingsSection(title: "Libraries") {
-                            ForEach(orderedLibraries, id: \.key) { library in
-                                LibraryVisibilityRow(
-                                    library: library,
-                                    isVisible: librarySettings.isLibraryVisible(library.key),
-                                    onToggle: {
-                                        librarySettings.toggleVisibility(for: library.key)
-                                    },
-                                    onMoveUp: canMoveUp(library) ? { moveUp(library) } : nil,
-                                    onMoveDown: canMoveDown(library) ? { moveDown(library) } : nil
-                                )
-                            }
-                        }
-
-                        // Reset button
-                        SettingsSection(title: "Reset") {
-                            SettingsActionRow(
-                                title: "Reset to Defaults",
-                                isDestructive: false
-                            ) {
-                                librarySettings.resetToDefaults()
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 80)
-                    .padding(.bottom, 80)
-                }
-            }
-        }
-        .background(Color.black)
-    }
-
-    // MARK: - Helpers
-
-    /// Libraries sorted by user preference (for display in settings)
-    private var orderedLibraries: [PlexLibrary] {
-        librarySettings.sortLibraries(dataStore.libraries.filter { $0.isVideoLibrary })
-    }
-
-    private func canMoveUp(_ library: PlexLibrary) -> Bool {
-        guard let index = orderedLibraries.firstIndex(where: { $0.key == library.key }) else {
-            return false
-        }
-        return index > 0
-    }
-
-    private func canMoveDown(_ library: PlexLibrary) -> Bool {
-        guard let index = orderedLibraries.firstIndex(where: { $0.key == library.key }) else {
-            return false
-        }
-        return index < orderedLibraries.count - 1
-    }
-
-    private func moveUp(_ library: PlexLibrary) {
-        guard let orderIndex = librarySettings.libraryOrder.firstIndex(of: library.key) else {
-            return
-        }
-        if orderIndex > 0 {
-            librarySettings.moveLibrary(from: orderIndex, to: orderIndex - 1)
-        }
-    }
-
-    private func moveDown(_ library: PlexLibrary) {
-        guard let orderIndex = librarySettings.libraryOrder.firstIndex(of: library.key) else {
-            return
-        }
-        if orderIndex < librarySettings.libraryOrder.count - 1 {
-            librarySettings.moveLibrary(from: orderIndex, to: orderIndex + 2)
-        }
-    }
-}
-
-// MARK: - Library Visibility Row
-
-struct LibraryVisibilityRow: View {
-    let library: PlexLibrary
-    let isVisible: Bool
-    let onToggle: () -> Void
-    var onMoveUp: (() -> Void)?
-    var onMoveDown: (() -> Void)?
-
-    @FocusState private var isFocused: Bool
-
-    private var iconName: String {
-        switch library.type {
-        case "movie": return "film.fill"
-        case "show": return "tv.fill"
-        case "artist": return "music.note"
-        case "photo": return "photo.fill"
-        default: return "folder.fill"
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: 16) {
-            // Reorder controls (always visible, subtle)
-            VStack(spacing: 2) {
-                Image(systemName: "chevron.up")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.white.opacity(onMoveUp != nil ? 0.4 : 0.15))
-                    .onTapGesture {
-                        onMoveUp?()
-                    }
-
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.white.opacity(onMoveDown != nil ? 0.4 : 0.15))
-                    .onTapGesture {
-                        onMoveDown?()
-                    }
-            }
-            .frame(width: 20)
-
-            // Library icon
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isVisible ? Color.blue.gradient : Color.gray.opacity(0.3).gradient)
-                    .frame(width: 44, height: 44)
-
-                Image(systemName: iconName)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-
-            // Library info
-            VStack(alignment: .leading, spacing: 2) {
-                Text(library.title)
-                    .font(.system(size: 19, weight: .medium))
-                    .foregroundStyle(.white.opacity(isVisible ? 1 : 0.5))
-
-                Text(library.type.capitalized)
-                    .font(.system(size: 14))
-                    .foregroundStyle(.white.opacity(0.4))
-            }
-
-            Spacer()
-
-            // On/Off indicator (Apple tvOS Settings style)
-            Text(isVisible ? "On" : "Off")
-                .font(.system(size: 17))
-                .foregroundStyle(.white.opacity(0.5))
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(isFocused ? .white.opacity(0.15) : .clear)
-        )
-        .focusable()
-        .focused($isFocused)
-        .onTapGesture {
-            onToggle()
-        }
-        .animation(.easeOut(duration: 0.15), value: isFocused)
-        .animation(.easeOut(duration: 0.2), value: isVisible)
     }
 }
 

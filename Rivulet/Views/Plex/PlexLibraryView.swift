@@ -214,12 +214,17 @@ struct PlexLibraryView: View {
                                 authToken: authManager.authToken ?? ""
                             )
                         }
+                        #if os(tvOS)
+                        .buttonStyle(CardButtonStyle())
+                        #else
                         .buttonStyle(.plain)
+                        #endif
                     }
                 }
                 #if os(tvOS)
                 .padding(.horizontal, 80)
-                .padding(.bottom, 80)
+                .padding(.vertical, 28)  // Room for scale effect and shadow
+                .padding(.bottom, 60)
                 #else
                 .padding(.horizontal, 40)
                 .padding(.bottom, 40)
@@ -277,9 +282,9 @@ struct PlexLibraryView: View {
     }
 
     private var librarySectionHeader: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Text(libraryTitle)
-                .font(.system(size: 28, weight: .bold))
+                .font(.system(size: 32, weight: .bold))
                 .foregroundStyle(.white)
                 .id("library-title-\(libraryKey)")  // Force instant update when library changes
                 .transaction { transaction in
@@ -288,7 +293,7 @@ struct PlexLibraryView: View {
                 }
 
             Text("\(items.count) items")
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(.white.opacity(0.5))
         }
         #if os(tvOS)
