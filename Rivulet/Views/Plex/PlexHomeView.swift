@@ -11,11 +11,68 @@ import Combine
 struct PlexHomeView: View {
     @StateObject private var dataStore = PlexDataStore.shared
     @StateObject private var authManager = PlexAuthManager.shared
+    @AppStorage("showHomeHero") private var showHomeHero = true
+    @Environment(\.contentFocusVersion) private var contentFocusVersion
     @State private var selectedItem: PlexMetadata?
     @State private var heroItem: PlexMetadata?
+    @State private var focusTrigger = 0  // Increment to trigger first row focus
+
+    // MARK: - Computed Hubs (merged Continue Watching + On Deck)
+
+    /// Processes hubs to combine Continue Watching and On Deck into a single row
+    private var processedHubs: [PlexHub] {
+        var result: [PlexHub] = []
+        var continueWatchingItems: [PlexMetadata] = []
+        var seenRatingKeys: Set<String> = []
+
+        for hub in dataStore.hubs {
+            let identifier = hub.hubIdentifier?.lowercased() ?? ""
+            let title = hub.title?.lowercased() ?? ""
+
+            // Check if this is a Continue Watching or On Deck hub
+            let isContinueWatching = identifier.contains("continuewatching") ||
+                                     title.contains("continue watching")
+            let isOnDeck = identifier.contains("ondeck") ||
+                          title.contains("on deck")
+
+            if isContinueWatching || isOnDeck {
+                // Merge items, deduplicating by ratingKey
+                if let items = hub.Metadata {
+                    for item in items {
+                        if let key = item.ratingKey, !seenRatingKeys.contains(key) {
+                            seenRatingKeys.insert(key)
+                            continueWatchingItems.append(item)
+                        }
+                    }
+                }
+            } else {
+                // Keep other hubs as-is
+                result.append(hub)
+            }
+        }
+
+        // Sort merged items by lastViewedAt (most recent first)
+        continueWatchingItems.sort { item1, item2 in
+            let time1 = item1.lastViewedAt ?? 0
+            let time2 = item2.lastViewedAt ?? 0
+            return time1 > time2
+        }
+
+        // Create merged Continue Watching hub if we have items
+        if !continueWatchingItems.isEmpty {
+            var mergedHub = PlexHub()
+            mergedHub.hubIdentifier = "continueWatching"
+            mergedHub.title = "Continue Watching"
+            mergedHub.Metadata = continueWatchingItems
+            // Insert at beginning
+            result.insert(mergedHub, at: 0)
+        }
+
+        return result
+    }
 
     var body: some View {
-        Group {
+        ZStack {
             if !authManager.isAuthenticated {
                 notConnectedView
             } else if dataStore.isLoadingHubs && dataStore.hubs.isEmpty {
@@ -61,8 +118,8 @@ struct PlexHomeView: View {
     private var contentView: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 0) {
-                // Hero section (not focusable by default)
-                if let hero = heroItem {
+                // Hero section (if enabled)
+                if showHomeHero, let hero = heroItem {
                     HeroView(
                         item: hero,
                         serverURL: authManager.selectedServerURL ?? "",
@@ -70,23 +127,23 @@ struct PlexHomeView: View {
                     ) {
                         selectedItem = hero
                     }
-                    .focusable(false) // Don't focus hero by default
                 }
 
-                // Content rows
+                // Content rows (uses processedHubs which merges Continue Watching + On Deck)
                 VStack(alignment: .leading, spacing: 48) {
-                    ForEach(Array(dataStore.hubs.enumerated()), id: \.element.id) { index, hub in
+                    ForEach(Array(processedHubs.enumerated()), id: \.element.id) { index, hub in
                         if let items = hub.Metadata, !items.isEmpty {
-                            ContentRow(
+                            InfiniteContentRow(
                                 title: hub.title ?? "Unknown",
-                                items: items,
+                                initialItems: items,
+                                hubKey: hub.key ?? hub.hubKey,
                                 serverURL: authManager.selectedServerURL ?? "",
                                 authToken: authManager.authToken ?? "",
-                                isFirstRow: index == 0,
-                                namespace: namespace
-                            ) { item in
-                                selectedItem = item
-                            }
+                                onItemSelected: { item in
+                                    selectedItem = item
+                                },
+                                focusTrigger: index == 0 ? focusTrigger : nil  // First row gets focus trigger
+                            )
                         }
                     }
                 }
@@ -96,8 +153,11 @@ struct PlexHomeView: View {
         }
         #if os(tvOS)
         .ignoresSafeArea(edges: .top)
-        .focusScope(namespace)
         #endif
+        .onChange(of: contentFocusVersion) { _, _ in
+            // Trigger first row to claim focus when sidebar closes
+            focusTrigger += 1
+        }
         .sheet(item: $selectedItem) { item in
             PlexDetailView(item: item)
         }
@@ -332,8 +392,6 @@ struct ContentRow: View {
     let items: [PlexMetadata]
     let serverURL: String
     let authToken: String
-    var isFirstRow: Bool = false
-    var namespace: Namespace.ID?
     var onItemSelected: ((PlexMetadata) -> Void)?
 
     var body: some View {
@@ -347,6 +405,71 @@ struct ContentRow: View {
             // Horizontal scroll of posters
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 20) {
+                    ForEach(items, id: \.ratingKey) { item in
+                        Button {
+                            onItemSelected?(item)
+                        } label: {
+                            MediaPosterCard(
+                                item: item,
+                                serverURL: serverURL,
+                                authToken: authToken
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 80)
+            }
+        }
+    }
+}
+
+// MARK: - Infinite Content Row (with endless scrolling)
+
+/// A content row that loads more items as the user scrolls near the end
+struct InfiniteContentRow: View {
+    let title: String
+    let initialItems: [PlexMetadata]
+    let hubKey: String?  // The hub's key for fetching more items
+    let serverURL: String
+    let authToken: String
+    var onItemSelected: ((PlexMetadata) -> Void)?
+    var focusTrigger: Int? = nil  // When non-nil and changes, focus first item
+
+    @Environment(\.openSidebar) private var openSidebar
+    @FocusState private var focusedIndex: Int?
+
+    @State private var items: [PlexMetadata] = []
+    @State private var isLoadingMore = false
+    @State private var hasReachedEnd = false
+    @State private var totalSize: Int?
+
+    private let networkManager = PlexNetworkManager.shared
+    private let pageSize = 24
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            // Section title with item count
+            HStack(spacing: 12) {
+                Text(title)
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+
+                if let total = totalSize, total > items.count {
+                    Text("\(items.count) of \(total)")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.4))
+                } else if hasReachedEnd && items.count > pageSize {
+                    Text("All \(items.count)")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+            }
+            .padding(.horizontal, 80)
+
+            // Horizontal scroll of posters with infinite loading
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 20) {
                     ForEach(Array(items.enumerated()), id: \.element.ratingKey) { index, item in
                         Button {
                             onItemSelected?(item)
@@ -358,36 +481,144 @@ struct ContentRow: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        #if os(tvOS)
-                        .modifier(DefaultFocusModifier(
-                            shouldFocus: isFirstRow && index == 0,
-                            namespace: namespace
-                        ))
-                        #endif
+                        .focused($focusedIndex, equals: index)
+                        .onMoveCommand { direction in
+                            if direction == .left && index == 0 {
+                                // Left arrow pressed on first item - open sidebar
+                                print("🟢 [DEBUG] InfiniteContentRow: Left pressed on first item, opening sidebar")
+                                openSidebar()
+                            }
+                        }
+                        .onAppear {
+                            // Load more when user is 5 items from the end
+                            if index >= items.count - 5 {
+                                Task {
+                                    await loadMoreIfNeeded()
+                                }
+                            }
+                        }
+                    }
+
+                    // Loading indicator at the end
+                    if isLoadingMore {
+                        loadingIndicator
+                    } else if hasReachedEnd && items.count > pageSize {
+                        endIndicator
                     }
                 }
                 .padding(.horizontal, 80)
             }
+            // Removed .focusSection() to allow focus to escape to LeftEdgeTrigger when at leftmost position
+        }
+        .onAppear {
+            if items.isEmpty {
+                items = initialItems
+                // Check if we already have all items
+                if let size = totalSize, items.count >= size {
+                    hasReachedEnd = true
+                }
+            }
+        }
+        .onChange(of: initialItems.count) { _, newCount in
+            // Reset when initial items change (e.g., on refresh)
+            if newCount != items.count || items.isEmpty {
+                items = initialItems
+                hasReachedEnd = false
+            }
+        }
+        .onChange(of: focusTrigger) { _, newValue in
+            // Focus first item when trigger changes (sidebar closed)
+            if newValue != nil {
+                focusedIndex = 0
+            }
         }
     }
-}
 
-// MARK: - Default Focus Modifier
-
-#if os(tvOS)
-struct DefaultFocusModifier: ViewModifier {
-    let shouldFocus: Bool
-    let namespace: Namespace.ID?
-
-    func body(content: Content) -> some View {
-        if shouldFocus, let ns = namespace {
-            content.prefersDefaultFocus(in: ns)
-        } else {
-            content
+    private var loadingIndicator: some View {
+        VStack {
+            ProgressView()
+                .scaleEffect(1.2)
+                .tint(.white.opacity(0.5))
         }
+        .frame(width: 100, height: 150)
+    }
+
+    private var endIndicator: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 24))
+                .foregroundStyle(.white.opacity(0.3))
+            Text("All loaded")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.3))
+        }
+        .frame(width: 100, height: 150)
+    }
+
+    private func loadMoreIfNeeded() async {
+        // Don't load if we're already loading, reached the end, or have no hub key
+        guard !isLoadingMore,
+              !hasReachedEnd,
+              let hubKey = hubKey,
+              !hubKey.isEmpty else {
+            return
+        }
+
+        // Check if we might have more items based on totalSize
+        if let total = totalSize, items.count >= total {
+            hasReachedEnd = true
+            return
+        }
+
+        isLoadingMore = true
+
+        do {
+            let result = try await networkManager.getHubItems(
+                serverURL: serverURL,
+                authToken: authToken,
+                hubKey: hubKey,
+                start: items.count,
+                count: pageSize
+            )
+
+            // Update total size if we got it
+            if let size = result.totalSize {
+                totalSize = size
+            }
+
+            if result.items.isEmpty {
+                // No more items
+                hasReachedEnd = true
+            } else {
+                // Append new items, deduplicating by ratingKey
+                let existingKeys = Set(items.compactMap { $0.ratingKey })
+                let newItems = result.items.filter { item in
+                    guard let key = item.ratingKey else { return false }
+                    return !existingKeys.contains(key)
+                }
+
+                if newItems.isEmpty {
+                    // All items were duplicates, we've reached the end
+                    hasReachedEnd = true
+                } else {
+                    items.append(contentsOf: newItems)
+
+                    // Check if we've loaded everything
+                    if let total = totalSize, items.count >= total {
+                        hasReachedEnd = true
+                    }
+                }
+            }
+
+            print("InfiniteContentRow: Loaded \(result.items.count) more items for '\(title)', total: \(items.count), hasMore: \(!hasReachedEnd)")
+        } catch {
+            print("InfiniteContentRow: Failed to load more items: \(error)")
+            // Don't mark as reached end on error - user can retry by scrolling
+        }
+
+        isLoadingMore = false
     }
 }
-#endif
 
 #Preview {
     PlexHomeView()

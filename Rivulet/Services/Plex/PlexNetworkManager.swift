@@ -331,9 +331,18 @@ class PlexNetworkManager: NSObject {
 
     // MARK: - Hubs (Home Screen Sections)
 
-    /// Get home screen hubs
-    func getHubs(serverURL: String, authToken: String) async throws -> [PlexHub] {
-        guard let url = URL(string: "\(serverURL)/hubs") else {
+    /// Get home screen hubs (global recommendations)
+    /// - Parameter count: Number of items per hub (default 24, Plex defaults to ~6)
+    func getHubs(serverURL: String, authToken: String, count: Int = 24) async throws -> [PlexHub] {
+        guard var components = URLComponents(string: "\(serverURL)/hubs") else {
+            throw PlexAPIError.invalidURL
+        }
+
+        components.queryItems = [
+            URLQueryItem(name: "count", value: "\(count)")
+        ]
+
+        guard let url = components.url else {
             throw PlexAPIError.invalidURL
         }
 
@@ -343,6 +352,76 @@ class PlexNetworkManager: NSObject {
         )
 
         return container.MediaContainer.Hub ?? []
+    }
+
+    /// Get library-specific hubs (recommendations for a specific library section)
+    /// Returns Continue Watching, Recently Added, Recently Released, etc. for that library
+    /// - Parameter count: Number of items per hub (default 24, Plex defaults to ~6)
+    func getLibraryHubs(serverURL: String, authToken: String, sectionId: String, count: Int = 24) async throws -> [PlexHub] {
+        guard var components = URLComponents(string: "\(serverURL)/hubs/sections/\(sectionId)") else {
+            throw PlexAPIError.invalidURL
+        }
+
+        components.queryItems = [
+            URLQueryItem(name: "count", value: "\(count)")
+        ]
+
+        guard let url = components.url else {
+            throw PlexAPIError.invalidURL
+        }
+
+        let container: PlexMediaContainerWrapper = try await request(
+            url,
+            headers: plexHeaders(authToken: authToken)
+        )
+
+        return container.MediaContainer.Hub ?? []
+    }
+
+    /// Get more items from a hub using its key (for pagination/infinite scroll)
+    /// - Parameters:
+    ///   - hubKey: The hub's key path (e.g., "/hubs/sections/1/continueWatching")
+    ///   - start: Starting index for pagination
+    ///   - count: Number of items to fetch
+    /// - Returns: Tuple of (items, totalSize) where totalSize indicates if more items exist
+    func getHubItems(
+        serverURL: String,
+        authToken: String,
+        hubKey: String,
+        start: Int = 0,
+        count: Int = 24
+    ) async throws -> (items: [PlexMetadata], totalSize: Int?) {
+        // The hubKey might be a full path like "/hubs/sections/1/continueWatching"
+        // or just the section like "hub.movies.recentlyadded"
+        let fullPath: String
+        if hubKey.hasPrefix("/") {
+            fullPath = "\(serverURL)\(hubKey)"
+        } else {
+            fullPath = "\(serverURL)/\(hubKey)"
+        }
+
+        guard var components = URLComponents(string: fullPath) else {
+            throw PlexAPIError.invalidURL
+        }
+
+        components.queryItems = [
+            URLQueryItem(name: "X-Plex-Container-Start", value: "\(start)"),
+            URLQueryItem(name: "X-Plex-Container-Size", value: "\(count)")
+        ]
+
+        guard let url = components.url else {
+            throw PlexAPIError.invalidURL
+        }
+
+        let container: PlexMediaContainerWrapper = try await request(
+            url,
+            headers: plexHeaders(authToken: authToken)
+        )
+
+        let items = container.MediaContainer.Metadata ?? []
+        let totalSize = container.MediaContainer.size
+
+        return (items, totalSize)
     }
 
     // MARK: - Progress Reporting
@@ -416,9 +495,143 @@ class PlexNetworkManager: NSObject {
     }
 
     // MARK: - Streaming URLs
+    
+    /// Playback strategy - ordered by preference
+    enum PlaybackStrategy: String, CaseIterable {
+        case directPlay = "Direct Play"          // Play file directly, no processing
+        case directStream = "Direct Stream"      // Remux container only, no transcoding
+        case hlsTranscode = "HLS Transcode"      // Full transcode to HLS
+        
+        var next: PlaybackStrategy? {
+            switch self {
+            case .directPlay: return .directStream
+            case .directStream: return .hlsTranscode
+            case .hlsTranscode: return nil
+            }
+        }
+    }
 
-    /// Build HLS streaming URL with H264 transcoding
+    /// Build streaming URL for the given strategy
+    /// - Parameter container: The file container format (mp4, mkv, etc.) to determine direct play eligibility
     func buildStreamURL(
+        serverURL: String,
+        authToken: String,
+        ratingKey: String,
+        partKey: String? = nil,
+        container: String? = nil,
+        strategy: PlaybackStrategy = .directPlay,
+        offsetMs: Int = 0
+    ) -> URL? {
+        switch strategy {
+        case .directPlay:
+            // Apple TV can only direct play MP4/MOV/M4V containers
+            // MKV, AVI, etc. require remuxing even if codecs are compatible
+            let directPlayableContainers = ["mp4", "m4v", "mov"]
+            let containerLower = container?.lowercased() ?? ""
+            
+            if !directPlayableContainers.contains(containerLower) && !containerLower.isEmpty {
+                print("📦 Container '\(containerLower)' not direct-playable, skipping Direct Play")
+                return nil  // Signal to try next strategy
+            }
+            return buildDirectPlayURL(serverURL: serverURL, authToken: authToken, partKey: partKey, ratingKey: ratingKey)
+        case .directStream:
+            return buildDirectStreamURL(serverURL: serverURL, authToken: authToken, ratingKey: ratingKey, offsetMs: offsetMs)
+        case .hlsTranscode:
+            return buildHLSTranscodeURL(serverURL: serverURL, authToken: authToken, ratingKey: ratingKey, offsetMs: offsetMs)
+        }
+    }
+    
+    /// Direct play - stream the file as-is (most efficient)
+    /// Apple TV supports: H.264, HEVC (4K), AAC, AC3, E-AC3, and most common containers
+    private func buildDirectPlayURL(
+        serverURL: String,
+        authToken: String,
+        partKey: String?,
+        ratingKey: String
+    ) -> URL? {
+        // Use the part key if available, otherwise construct from rating key
+        let path = partKey ?? "/library/parts/\(ratingKey)/file"
+        
+        guard var components = URLComponents(string: "\(serverURL)\(path)") else {
+            return nil
+        }
+        
+        components.queryItems = [
+            URLQueryItem(name: "X-Plex-Token", value: authToken),
+            URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
+            URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform),
+            URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName)
+        ]
+        
+        return components.url
+    }
+    
+    /// Direct stream - remux container, transcode audio if needed
+    /// Copies video stream, transcodes incompatible audio (like DTS)
+    private func buildDirectStreamURL(
+        serverURL: String,
+        authToken: String,
+        ratingKey: String,
+        offsetMs: Int = 0
+    ) -> URL? {
+        guard var components = URLComponents(string: "\(serverURL)/video/:/transcode/universal/start.m3u8") else {
+            return nil
+        }
+        
+        let sessionId = UUID().uuidString
+        
+        components.queryItems = [
+            // Authentication
+            URLQueryItem(name: "X-Plex-Token", value: authToken),
+            URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
+            URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform),
+            URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName),
+            URLQueryItem(name: "X-Plex-Product", value: PlexAPI.productName),
+            
+            // Media reference
+            URLQueryItem(name: "path", value: "/library/metadata/\(ratingKey)"),
+            URLQueryItem(name: "mediaIndex", value: "0"),
+            URLQueryItem(name: "partIndex", value: "0"),
+            URLQueryItem(name: "offset", value: "\(offsetMs / 1000)"),
+            
+            // Direct stream video, transcode audio if incompatible
+            URLQueryItem(name: "protocol", value: "hls"),
+            URLQueryItem(name: "directPlay", value: "0"),
+            URLQueryItem(name: "directStream", value: "1"),
+            URLQueryItem(name: "directStreamAudio", value: "0"),  // Transcode audio (DTS not supported)
+            URLQueryItem(name: "copyts", value: "1"),
+            URLQueryItem(name: "fastSeek", value: "1"),
+            
+            // Video - allow passthrough of compatible codecs
+            URLQueryItem(name: "videoCodec", value: "h264,hevc"),
+            
+            // Audio - transcode to compatible formats
+            URLQueryItem(name: "audioCodec", value: "aac,ac3,eac3"),
+            URLQueryItem(name: "audioBitrate", value: "384"),
+            URLQueryItem(name: "audioChannels", value: "6"),
+            
+            // Disable subtitles to simplify transcode
+            URLQueryItem(name: "subtitles", value: "none"),
+            URLQueryItem(name: "subtitleSize", value: "100"),
+            
+            // Context
+            URLQueryItem(name: "context", value: "streaming"),
+            URLQueryItem(name: "location", value: "lan"),
+            
+            // Session
+            URLQueryItem(name: "session", value: sessionId),
+            
+            // Additional params for stability
+            URLQueryItem(name: "autoAdjustQuality", value: "0"),
+            URLQueryItem(name: "hasMDE", value: "1")
+        ]
+        
+        return components.url
+    }
+    
+    /// HLS transcode - full transcode to H.264/AAC HLS stream
+    /// Use as fallback when direct play/stream fails
+    private func buildHLSTranscodeURL(
         serverURL: String,
         authToken: String,
         ratingKey: String,
@@ -436,6 +649,7 @@ class PlexNetworkManager: NSObject {
             URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
             URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform),
             URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName),
+            URLQueryItem(name: "X-Plex-Product", value: PlexAPI.productName),
 
             // Media reference
             URLQueryItem(name: "path", value: "/library/metadata/\(ratingKey)"),
@@ -443,14 +657,14 @@ class PlexNetworkManager: NSObject {
             URLQueryItem(name: "partIndex", value: "0"),
             URLQueryItem(name: "offset", value: "\(offsetMs / 1000)"),
 
-            // Protocol and transcode settings
+            // Force transcode to H264/AAC for maximum compatibility
             URLQueryItem(name: "protocol", value: "hls"),
             URLQueryItem(name: "fastSeek", value: "1"),
-            URLQueryItem(name: "directPlay", value: "0"),  // Force transcode
-            URLQueryItem(name: "directStream", value: "1"),
-            URLQueryItem(name: "directStreamAudio", value: "1"),
+            URLQueryItem(name: "directPlay", value: "0"),
+            URLQueryItem(name: "directStream", value: "0"),
+            URLQueryItem(name: "directStreamAudio", value: "0"),
 
-            // Force H264 to avoid HEVC buffering issues on Apple TV
+            // Video settings - H264 high profile
             URLQueryItem(name: "videoCodec", value: "h264"),
             URLQueryItem(name: "videoResolution", value: "1920x1080"),
             URLQueryItem(name: "maxVideoBitrate", value: "20000"),
@@ -458,19 +672,68 @@ class PlexNetworkManager: NSObject {
             URLQueryItem(name: "h264Level", value: "42"),
             URLQueryItem(name: "h264Profile", value: "high"),
 
-            // Audio
-            URLQueryItem(name: "audioCodec", value: "aac,ac3,eac3"),
+            // Audio settings - AAC 5.1
+            URLQueryItem(name: "audioCodec", value: "aac"),
+            URLQueryItem(name: "audioBitrate", value: "384"),
+            URLQueryItem(name: "audioChannels", value: "6"),
             URLQueryItem(name: "audioBoost", value: "100"),
+
+            // Disable subtitles to simplify transcode
+            URLQueryItem(name: "subtitles", value: "none"),
+            URLQueryItem(name: "subtitleSize", value: "100"),
+            URLQueryItem(name: "addDebugOverlay", value: "0"),
 
             // Context
             URLQueryItem(name: "context", value: "streaming"),
             URLQueryItem(name: "location", value: "lan"),
 
             // Session
-            URLQueryItem(name: "session", value: sessionId)
+            URLQueryItem(name: "session", value: sessionId),
+            
+            // Additional params for stability
+            URLQueryItem(name: "autoAdjustQuality", value: "0"),
+            URLQueryItem(name: "hasMDE", value: "1")
         ]
 
         return components.url
+    }
+    
+    /// Get decision info from Plex about what playback method to use
+    func getPlaybackDecision(
+        serverURL: String,
+        authToken: String,
+        ratingKey: String
+    ) async throws -> PlaybackDecision {
+        guard var components = URLComponents(string: "\(serverURL)/video/:/transcode/universal/decision") else {
+            throw PlexAPIError.invalidURL
+        }
+        
+        components.queryItems = [
+            URLQueryItem(name: "path", value: "/library/metadata/\(ratingKey)"),
+            URLQueryItem(name: "mediaIndex", value: "0"),
+            URLQueryItem(name: "partIndex", value: "0"),
+            URLQueryItem(name: "protocol", value: "hls"),
+            URLQueryItem(name: "directPlay", value: "1"),
+            URLQueryItem(name: "directStream", value: "1"),
+            URLQueryItem(name: "directStreamAudio", value: "1"),
+            URLQueryItem(name: "videoCodec", value: "h264,hevc"),
+            URLQueryItem(name: "audioCodec", value: "aac,ac3,eac3"),
+            URLQueryItem(name: "X-Plex-Token", value: authToken),
+            URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
+            URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform),
+            URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName)
+        ]
+        
+        guard let url = components.url else {
+            throw PlexAPIError.invalidURL
+        }
+        
+        let container: PlaybackDecisionContainer = try await request(
+            url,
+            headers: plexHeaders(authToken: authToken)
+        )
+        
+        return container.MediaContainer
     }
 
     /// Build thumbnail URL
@@ -608,5 +871,32 @@ enum PlexAPIError: LocalizedError {
         case .networkError(let error):
             return "Network error: \(error.localizedDescription)"
         }
+    }
+}
+
+// MARK: - Playback Decision Models
+
+struct PlaybackDecisionContainer: Codable, Sendable {
+    let MediaContainer: PlaybackDecision
+}
+
+struct PlaybackDecision: Codable, Sendable {
+    let size: Int?
+    let directPlayDecisionCode: Int?
+    let directPlayDecisionText: String?
+    let generalDecisionCode: Int?
+    let generalDecisionText: String?
+    let transcodeDecisionCode: Int?
+    let transcodeDecisionText: String?
+    
+    /// Check if direct play is available
+    var canDirectPlay: Bool {
+        // Code 1000 = "Direct play OK"
+        directPlayDecisionCode == 1000
+    }
+    
+    /// Check if transcoding is required/available
+    var requiresTranscode: Bool {
+        !canDirectPlay && transcodeDecisionCode != nil
     }
 }

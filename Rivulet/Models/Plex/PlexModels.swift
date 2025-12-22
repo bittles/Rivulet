@@ -174,6 +174,26 @@ struct PlexHub: Codable, Identifiable, Sendable {
     var more: Bool?
     var size: Int?
     var Metadata: [PlexMetadata]?
+
+    init(
+        hubIdentifier: String? = nil,
+        title: String? = nil,
+        type: String? = nil,
+        hubKey: String? = nil,
+        key: String? = nil,
+        more: Bool? = nil,
+        size: Int? = nil,
+        Metadata: [PlexMetadata]? = nil
+    ) {
+        self.hubIdentifier = hubIdentifier
+        self.title = title
+        self.type = type
+        self.hubKey = hubKey
+        self.key = key
+        self.more = more
+        self.size = size
+        self.Metadata = Metadata
+    }
 }
 
 // MARK: - Media Item (Movie, Show, Episode, etc.)

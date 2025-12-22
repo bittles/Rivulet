@@ -26,6 +26,20 @@ class PlexDataStore: ObservableObject {
     private let networkManager = PlexNetworkManager.shared
     private let cacheManager = CacheManager.shared
     private let authManager = PlexAuthManager.shared
+    let librarySettings = LibrarySettingsManager.shared
+
+    // MARK: - Computed Properties
+
+    /// Libraries filtered by visibility settings and sorted by user preference
+    /// Use this for displaying in the sidebar
+    var visibleLibraries: [PlexLibrary] {
+        librarySettings.filterAndSortLibraries(libraries)
+    }
+
+    /// Video libraries only (movies, shows), filtered and sorted
+    var visibleVideoLibraries: [PlexLibrary] {
+        visibleLibraries.filter { $0.isVideoLibrary }
+    }
 
     // Track if initial load has been attempted
     private var hubsLoadTask: Task<Void, Never>?
@@ -210,6 +224,8 @@ class PlexDataStore: ObservableObject {
                 if updateLoading {
                     self.isLoadingLibraries = false
                 }
+                // Sync library order settings with current libraries
+                self.librarySettings.syncOrderWithLibraries(fetched)
             }
             await cacheManager.cacheLibraries(fetched)
         } catch {
