@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import Combine
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -27,11 +28,12 @@ struct ContentView: View {
 
 /// Navigation destination for tvOS
 enum TVDestination: Hashable, CaseIterable {
+    case search
     case home
     case liveTV
     case settings
 
-    static var allCases: [TVDestination] { [.home, .liveTV, .settings] }
+    static var allCases: [TVDestination] { [.search, .home, .liveTV, .settings] }
 }
 
 /// Environment key for opening sidebar from content views
@@ -66,15 +68,40 @@ struct IsInNestedNavigationKey: PreferenceKey {
     }
 }
 
+/// Observable object to track nested navigation state across views
+@MainActor
+class NestedNavigationState: ObservableObject {
+    @Published var isNested: Bool = false
+
+    /// Action to go back from nested navigation (set by child views)
+    var goBackAction: (() -> Void)?
+
+    func goBack() {
+        goBackAction?()
+    }
+}
+
+/// Environment key for nested navigation state
+private struct NestedNavigationStateKey: EnvironmentKey {
+    static let defaultValue: NestedNavigationState = NestedNavigationState()
+}
+
+extension EnvironmentValues {
+    var nestedNavigationState: NestedNavigationState {
+        get { self[NestedNavigationStateKey.self] }
+        set { self[NestedNavigationStateKey.self] = newValue }
+    }
+}
+
 struct TVSidebarView: View {
     @StateObject private var authManager = PlexAuthManager.shared
     @StateObject private var dataStore = PlexDataStore.shared
     @StateObject private var liveTVDataStore = LiveTVDataStore.shared
+    @StateObject private var nestedNavState = NestedNavigationState()
     @State private var selectedDestination: TVDestination = .home
     @State private var selectedLibraryKey: String?
     @State private var isSidebarVisible = false
     @State private var contentFocusVersion = 0
-    @State private var isInNestedNavigation = false  // True when inside nested settings views
     @FocusState private var focusedItem: String?
     @State private var highlightedItem: String = "home"  // Tracks which item is currently highlighted
 
@@ -82,7 +109,7 @@ struct TVSidebarView: View {
     
     /// All focusable sidebar item keys in order
     private var allSidebarItems: [String] {
-        var items = ["home"]
+        var items = ["search", "home"]
         items.append(contentsOf: dataStore.visibleVideoLibraries.map { $0.key })
         // Only show Live TV in sidebar if sources are configured
         if liveTVDataStore.hasConfiguredSources {
@@ -97,7 +124,7 @@ struct TVSidebarView: View {
             // Full-screen content with left-edge trigger
             HStack(spacing: 0) {
                 // Only show left-edge trigger when not in nested navigation
-                if !isSidebarVisible && !isInNestedNavigation {
+                if !isSidebarVisible && !nestedNavState.isNested {
                     LeftEdgeTrigger {
                         openSidebar()
                     }
@@ -108,14 +135,9 @@ struct TVSidebarView: View {
                     .disabled(isSidebarVisible)  // Prevents focus/interaction when sidebar open
                 .environment(\.openSidebar, openSidebar)
                 .environment(\.contentFocusVersion, contentFocusVersion)
+                .environment(\.nestedNavigationState, nestedNavState)
             }
             .zIndex(0)
-            .onMoveCommand { direction in
-                // Only open sidebar on left if not in nested navigation
-                if direction == .left && !isSidebarVisible && !isInNestedNavigation {
-                    openSidebar()
-                }
-            }
 
             if isSidebarVisible {
                 Color.black
@@ -147,10 +169,17 @@ struct TVSidebarView: View {
         }
         .ignoresSafeArea()
         .animation(.easeOut(duration: 0.2), value: isSidebarVisible)
-        .onPreferenceChange(IsInNestedNavigationKey.self) { nested in
-            isInNestedNavigation = nested
+        // Handle exit command based on current state
+        .onExitCommand {
+            if isSidebarVisible {
+                closeSidebar()
+            } else if nestedNavState.isNested {
+                // Go back from nested navigation
+                nestedNavState.goBack()
+            } else {
+                openSidebar()
+            }
         }
-        .onExitCommand(perform: handleExitCommand)
         .task(id: authManager.isAuthenticated) {
             if authManager.authToken != nil {
                 await authManager.verifyAndFixConnection()
@@ -188,6 +217,15 @@ struct TVSidebarView: View {
                     ScrollView(.vertical, showsIndicators: false) {
                         GlassEffectContainer {
                             VStack(alignment: .leading, spacing: 4) {
+                                // Search
+                                SidebarRow(
+                                    icon: "magnifyingglass",
+                                    title: "Search",
+                                    isHighlighted: highlightedItem == "search",
+                                    isSelected: selectedDestination == .search
+                                )
+                                .id("search")
+
                                 // Home
                                 SidebarRow(
                                     icon: "house.fill",
@@ -302,9 +340,12 @@ struct TVSidebarView: View {
             if let libraryKey = selectedLibraryKey,
                let library = dataStore.libraries.first(where: { $0.key == libraryKey }) {
                 PlexLibraryView(libraryKey: library.key, libraryTitle: library.title)
-                    .id("library-\(library.key)")  // Force instant view recreation on library change
+                // Removed .id() to preserve AsyncImage caches across library switches
+                // The .task(id: libraryKey) in PlexLibraryView handles data switching
             } else {
                 switch selectedDestination {
+                case .search:
+                    PlexSearchView()
                 case .home:
                     if authManager.isAuthenticated {
                         PlexHomeView()
@@ -345,6 +386,8 @@ struct TVSidebarView: View {
     private func openSidebar() {
         if let libraryKey = selectedLibraryKey {
             highlightedItem = libraryKey
+        } else if selectedDestination == .search {
+            highlightedItem = "search"
         } else if selectedDestination == .settings {
             highlightedItem = "settings"
         } else if selectedDestination == .liveTV {
@@ -371,15 +414,7 @@ struct TVSidebarView: View {
     }
     
     private func handleExitCommand() {
-        print("🟣 [DEBUG] handleExitCommand() called - sidebar visible: \(isSidebarVisible), nested: \(isInNestedNavigation)")
-
-        // If in nested navigation (e.g., Settings -> Plex Server), let NavigationStack handle back
-        // Don't intercept the Menu button - it should pop the nav stack
-        if isInNestedNavigation {
-            return  // Let the system/NavigationStack handle it
-        }
-
-        // At root level: Back button toggles sidebar
+        // At root level: Menu button toggles sidebar
         if isSidebarVisible {
             closeSidebar()
         } else {
@@ -449,6 +484,8 @@ struct TVSidebarView: View {
 
         if let library = dataStore.visibleVideoLibraries.first(where: { $0.key == highlightedItem }) {
             navigateToLibrary(library)
+        } else if highlightedItem == "search" {
+            navigateToSearch()
         } else if highlightedItem == "home" {
             navigateToHome()
         } else if highlightedItem == "liveTV" {
@@ -465,6 +502,11 @@ struct TVSidebarView: View {
 
     private func navigateToHome() {
         selectedDestination = .home
+        selectedLibraryKey = nil
+    }
+
+    private func navigateToSearch() {
+        selectedDestination = .search
         selectedLibraryKey = nil
     }
 
@@ -565,6 +607,28 @@ struct LeftEdgeTrigger: View {
     }
 }
 
+// MARK: - Conditional Exit Command Modifier
+
+/// Conditionally attaches onExitCommand only when sidebar is visible
+struct SidebarExitCommand: ViewModifier {
+    let isSidebarVisible: Bool
+    let closeAction: () -> Void
+
+    func body(content: Content) -> some View {
+        if isSidebarVisible {
+            content.onExitCommand(perform: closeAction)
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    func ifSidebarVisible(_ isVisible: Bool, close: @escaping () -> Void) -> some View {
+        self.modifier(SidebarExitCommand(isSidebarVisible: isVisible, closeAction: close))
+    }
+}
+
 // MARK: - Sidebar Container Button Style (no focus highlight)
 
 struct SidebarContainerButtonStyle: ButtonStyle {
@@ -625,6 +689,8 @@ struct NavigationSplitViewContent: View {
             SidebarView(selectedSection: $selectedSection)
         } detail: {
             switch selectedSection {
+            case .plexSearch:
+                PlexSearchView()
             case .plexHome:
                 PlexHomeView()
             case .plexLibrary(let key, let title):

@@ -7,22 +7,41 @@
 
 import SwiftUI
 
+
 struct PlexLibraryView: View {
     let libraryKey: String
     let libraryTitle: String
 
     @Environment(\.contentFocusVersion) private var contentFocusVersion
-    
+    @Environment(\.openSidebar) private var openSidebar
+    @Environment(\.nestedNavigationState) private var nestedNavState
+
     @StateObject private var authManager = PlexAuthManager.shared
+    private let dataStore = PlexDataStore.shared
     @AppStorage("showLibraryHero") private var showLibraryHero = true
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
     @State private var items: [PlexMetadata] = []
     @State private var hubs: [PlexHub] = []  // Library-specific hubs from Plex API
     @State private var isLoading = false
+    @State private var isLoadingMore = false  // Loading additional pages
     @State private var error: String?
     @State private var selectedItem: PlexMetadata?
     @State private var heroItem: PlexMetadata?
     @State private var focusTrigger = 0  // Increment to trigger first row focus
+    @State private var lastLoadedLibraryKey: String?  // Track which library is currently loaded
+    @State private var hasPrefetched = false  // Track if we've already prefetched for this library
+    @State private var hasMoreItems = true  // Whether there are more items to load
+    @State private var totalItemCount: Int = 0  // Total items in this library
+    @State private var shouldRestoreFocus = false  // Flag to trigger focus restoration
+    @State private var cachedProcessedHubs: [PlexHub] = []  // Memoized hubs to avoid recalculation
+    @State private var loadingTask: Task<Void, Never>?  // Track current loading task for cancellation
+    @State private var curatedRowFocusMemory: [String: String] = [:]
+
+    #if os(tvOS)
+    @FocusState private var isHeroFocused: Bool  // Hero button focus state
+    @FocusState private var focusedGridIndex: Int?  // Grid focus state
+    @State private var lastPrefetchIndex: Int = -18  // Track last prefetch position for throttling
+    #endif
 
     private let networkManager = PlexNetworkManager.shared
     private let cacheManager = CacheManager.shared
@@ -65,12 +84,13 @@ struct PlexLibraryView: View {
     }
 
     /// Processes hubs to combine Continue Watching and On Deck, similar to PlexHomeView
-    private var processedHubs: [PlexHub] {
+    /// Called once when hubs change, result is cached in cachedProcessedHubs
+    private func computeProcessedHubs(from hubsToProcess: [PlexHub]) -> [PlexHub] {
         var result: [PlexHub] = []
         var continueWatchingItems: [PlexMetadata] = []
         var seenRatingKeys: Set<String> = []
 
-        for hub in hubs {
+        for hub in hubsToProcess {
             let identifier = hub.hubIdentifier?.lowercased() ?? ""
             let title = hub.title?.lowercased() ?? ""
 
@@ -121,38 +141,98 @@ struct PlexLibraryView: View {
     }
 
     var body: some View {
-        ZStack {
-            if !authManager.isAuthenticated {
-                notConnectedView
-            } else if isLoading && items.isEmpty {
-                loadingView
-            } else if let error = error, items.isEmpty {
-                errorView(error)
-            } else if items.isEmpty {
-                emptyView
-            } else {
-                contentView
+        NavigationStack {
+            ZStack {
+                if !authManager.isAuthenticated {
+                    notConnectedView
+                } else if isLoading && items.isEmpty {
+                    loadingView
+                } else if let error = error, items.isEmpty {
+                    errorView(error)
+                } else if items.isEmpty {
+                    emptyView
+                } else {
+                    contentView
+                }
+            }
+            .task(id: libraryKey) {
+                // Cancel any previous loading task - .task(id:) already cancels when id changes
+                loadingTask?.cancel()
+
+                error = nil
+
+                // Check if this is a different library than what's currently loaded
+                let isNewLibrary = lastLoadedLibraryKey != libraryKey
+
+                if authManager.isAuthenticated {
+                    if isNewLibrary {
+                        // Reset state for new library
+                        hasPrefetched = false
+                        hasMoreItems = true
+                        totalItemCount = 0
+
+                        // Load cached data FIRST before clearing anything
+                        let cachedItems = await getCachedItems()
+
+                        if !cachedItems.isEmpty {
+                            // Atomic swap: replace items and select new hero in one go
+                            items = cachedItems
+                            hubs = []  // Clear hubs, they'll load in background
+                            lastLoadedLibraryKey = libraryKey
+                            selectHeroItemFromCurrentData()
+
+                            // Trigger focus restoration after a brief delay for view to settle
+                            #if os(tvOS)
+                            shouldRestoreFocus = true
+                            #endif
+
+                            // Refresh in background silently
+                            await loadItemsInBackground()
+                        } else {
+                            // No cache - need to show loading state
+                            items = []
+                            hubs = []
+                            heroItem = nil
+                            lastLoadedLibraryKey = libraryKey
+                            await loadItems()
+
+                            // Trigger focus restoration after initial load
+                            #if os(tvOS)
+                            shouldRestoreFocus = true
+                            #endif
+                        }
+                    } else {
+                        // Same library - just refresh in background
+                        await loadItemsInBackground()
+                    }
+                } else {
+                    // Not authenticated - clear everything
+                    items = []
+                    hubs = []
+                    heroItem = nil
+                    lastLoadedLibraryKey = nil
+                }
+            }
+            .refreshable {
+                await refresh()
+            }
+            .navigationDestination(item: $selectedItem) { item in
+                PlexDetailView(item: item)
             }
         }
-        .task(id: libraryKey) {
-            // Reset state when library key changes for instant switching
-            error = nil
-            heroItem = nil  // Reset hero so it can be reselected for new library
-            
-            if authManager.isAuthenticated {
-                // Load items (will show cached data immediately and select hero)
-                await loadItems()
+        // Tell parent we're in nested navigation when viewing detail
+        .onChange(of: selectedItem) { _, newValue in
+            let isNested = newValue != nil
+            nestedNavState.isNested = isNested
+            if isNested {
+                // Set the go back action to clear selectedItem
+                nestedNavState.goBackAction = { [weak nestedNavState] in
+                    selectedItem = nil
+                    nestedNavState?.isNested = false
+                }
             } else {
-                // Not authenticated - clear everything
-                items = []
-                hubs = []
+                nestedNavState.goBackAction = nil
             }
-        }
-        .refreshable {
-            await refresh()
-        }
-        .sheet(item: $selectedItem) { item in
-            PlexDetailView(item: item)
         }
     }
 
@@ -161,76 +241,24 @@ struct PlexLibraryView: View {
     private var contentView: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 0) {
-                // Hero section (if enabled)
-                if showLibraryHero, let hero = heroItem {
-                    HeroView(
-                        item: hero,
-                        serverURL: authManager.selectedServerURL ?? "",
-                        authToken: authManager.authToken ?? ""
-                    ) {
-                        selectedItem = hero
-                    }
-                    .id("hero-\(libraryKey)-\(hero.ratingKey ?? "")")  // Force instant update when hero changes
-                    .transaction { transaction in
-                        // Disable animation for instant hero update
-                        transaction.animation = nil
-                    }
-                }
-
-                // Curated rows section (from Plex library hubs API)
-                if showLibraryRecommendations && !processedHubs.isEmpty {
-                    VStack(alignment: .leading, spacing: 48) {
-                        ForEach(Array(processedHubs.enumerated()), id: \.element.id) { index, hub in
-                            if let hubItems = hub.Metadata, !hubItems.isEmpty {
-                                InfiniteContentRow(
-                                    title: hub.title ?? "Unknown",
-                                    initialItems: hubItems,
-                                    hubKey: hub.key ?? hub.hubKey,
-                                    serverURL: authManager.selectedServerURL ?? "",
-                                    authToken: authManager.authToken ?? "",
-                                    onItemSelected: { item in
-                                        selectedItem = item
-                                    },
-                                    focusTrigger: index == 0 ? focusTrigger : nil  // First row gets focus trigger
-                                )
-                            }
-                        }
-                    }
-                    .padding(.top, 48)
-                }
-
-                // Library section header
+                curatedRowsView
+                heroSectionView
                 librarySectionHeader
+                libraryGridView
 
-                // Full library grid
-                LazyVGrid(columns: columns, spacing: 40) {
-                    ForEach(items, id: \.ratingKey) { item in
-                        Button {
-                            selectedItem = item
-                        } label: {
-                            MediaPosterCard(
-                                item: item,
-                                serverURL: authManager.selectedServerURL ?? "",
-                                authToken: authManager.authToken ?? ""
-                            )
-                        }
-                        #if os(tvOS)
-                        .buttonStyle(CardButtonStyle())
-                        #else
-                        .buttonStyle(.plain)
-                        #endif
+                // Loading more indicator
+                if isLoadingMore {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .scaleEffect(1.2)
+                        Spacer()
                     }
+                    .padding(.bottom, 40)
                 }
-                #if os(tvOS)
-                .padding(.horizontal, 80)
-                .padding(.vertical, 28)  // Room for scale effect and shadow
-                .padding(.bottom, 60)
-                #else
-                .padding(.horizontal, 40)
-                .padding(.bottom, 40)
-                #endif
             }
         }
+        .id(libraryKey)  // Force fresh ScrollView when library changes - starts at top
         #if os(tvOS)
         .ignoresSafeArea(edges: .top)
         #endif
@@ -240,27 +268,56 @@ struct PlexLibraryView: View {
                 selectHeroItem()
             }
         }
-        .onChange(of: items.count) { _, _ in
-            // Reselect hero when items change (e.g., after background refresh)
+        .onChange(of: items.count) { oldCount, newCount in
+            // Consolidated handler: hero selection + prefetch
             if heroItem == nil {
                 selectHeroItem()
             }
+            handleItemsCountChange(oldCount: oldCount, newCount: newCount)
+            #if os(tvOS)
+            if shouldRestoreFocus && newCount > 0 {
+                restoreFocusPosition()
+                shouldRestoreFocus = false
+            }
+            #endif
         }
         .onChange(of: hubs.count) { _, _ in
-            // Reselect hero when hubs load (they might have better hero candidates)
+            // Recompute cached hubs (memoization) and reselect hero
+            cachedProcessedHubs = computeProcessedHubs(from: hubs)
             selectHeroItem()
         }
         .onChange(of: contentFocusVersion) { _, _ in
-            // Trigger first row to claim focus when sidebar closes
-            focusTrigger += 1
+            // Restore focus when sidebar closes
+            #if os(tvOS)
+            shouldRestoreFocus = true
+            if let key = firstCuratedRowFocusKey {
+                curatedRowFocusMemory[key] = cachedProcessedHubs.first?.Metadata?.first?.ratingKey
+            }
+            if !items.isEmpty {
+                restoreFocusAfterSidebar()
+                shouldRestoreFocus = false
+            }
+            #endif
         }
+        #if os(tvOS)
+        .onChange(of: shouldRestoreFocus) { _, shouldRestore in
+            // Restore focus when flag is set
+            if shouldRestore && !items.isEmpty {
+                restoreFocusPosition()
+                shouldRestoreFocus = false
+            }
+        }
+        #endif
     }
 
     // MARK: - Hero Selection
 
     private func selectHeroItem() {
-        // Always reselect hero when called (removed guard to allow updates)
-        // This ensures hero updates immediately when switching libraries
+        // Check cache first - heroes persist across navigation
+        if let cachedHero = dataStore.getCachedHero(forLibrary: libraryKey) {
+            heroItem = cachedHero
+            return
+        }
 
         // Try to get hero from recently added hub first
         let recentlyAddedHub = hubs.first { hub in
@@ -270,16 +327,106 @@ struct PlexLibraryView: View {
         }
 
         if let hubItems = recentlyAddedHub?.Metadata, !hubItems.isEmpty {
-            heroItem = hubItems.randomElement()
+            if let newHero = hubItems.randomElement() {
+                heroItem = newHero
+                dataStore.cacheHero(newHero, forLibrary: libraryKey)
+            }
             return
         }
 
         // Fallback to items sorted by addedAt
         if !items.isEmpty {
             let recentItems = items.sorted { ($0.addedAt ?? 0) > ($1.addedAt ?? 0) }.prefix(10)
-            heroItem = recentItems.randomElement() ?? items.first
+            if let newHero = recentItems.randomElement() ?? items.first {
+                heroItem = newHero
+                dataStore.cacheHero(newHero, forLibrary: libraryKey)
+            }
         }
     }
+
+    // MARK: - Hero Section View
+
+    @ViewBuilder
+    private var heroSectionView: some View {
+        #if os(tvOS)
+        if showLibraryHero, let hero = heroItem {
+            HeroView(
+                item: hero,
+                serverURL: authManager.selectedServerURL ?? "",
+                authToken: authManager.authToken ?? "",
+                isPlayButtonFocused: $isHeroFocused,
+                onMoveDown: {
+                    // Move to grid when pressing down from hero
+                    if !items.isEmpty {
+                        setGridFocusWithoutAnimation(0)
+                    }
+                }
+            ) {
+                selectedItem = hero
+            }
+            .id("hero-\(libraryKey)-\(hero.ratingKey ?? "")")
+            .padding(.top, cachedProcessedHubs.isEmpty ? 0 : 48)
+        }
+        #endif
+    }
+
+    // MARK: - Curated Rows View
+
+    @ViewBuilder
+    private var curatedRowsView: some View {
+        if !cachedProcessedHubs.isEmpty {
+            VStack(alignment: .leading, spacing: 40) {
+                ForEach(Array(cachedProcessedHubs.enumerated()), id: \.element.hubIdentifier) { index, hub in
+                    if let hubItems = hub.Metadata, !hubItems.isEmpty {
+                        let isContinueWatching = hub.hubIdentifier?.lowercased().contains("continuewatching") == true ||
+                                                 hub.title?.lowercased().contains("continue watching") == true
+                        let focusKey = curatedRowFocusKey(for: hub, index: index)
+                        MediaRow(
+                            title: hub.title ?? "Untitled",
+                            items: hubItems,
+                            serverURL: authManager.selectedServerURL ?? "",
+                            authToken: authManager.authToken ?? "",
+                            contextMenuSource: isContinueWatching ? .continueWatching : .library,
+                            onItemSelected: { item in
+                                selectedItem = item
+                            },
+                            onRefreshNeeded: {
+                                await refresh()
+                            },
+                            focusTrigger: index == 0 ? focusTrigger : nil,
+                            focusMemoryItemId: curatedRowFocusBinding(for: focusKey)
+                        )
+                    }
+                }
+            }
+            #if os(tvOS)
+            .padding(.horizontal, 80)
+            .padding(.top, 100)  // Extra top padding since curated rows are now first
+            #else
+            .padding(.horizontal, 40)
+            .padding(.top, 24)
+            #endif
+        }
+    }
+
+    private var firstCuratedRowFocusKey: String? {
+        guard let firstHub = cachedProcessedHubs.first else { return nil }
+        return curatedRowFocusKey(for: firstHub, index: 0)
+    }
+
+    private func curatedRowFocusKey(for hub: PlexHub, index: Int) -> String {
+        let base = hub.hubIdentifier ?? hub.hubKey ?? hub.key ?? hub.title ?? "row-\(index)"
+        return "\(libraryKey).\(base)"
+    }
+
+    private func curatedRowFocusBinding(for key: String) -> Binding<String?> {
+        Binding(
+            get: { curatedRowFocusMemory[key] },
+            set: { curatedRowFocusMemory[key] = $0 }
+        )
+    }
+
+    // MARK: - Library Section Header
 
     private var librarySectionHeader: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -305,6 +452,66 @@ struct PlexLibraryView: View {
         .padding(.top, 40)
         .padding(.bottom, 24)
         #endif
+    }
+
+    // MARK: - Library Grid View
+
+    private var libraryGridView: some View {
+        LazyVGrid(columns: columns, spacing: 40) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                libraryGridItem(item: item, index: index)
+            }
+        }
+        #if os(tvOS)
+        .padding(.horizontal, 80)
+        .padding(.vertical, 28)
+        .padding(.bottom, 60)
+        .focusSection()  // Help focus engine navigate the grid efficiently
+        #else
+        .padding(.horizontal, 40)
+        .padding(.bottom, 40)
+        #endif
+    }
+
+    @ViewBuilder
+    private func libraryGridItem(item: PlexMetadata, index: Int) -> some View {
+        Button {
+            selectedItem = item
+        } label: {
+            // EquatableView tells SwiftUI to use our custom == to skip unnecessary re-renders
+            EquatableView(content: MediaPosterCard(
+                item: item,
+                serverURL: authManager.selectedServerURL ?? "",
+                authToken: authManager.authToken ?? ""
+            ))
+        }
+        #if os(tvOS)
+        .buttonStyle(CardButtonStyle())
+        .focused($focusedGridIndex, equals: index)
+        .modifier(LeftEdgeSidebarTrigger(isFirstItem: index % 6 == 0, openSidebar: openSidebar))
+        .onAppear {
+            // Trigger loading more items when nearing the end
+            if index >= items.count - 12 && hasMoreItems && !isLoadingMore {
+                Task { await loadMoreItems() }
+            }
+            // Prefetch images ahead of scroll position
+            if index > lastPrefetchIndex + 3 {
+                lastPrefetchIndex = index
+                prefetchImagesAhead(from: index)
+            }
+        }
+        #else
+        .buttonStyle(.plain)
+        #endif
+        .mediaItemContextMenu(
+            item: item,
+            serverURL: authManager.selectedServerURL ?? "",
+            authToken: authManager.authToken ?? "",
+            source: .library,
+            onRefreshNeeded: {
+                await refresh()
+            }
+        )
     }
 
     // MARK: - Loading View
@@ -400,6 +607,7 @@ struct PlexLibraryView: View {
 
     // MARK: - Data Loading
 
+    /// Full load with loading state (used when no cache exists)
     private func loadItems() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.authToken else {
@@ -409,44 +617,51 @@ struct PlexLibraryView: View {
             return
         }
 
-        // Try cache first - this is instant from memory/disk
-        let cachedItems = await getCachedItems()
-        if !cachedItems.isEmpty {
-            // Show cached data immediately (no loading state)
-            items = cachedItems
-            // Select hero immediately from cached items
-            selectHeroItemFromCurrentData()
-
-            // Refresh in background silently (both items and hubs)
-            async let itemsFetch: () = fetchFromServer(serverURL: serverURL, token: token)
-            async let hubsFetch: () = fetchLibraryHubs(serverURL: serverURL, token: token)
-            _ = await (itemsFetch, hubsFetch)
-            // Reselect hero after hubs load (in case hubs have better hero candidates)
-            selectHeroItem()
-            return
-        }
-
         // No cache - show loading and fetch both
-        items = []
-        hubs = []
         isLoading = true
-        async let itemsFetch: () = fetchFromServer(serverURL: serverURL, token: token)
+        async let itemsFetch: () = fetchFromServer(serverURL: serverURL, token: token, updateLoading: true)
         async let hubsFetch: () = fetchLibraryHubs(serverURL: serverURL, token: token)
         _ = await (itemsFetch, hubsFetch)
         // Select hero after data loads
         selectHeroItem()
     }
+
+    /// Background refresh without loading state (used when cache exists)
+    private func loadItemsInBackground() async {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken else { return }
+
+        // Fetch both items and hubs silently in background
+        async let itemsFetch: () = fetchFromServer(serverURL: serverURL, token: token, updateLoading: false)
+        async let hubsFetch: () = fetchLibraryHubs(serverURL: serverURL, token: token)
+        _ = await (itemsFetch, hubsFetch)
+
+        // Only reselect hero if hubs loaded and we don't have one yet
+        // or if hubs have better candidates (recently added)
+        if heroItem == nil {
+            selectHeroItem()
+        }
+    }
     
     /// Select hero from currently loaded items/hubs (for instant display)
     private func selectHeroItemFromCurrentData() {
+        // Check cache first - heroes persist across navigation
+        if let cachedHero = dataStore.getCachedHero(forLibrary: libraryKey) {
+            heroItem = cachedHero
+            return
+        }
+
         // When switching libraries, hubs might not be loaded yet, so prioritize items
         // Try items first (they're available immediately from cache)
         if !items.isEmpty {
             let recentItems = items.sorted { ($0.addedAt ?? 0) > ($1.addedAt ?? 0) }.prefix(10)
-            heroItem = recentItems.randomElement() ?? items.first
+            if let newHero = recentItems.randomElement() ?? items.first {
+                heroItem = newHero
+                dataStore.cacheHero(newHero, forLibrary: libraryKey)
+            }
             return
         }
-        
+
         // Fallback to hubs if items are empty but hubs are available
         if !hubs.isEmpty {
             let recentlyAddedHub = hubs.first { hub in
@@ -454,9 +669,12 @@ struct PlexLibraryView: View {
                 let title = hub.title?.lowercased() ?? ""
                 return identifier.contains("recentlyadded") || title.contains("recently added")
             }
-            
+
             if let hubItems = recentlyAddedHub?.Metadata, !hubItems.isEmpty {
-                heroItem = hubItems.randomElement()
+                if let newHero = hubItems.randomElement() {
+                    heroItem = newHero
+                    dataStore.cacheHero(newHero, forLibrary: libraryKey)
+                }
             }
         }
     }
@@ -472,21 +690,38 @@ struct PlexLibraryView: View {
         return []
     }
 
-    private func fetchFromServer(serverURL: String, token: String) async {
+    private let pageSize = 100  // Items per page
+
+    private func fetchFromServer(serverURL: String, token: String, updateLoading: Bool) async {
         do {
-            let fetchedItems = try await networkManager.getLibraryItems(
+            let result = try await networkManager.getLibraryItemsWithTotal(
                 serverURL: serverURL,
                 authToken: token,
-                sectionId: libraryKey
+                sectionId: libraryKey,
+                start: 0,
+                size: pageSize
             )
-            items = fetchedItems
+
+            // Update total count for pagination
+            if let total = result.totalSize {
+                totalItemCount = total
+                hasMoreItems = result.items.count < total
+            } else {
+                // If no totalSize, assume there might be more if we got a full page
+                hasMoreItems = result.items.count >= pageSize
+            }
+
+            // Only update items if they're actually different (prevents unnecessary re-renders)
+            if !itemsAreEqual(items, result.items) {
+                items = result.items
+            }
 
             // Cache based on type
-            if let firstItem = fetchedItems.first {
+            if let firstItem = result.items.first {
                 if firstItem.type == "movie" {
-                    await cacheManager.cacheMovies(fetchedItems, forLibrary: libraryKey)
+                    await cacheManager.cacheMovies(result.items, forLibrary: libraryKey)
                 } else if firstItem.type == "show" {
-                    await cacheManager.cacheShows(fetchedItems, forLibrary: libraryKey)
+                    await cacheManager.cacheShows(result.items, forLibrary: libraryKey)
                 }
             }
 
@@ -494,16 +729,85 @@ struct PlexLibraryView: View {
         } catch {
             // Ignore cancellation errors - they happen when views are recreated
             if (error as NSError).code == NSURLErrorCancelled {
-                print("PlexLibraryView: Request cancelled (view recreated)")
-                isLoading = false
+                if updateLoading { isLoading = false }
                 return
             }
             if items.isEmpty {
                 self.error = error.localizedDescription
             }
-            print("PlexLibraryView: Failed to fetch items: \(error)")
         }
-        isLoading = false
+        if updateLoading { isLoading = false }
+    }
+
+    /// Load more items for infinite scroll
+    private func loadMoreItems() async {
+        guard hasMoreItems,
+              !isLoadingMore,
+              let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken else { return }
+
+        isLoadingMore = true
+
+        do {
+            let result = try await networkManager.getLibraryItemsWithTotal(
+                serverURL: serverURL,
+                authToken: token,
+                sectionId: libraryKey,
+                start: items.count,
+                size: pageSize
+            )
+
+            // Update total count
+            if let total = result.totalSize {
+                totalItemCount = total
+            }
+
+            if result.items.isEmpty {
+                // No more items
+                hasMoreItems = false
+            } else {
+                // Append new items, avoiding duplicates
+                let existingKeys = Set(items.compactMap { $0.ratingKey })
+                let newItems = result.items.filter { item in
+                    guard let key = item.ratingKey else { return false }
+                    return !existingKeys.contains(key)
+                }
+
+                if !newItems.isEmpty {
+                    items.append(contentsOf: newItems)
+                    if let firstItem = items.first {
+                        if firstItem.type == "movie" {
+                            await cacheManager.cacheMovies(items, forLibrary: libraryKey)
+                        } else if firstItem.type == "show" {
+                            await cacheManager.cacheShows(items, forLibrary: libraryKey)
+                        }
+                    }
+                }
+
+                // Check if we've reached the end
+                if let total = result.totalSize {
+                    hasMoreItems = items.count < total
+                } else {
+                    hasMoreItems = result.items.count >= pageSize
+                }
+            }
+        } catch {
+            // Ignore errors for pagination - just stop loading more
+            if (error as NSError).code != NSURLErrorCancelled {
+                print("Failed to load more items: \(error)")
+            }
+        }
+
+        isLoadingMore = false
+    }
+
+    /// Compare two item arrays by ratingKey to avoid unnecessary state updates
+    private func itemsAreEqual(_ lhs: [PlexMetadata], _ rhs: [PlexMetadata]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        // Compare by ratingKey which is the unique identifier
+        let lhsKeys = lhs.compactMap { $0.ratingKey }
+        let rhsKeys = rhs.compactMap { $0.ratingKey }
+        return lhsKeys == rhsKeys
     }
 
     private func fetchLibraryHubs(serverURL: String, token: String) async {
@@ -513,10 +817,10 @@ struct PlexLibraryView: View {
                 authToken: token,
                 sectionId: libraryKey
             )
-            hubs = fetchedHubs
-            print("PlexLibraryView: Loaded \(fetchedHubs.count) hubs for library \(libraryKey)")
-            for hub in fetchedHubs {
-                print("  - Hub: \(hub.title ?? "unknown") (\(hub.hubIdentifier ?? "no id")) with \(hub.Metadata?.count ?? 0) items")
+
+            // Only update hubs if they're actually different
+            if !hubsAreEqual(hubs, fetchedHubs) {
+                hubs = fetchedHubs
             }
         } catch {
             // Ignore cancellation errors
@@ -524,8 +828,18 @@ struct PlexLibraryView: View {
                 return
             }
             // Don't show error for hubs - they're optional enhancement
-            print("PlexLibraryView: Failed to fetch library hubs: \(error)")
         }
+    }
+
+    /// Compare two hub arrays to avoid unnecessary state updates
+    private func hubsAreEqual(_ lhs: [PlexHub], _ rhs: [PlexHub]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        // Compare by hubIdentifier and item counts
+        for (l, r) in zip(lhs, rhs) {
+            if l.hubIdentifier != r.hubIdentifier { return false }
+            if l.Metadata?.count != r.Metadata?.count { return false }
+        }
+        return true
     }
 
     private func refresh() async {
@@ -533,9 +847,126 @@ struct PlexLibraryView: View {
               let token = authManager.authToken else { return }
 
         isLoading = true
-        async let itemsFetch: () = fetchFromServer(serverURL: serverURL, token: token)
+        async let itemsFetch: () = fetchFromServer(serverURL: serverURL, token: token, updateLoading: true)
         async let hubsFetch: () = fetchLibraryHubs(serverURL: serverURL, token: token)
         _ = await (itemsFetch, hubsFetch)
+    }
+
+    // MARK: - Focus Management
+
+    #if os(tvOS)
+    /// Restore focus to hero when content loads
+    private func restoreFocusPosition() {
+        guard !items.isEmpty || !cachedProcessedHubs.isEmpty else { return }
+
+        if heroItem == nil {
+            selectHeroItem()
+        }
+
+        // Focus first content: curated rows first, then hero, then grid
+        focusFirstContentItem()
+    }
+
+    /// Restore focus after returning from sidebar
+    private func restoreFocusAfterSidebar() {
+        focusFirstContentItem()
+    }
+
+    private func focusFirstContentItem() {
+        // Priority: curated rows > hero > grid
+        if !cachedProcessedHubs.isEmpty {
+            focusTrigger += 1
+        } else if showLibraryHero && heroItem != nil {
+            isHeroFocused = true
+        } else if !items.isEmpty {
+            setGridFocusWithoutAnimation(0)
+        }
+    }
+
+    private func setGridFocusWithoutAnimation(_ index: Int?) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            focusedGridIndex = index
+        }
+    }
+
+    /// Prefetch poster images for visible and upcoming items
+    private func prefetchImages() {
+        guard !items.isEmpty,
+              let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken else { return }
+
+        hasPrefetched = true
+
+        // Prefetch first 20 items (visible + next row)
+        let prefetchCount = min(20, items.count)
+        let urlsToPreload: [URL] = items.prefix(prefetchCount).compactMap { item in
+            guard let thumb = posterThumb(for: item) else { return nil }
+            var urlString = "\(serverURL)\(thumb)"
+            if !urlString.contains("X-Plex-Token") {
+                urlString += urlString.contains("?") ? "&" : "?"
+                urlString += "X-Plex-Token=\(token)"
+            }
+            return URL(string: urlString)
+        }
+
+        // Fire off prefetch in background
+        Task.detached(priority: .background) {
+            await ImageCacheManager.shared.prefetch(urls: urlsToPreload)
+        }
+    }
+
+    /// Prefetch images ahead of the current scroll position
+    /// Called frequently to ensure images are loaded before user reaches them
+    private func prefetchImagesAhead(from index: Int) {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken else { return }
+
+        // Prefetch the next 30 items (~5 rows of 6) ahead of current position
+        let prefetchStart = index + 3  // Start just ahead of current position
+        let prefetchEnd = min(prefetchStart + 30, items.count)
+
+        guard prefetchStart < items.count else { return }
+
+        let itemsToPrefetch = Array(items[prefetchStart..<prefetchEnd])
+        guard !itemsToPrefetch.isEmpty else { return }
+
+        let urlsToPreload: [URL] = itemsToPrefetch.compactMap { item in
+            guard let thumb = posterThumb(for: item) else { return nil }
+            var urlString = "\(serverURL)\(thumb)"
+            if !urlString.contains("X-Plex-Token") {
+                urlString += urlString.contains("?") ? "&" : "?"
+                urlString += "X-Plex-Token=\(token)"
+            }
+            return URL(string: urlString)
+        }
+
+        guard !urlsToPreload.isEmpty else { return }
+
+        // Fire off prefetch with utility priority for timely loading
+        Task.detached(priority: .utility) {
+            await ImageCacheManager.shared.prefetch(urls: urlsToPreload)
+        }
+    }
+    #endif
+
+    /// Handle items count change - triggers prefetch on tvOS
+    private func handleItemsCountChange(oldCount: Int, newCount: Int) {
+        #if os(tvOS)
+        if oldCount == 0 && newCount > 0 {
+            prefetchImages()
+        } else if !hasPrefetched && newCount > 0 {
+            prefetchImages()
+        }
+        #endif
+    }
+
+    private func posterThumb(for item: PlexMetadata) -> String? {
+        if item.type == "episode" {
+            return item.grandparentThumb ?? item.parentThumb ?? item.thumb
+        }
+        return item.thumb
     }
 }
 

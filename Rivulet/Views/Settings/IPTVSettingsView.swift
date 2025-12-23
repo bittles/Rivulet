@@ -19,13 +19,13 @@ struct IPTVSettingsView: View {
             VStack(alignment: .leading, spacing: 32) {
                 // Header
                 Text("Live TV Sources")
-                    .font(.system(size: 48, weight: .bold))
+                    .font(.system(size: 56, weight: .bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 80)
                     .padding(.top, 60)
 
                 Text("Add sources for Live TV channels. You can use Plex Live TV or any M3U playlist.")
-                    .font(.system(size: 17))
+                    .font(.system(size: 24))
                     .foregroundStyle(.white.opacity(0.5))
                     .padding(.horizontal, 80)
 
@@ -98,40 +98,40 @@ struct LiveTVSourceRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 20) {
             // Icon
             ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(iconColor.gradient)
-                    .frame(width: 52, height: 52)
+                    .frame(width: 64, height: 64)
 
                 Image(systemName: iconName)
-                    .font(.system(size: 24, weight: .semibold))
+                    .font(.system(size: 28, weight: .semibold))
                     .foregroundStyle(.white)
             }
 
             // Source info
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text(source.displayName)
-                    .font(.system(size: 23, weight: .medium))
-                    .foregroundStyle(Color(white: 0.1))
+                    .font(.system(size: 29, weight: .medium))
+                    .foregroundStyle(.white)
 
-                HStack(spacing: 8) {
+                HStack(spacing: 10) {
                     // Connection status
                     Circle()
                         .fill(source.isConnected ? Color.green : Color.red)
-                        .frame(width: 8, height: 8)
+                        .frame(width: 10, height: 10)
 
                     Text(source.isConnected ? "Connected" : "Disconnected")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Color(white: 0.4))
+                        .font(.system(size: 21))
+                        .foregroundStyle(.white.opacity(0.6))
 
                     if source.channelCount > 0 {
                         Text("•")
-                            .foregroundStyle(Color(white: 0.4))
+                            .foregroundStyle(.white.opacity(0.6))
                         Text("\(source.channelCount) channels")
-                            .font(.system(size: 15))
-                            .foregroundStyle(Color(white: 0.4))
+                            .font(.system(size: 21))
+                            .foregroundStyle(.white.opacity(0.6))
                     }
                 }
             }
@@ -140,14 +140,14 @@ struct LiveTVSourceRow: View {
 
             // Chevron
             Image(systemName: "chevron.right")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Color(white: 0.5))
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.4))
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(isFocused ? .black.opacity(0.1) : .clear)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(isFocused ? .white.opacity(0.15) : .clear)
         )
         .focusable()
         .focused($isFocused)
@@ -166,38 +166,38 @@ struct AddSourceButton: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 20) {
             ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(Color.blue.gradient)
-                    .frame(width: 52, height: 52)
+                    .frame(width: 64, height: 64)
 
                 Image(systemName: "plus")
-                    .font(.system(size: 24, weight: .bold))
+                    .font(.system(size: 28, weight: .bold))
                     .foregroundStyle(.white)
             }
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Add Live TV Source")
-                    .font(.system(size: 23, weight: .medium))
-                    .foregroundStyle(Color(white: 0.1))
+                    .font(.system(size: 29, weight: .medium))
+                    .foregroundStyle(.white)
 
                 Text("Plex Live TV or M3U playlist")
-                    .font(.system(size: 17))
-                    .foregroundStyle(Color(white: 0.4))
+                    .font(.system(size: 23))
+                    .foregroundStyle(.white.opacity(0.6))
             }
 
             Spacer()
 
             Image(systemName: "chevron.right")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Color(white: 0.5))
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.4))
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(isFocused ? .black.opacity(0.1) : .clear)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(isFocused ? .white.opacity(0.15) : .clear)
         )
         .focusable()
         .focused($isFocused)
@@ -216,20 +216,20 @@ struct PlexLiveTVHintCard: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        VStack(spacing: 16) {
-            HStack(spacing: 14) {
+        VStack(spacing: 20) {
+            HStack(spacing: 18) {
                 Image(systemName: "tv.and.mediabox")
-                    .font(.system(size: 28, weight: .medium))
+                    .font(.system(size: 36, weight: .medium))
                     .foregroundStyle(.orange)
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("Plex Live TV Available")
-                        .font(.system(size: 21, weight: .semibold))
-                        .foregroundStyle(Color(white: 0.1))
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(.white)
 
                     Text("Your Plex server may have Live TV. Add it as a source to access channels.")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Color(white: 0.4))
+                        .font(.system(size: 22))
+                        .foregroundStyle(.white.opacity(0.6))
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -239,23 +239,23 @@ struct PlexLiveTVHintCard: View {
             HStack {
                 Spacer()
                 Text("Add Plex Live TV")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(.blue)
                 Image(systemName: "arrow.right")
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(.blue)
             }
         }
-        .padding(20)
+        .padding(24)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.white.opacity(0.85))
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.white.opacity(0.08))
         )
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(isFocused ? .blue.opacity(0.5) : .clear, lineWidth: 3)
         )
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .focusable()
         .focused($isFocused)
         .onTapGesture {

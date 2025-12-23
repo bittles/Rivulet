@@ -19,6 +19,15 @@ struct PlexDetailView: View {
     @State private var showPlayer = false
     @State private var selectedEpisode: PlexMetadata?
 
+    // New state for cast/crew and related items
+    @State private var fullMetadata: PlexMetadata?
+    @State private var relatedItems: [PlexMetadata] = []
+    @State private var isWatched = false
+    @State private var isLoadingExtras = false
+    @State private var showTrailerPlayer = false
+    @State private var castFocusTrigger = 0
+    @FocusState private var isPlayButtonFocused: Bool
+
     private let networkManager = PlexNetworkManager.shared
 
     var body: some View {
@@ -28,7 +37,7 @@ struct PlexDetailView: View {
                 heroSection
 
                 // Content Section
-                VStack(alignment: .leading, spacing: 32) {
+                VStack(alignment: .leading, spacing: 24) {
                     // Title and metadata
                     headerSection
 
@@ -40,7 +49,7 @@ struct PlexDetailView: View {
                         Text(summary)
                             .font(.body)
                             .foregroundStyle(.secondary)
-                            .lineLimit(4)
+                            .lineLimit(3)
                     }
 
                     // TV Show specific: Seasons and Episodes
@@ -49,12 +58,47 @@ struct PlexDetailView: View {
                     }
                 }
                 .padding(.horizontal, 48)
-                .padding(.top, 32)
-                .padding(.bottom, 80)
+                .padding(.top, 24)
+
+                // Cast & Crew Section
+                if let metadata = fullMetadata,
+                   (!metadata.cast.isEmpty || !(metadata.Director?.isEmpty ?? true)) {
+                    CastCrewRow(
+                        cast: metadata.cast,
+                        directors: metadata.Director ?? [],
+                        writers: metadata.Writer ?? [],
+                        serverURL: authManager.selectedServerURL ?? "",
+                        authToken: authManager.authToken ?? "",
+                        focusTrigger: castFocusTrigger,
+                        onMoveUp: shouldRouteBetweenActionsAndCast ? {
+                            isPlayButtonFocused = true
+                        } : nil
+                    )
+                    .padding(.top, 32)
+                }
+
+                // Related Items Section
+                if !relatedItems.isEmpty {
+                    relatedItemsSection
+                        .padding(.top, 32)
+                }
+
+                Spacer()
+                    .frame(height: 60)
             }
         }
         .ignoresSafeArea(edges: .top)
         .task {
+            // Initialize watched state
+            isWatched = item.isWatched
+
+            // Load full metadata for cast/crew and trailer
+            await loadFullMetadata()
+
+            // Load related items
+            await loadRelatedItems()
+
+            // Load seasons for TV shows
             if item.type == "show" {
                 await loadSeasons()
             }
@@ -65,6 +109,16 @@ struct PlexDetailView: View {
                 VideoPlayerView(item: episode)
             } else {
                 VideoPlayerView(item: item)
+            }
+        }
+        .fullScreenCover(isPresented: $showTrailerPlayer) {
+            // Play trailer if available
+            if let trailer = fullMetadata?.trailer {
+                TrailerPlayerView(
+                    trailer: trailer,
+                    serverURL: authManager.selectedServerURL ?? "",
+                    authToken: authManager.authToken ?? ""
+                )
             }
         }
         .onChange(of: showPlayer) { _, isShowing in
@@ -79,8 +133,8 @@ struct PlexDetailView: View {
 
     private var heroSection: some View {
         ZStack(alignment: .bottomLeading) {
-            // Background art
-            AsyncImage(url: artURL) { phase in
+            // Background art with squircle corners
+            CachedAsyncImage(url: artURL) { phase in
                 switch phase {
                 case .success(let image):
                     image
@@ -95,24 +149,26 @@ struct PlexDetailView: View {
                                 endPoint: .bottom
                             )
                         )
-                @unknown default:
-                    Color.black
                 }
             }
             .frame(height: 600)
             .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
             .overlay {
                 // Gradient overlay for text readability
                 LinearGradient(
-                    colors: [.clear, .black.opacity(0.8), .black],
+                    colors: [.clear, .black.opacity(0.7), .black],
                     startPoint: .top,
                     endPoint: .bottom
                 )
+                .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
             }
+            .shadow(color: .black.opacity(0.5), radius: 20, y: 10)
+            .padding(.horizontal, 48)
 
-            // Poster overlay
+            // Poster overlay - larger with squircle corners
             HStack(alignment: .bottom, spacing: 32) {
-                AsyncImage(url: thumbURL) { phase in
+                CachedAsyncImage(url: posterURL) { phase in
                     switch phase {
                     case .success(let image):
                         image
@@ -120,26 +176,31 @@ struct PlexDetailView: View {
                             .aspectRatio(contentMode: .fill)
                     case .empty:
                         Rectangle()
-                            .fill(Color.gray.opacity(0.3))
-                            .overlay { ProgressView() }
+                            .fill(Color(white: 0.15))
+                            .overlay { ProgressView().tint(.white.opacity(0.3)) }
                     case .failure:
                         Rectangle()
-                            .fill(Color.gray.opacity(0.3))
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color(white: 0.18), Color(white: 0.12)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
                             .overlay {
                                 Image(systemName: item.type == "movie" ? "film" : "tv")
-                                    .font(.largeTitle)
+                                    .font(.system(size: 40, weight: .light))
+                                    .foregroundStyle(.white.opacity(0.4))
                             }
-                    @unknown default:
-                        Color.gray
                     }
                 }
                 .frame(width: 200, height: 300)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .shadow(radius: 10)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .shadow(color: .black.opacity(0.5), radius: 16, y: 8)
 
                 Spacer()
             }
-            .padding(.horizontal, 48)
+            .padding(.horizontal, 96) // Inset from hero edges
             .padding(.bottom, -50) // Overlap into content area
         }
     }
@@ -153,8 +214,8 @@ struct PlexDetailView: View {
                 .frame(height: 60)
 
             Text(item.title ?? "Unknown Title")
-                .font(.largeTitle)
-                .fontWeight(.bold)
+                .font(.title2)
+                .fontWeight(.semibold)
 
             HStack(spacing: 16) {
                 if let year = item.year {
@@ -166,8 +227,8 @@ struct PlexDetailView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
                         .overlay {
-                            RoundedRectangle(cornerRadius: 4)
-                                .stroke(Color.secondary, lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .stroke(Color.secondary.opacity(0.6), lineWidth: 1)
                         }
                 }
 
@@ -182,13 +243,22 @@ struct PlexDetailView: View {
                         Text(String(format: "%.1f", rating))
                     }
                 }
+
+                // Show director if available
+                if let director = fullMetadata?.primaryDirector {
+                    HStack(spacing: 4) {
+                        Image(systemName: "megaphone.fill")
+                            .foregroundStyle(.orange)
+                        Text(director)
+                    }
+                }
             }
             .font(.subheadline)
             .foregroundStyle(.secondary)
 
             if let tagline = item.tagline {
                 Text(tagline)
-                    .font(.headline)
+                    .font(.subheadline)
                     .italic()
                     .foregroundStyle(.secondary)
                     .padding(.top, 4)
@@ -199,22 +269,58 @@ struct PlexDetailView: View {
     // MARK: - Action Buttons
 
     private var actionButtons: some View {
-        HStack(spacing: 20) {
-            // Play button
+        HStack(spacing: 16) {
+            // Play button - smaller
             Button {
                 showPlayer = true
             } label: {
-                HStack {
+                HStack(spacing: 8) {
                     Image(systemName: "play.fill")
                     Text(item.isInProgress ? "Resume" : "Play")
                 }
-                .font(.headline)
-                .padding(.horizontal, 32)
-                .padding(.vertical, 16)
+                .font(.system(size: 20, weight: .semibold))
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
             }
             .buttonStyle(.borderedProminent)
+            #if os(tvOS)
+            .focused($isPlayButtonFocused)
+            .onMoveCommand(perform: handleActionMove)
+            #endif
 
-            // If in progress, show progress info
+            // Watched toggle button
+            Button {
+                Task {
+                    await toggleWatched()
+                }
+            } label: {
+                Image(systemName: isWatched ? "checkmark.circle.fill" : "checkmark.circle")
+                    .font(.system(size: 28, weight: .medium))
+                    .foregroundStyle(isWatched ? .green : .secondary)
+            }
+            .buttonStyle(.bordered)
+            #if os(tvOS)
+            .onMoveCommand(perform: handleActionMove)
+            #endif
+
+            // Trailer button (only show if available)
+            if fullMetadata?.trailer != nil {
+                Button {
+                    showTrailerPlayer = true
+                } label: {
+                    Image(systemName: "film")
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.bordered)
+                #if os(tvOS)
+                .onMoveCommand(perform: handleActionMove)
+                #endif
+            }
+
+            Spacer()
+
+            // Progress info on the right
             if let progress = item.viewOffsetFormatted, item.isInProgress {
                 Text("\(progress) watched")
                     .font(.subheadline)
@@ -294,7 +400,100 @@ struct PlexDetailView: View {
         }
     }
 
+    // MARK: - Related Items Section
+
+    private var relatedItemsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("More Like This")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 48)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 24) {
+                    ForEach(relatedItems, id: \.ratingKey) { relatedItem in
+                        NavigationLink(value: relatedItem) {
+                            MediaPosterCard(
+                                item: relatedItem,
+                                serverURL: authManager.selectedServerURL ?? "",
+                                authToken: authManager.authToken ?? ""
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 48)
+                .padding(.vertical, 16)
+            }
+        }
+    }
+
     // MARK: - Data Loading
+
+    private func loadFullMetadata() async {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken,
+              let ratingKey = item.ratingKey else { return }
+
+        isLoadingExtras = true
+
+        do {
+            let metadata = try await networkManager.getFullMetadata(
+                serverURL: serverURL,
+                authToken: token,
+                ratingKey: ratingKey
+            )
+            fullMetadata = metadata
+        } catch {
+            print("Failed to load full metadata: \(error)")
+        }
+
+        isLoadingExtras = false
+    }
+
+    private func loadRelatedItems() async {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken,
+              let ratingKey = item.ratingKey else { return }
+
+        do {
+            let related = try await networkManager.getRelatedItems(
+                serverURL: serverURL,
+                authToken: token,
+                ratingKey: ratingKey,
+                limit: 12
+            )
+            relatedItems = related
+        } catch {
+            print("Failed to load related items: \(error)")
+        }
+    }
+
+    private func toggleWatched() async {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken,
+              let ratingKey = item.ratingKey else { return }
+
+        do {
+            if isWatched {
+                try await networkManager.markUnwatched(
+                    serverURL: serverURL,
+                    authToken: token,
+                    ratingKey: ratingKey
+                )
+            } else {
+                try await networkManager.markWatched(
+                    serverURL: serverURL,
+                    authToken: token,
+                    ratingKey: ratingKey
+                )
+            }
+            isWatched.toggle()
+        } catch {
+            print("Failed to toggle watched status: \(error)")
+        }
+    }
 
     private func loadSeasons() async {
         guard let serverURL = authManager.selectedServerURL,
@@ -344,6 +543,21 @@ struct PlexDetailView: View {
         isLoadingEpisodes = false
     }
 
+    #if os(tvOS)
+    private func handleActionMove(_ direction: MoveCommandDirection) {
+        if direction == .down, shouldRouteBetweenActionsAndCast {
+            castFocusTrigger += 1
+        }
+    }
+    #endif
+
+    private var shouldRouteBetweenActionsAndCast: Bool {
+        if item.type == "show" {
+            return seasons.isEmpty
+        }
+        return true
+    }
+
     // MARK: - URL Helpers
 
     private var artURL: URL? {
@@ -351,6 +565,23 @@ struct PlexDetailView: View {
               let serverURL = authManager.selectedServerURL,
               let token = authManager.authToken else { return nil }
         return URL(string: "\(serverURL)\(art)?X-Plex-Token=\(token)")
+    }
+
+    /// Poster URL - uses grandparent poster for episodes (series poster)
+    private var posterURL: URL? {
+        let thumb: String?
+
+        // For TV show episodes, prefer the series poster (grandparentThumb)
+        if item.type == "episode" || item.type == "season" {
+            thumb = item.grandparentThumb ?? item.parentThumb ?? item.thumb
+        } else {
+            thumb = item.thumb
+        }
+
+        guard let thumbPath = thumb,
+              let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken else { return nil }
+        return URL(string: "\(serverURL)\(thumbPath)?X-Plex-Token=\(token)")
     }
 
     private var thumbURL: URL? {
@@ -373,7 +604,7 @@ struct EpisodeRow: View {
         Button(action: onPlay) {
             HStack(spacing: 16) {
                 // Thumbnail
-                AsyncImage(url: thumbURL) { phase in
+                CachedAsyncImage(url: thumbURL) { phase in
                     switch phase {
                     case .success(let image):
                         image
@@ -386,8 +617,6 @@ struct EpisodeRow: View {
                                 Image(systemName: "play.rectangle")
                                     .foregroundStyle(.secondary)
                             }
-                    @unknown default:
-                        Color.gray
                     }
                 }
                 .frame(width: 200, height: 112)

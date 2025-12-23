@@ -17,7 +17,7 @@ struct PlexSettingsView: View {
             VStack(alignment: .leading, spacing: 32) {
                 // Header (Menu button on remote navigates back)
                 Text("Plex Server")
-                    .font(.system(size: 48, weight: .bold))
+                    .font(.system(size: 56, weight: .bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 80)
                     .padding(.top, 60)
@@ -26,33 +26,33 @@ struct PlexSettingsView: View {
                     if authManager.isAuthenticated {
                         // Connected server card
                         SettingsSection(title: "Connected Server") {
-                            HStack(spacing: 16) {
+                            HStack(spacing: 20) {
                                 ZStack {
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                                         .fill(.green.gradient)
-                                        .frame(width: 52, height: 52)
+                                        .frame(width: 64, height: 64)
 
                                     Image(systemName: "checkmark")
-                                        .font(.system(size: 24, weight: .bold))
+                                        .font(.system(size: 28, weight: .bold))
                                         .foregroundStyle(.white)
                                 }
 
-                                VStack(alignment: .leading, spacing: 4) {
+                                VStack(alignment: .leading, spacing: 5) {
                                     Text(authManager.savedServerName ?? "Plex Server")
-                                        .font(.system(size: 21, weight: .semibold))
-                                        .foregroundStyle(Color(white: 0.1))
+                                        .font(.system(size: 28, weight: .semibold))
+                                        .foregroundStyle(.white)
 
                                     if let username = authManager.username {
                                         Text("Signed in as \(username)")
-                                            .font(.system(size: 15))
-                                            .foregroundStyle(Color(white: 0.4))
+                                            .font(.system(size: 22))
+                                            .foregroundStyle(.white.opacity(0.6))
                                     }
                                 }
 
                                 Spacer()
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 16)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 20)
                         }
 
                         // Connection details
@@ -73,21 +73,21 @@ struct PlexSettingsView: View {
                         }
                     } else {
                         // Not connected
-                        VStack(spacing: 28) {
+                        VStack(spacing: 32) {
                             Image(systemName: "server.rack")
-                                .font(.system(size: 64, weight: .thin))
-                                .foregroundStyle(Color(white: 0.5))
+                                .font(.system(size: 80, weight: .thin))
+                                .foregroundStyle(.white.opacity(0.5))
 
-                            VStack(spacing: 10) {
+                            VStack(spacing: 12) {
                                 Text("No Server Connected")
-                                    .font(.system(size: 32, weight: .semibold))
-                                    .foregroundStyle(Color(white: 0.1))
+                                    .font(.system(size: 40, weight: .semibold))
+                                    .foregroundStyle(.white)
 
                                 Text("Connect to your Plex server to browse and stream your media library.")
-                                    .font(.system(size: 19))
-                                    .foregroundStyle(Color(white: 0.4))
+                                    .font(.system(size: 26))
+                                    .foregroundStyle(.white.opacity(0.6))
                                     .multilineTextAlignment(.center)
-                                    .frame(maxWidth: 450)
+                                    .frame(maxWidth: 550)
                             }
 
                             ConnectButton {
@@ -95,12 +95,12 @@ struct PlexSettingsView: View {
                             }
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 60)
+                        .padding(.vertical, 70)
                         .background(
-                            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                .fill(.white.opacity(0.85))
+                            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                                .fill(.white.opacity(0.08))
                         )
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
                     }
                 }
                 .padding(.horizontal, 80)

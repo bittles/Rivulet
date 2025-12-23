@@ -7,42 +7,68 @@
 
 import SwiftUI
 
-// MARK: - Card Button Style (tvOS - no focus ring, scale only)
+// MARK: - Card Button Style (tvOS - minimal, no focus ring)
 
 #if os(tvOS)
-/// A button style that removes the default tvOS focus ring and uses scale + shadow instead.
-/// The MediaPosterCard inside reads focus state from `@Environment(\.isFocused)`.
+/// A minimal button style that removes the default tvOS focus ring.
+/// Hover effect is applied directly to the poster image inside MediaPosterCard.
 struct CardButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        CardButtonContent(configuration: configuration)
-    }
-}
-
-private struct CardButtonContent: View {
-    let configuration: ButtonStyleConfiguration
-    @Environment(\.isFocused) private var isFocused
-
-    var body: some View {
         configuration.label
-            .scaleEffect(isFocused ? 1.1 : 1.0)
-            .shadow(
-                color: .black.opacity(isFocused ? 0.6 : 0.25),
-                radius: isFocused ? 24 : 8,
-                y: isFocused ? 12 : 4
-            )
-            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isFocused)
     }
 }
 #endif
 
+// MARK: - Watched Corner Tag
+
+/// A triangular corner tag indicating the item has been watched
+struct WatchedCornerTag: View {
+    #if os(tvOS)
+    private let size: CGFloat = 48
+    private let checkSize: CGFloat = 18
+    #else
+    private let size: CGFloat = 40
+    private let checkSize: CGFloat = 15
+    #endif
+
+    var body: some View {
+        Canvas { context, _ in
+            // Draw triangle
+            let path = Path { p in
+                p.move(to: CGPoint(x: 0, y: 0))
+                p.addLine(to: CGPoint(x: size, y: 0))
+                p.addLine(to: CGPoint(x: size, y: size))
+                p.closeSubpath()
+            }
+            context.fill(path, with: .color(.green))
+        }
+        .frame(width: size, height: size)
+        .overlay(alignment: .topTrailing) {
+            Image(systemName: "checkmark")
+                .font(.system(size: checkSize, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(6)
+        }
+        .shadow(color: .black.opacity(0.4), radius: 3, y: 1)
+    }
+}
+
 // MARK: - Media Poster Card
 
-struct MediaPosterCard: View {
+/// Equatable conformance helps SwiftUI skip re-renders when props haven't changed
+struct MediaPosterCard: View, Equatable {
     let item: PlexMetadata
     let serverURL: String
     let authToken: String
 
-    @Environment(\.isFocused) private var isFocused
+    // Equatable: only re-render if the item's key data changes
+    static func == (lhs: MediaPosterCard, rhs: MediaPosterCard) -> Bool {
+        lhs.item.ratingKey == rhs.item.ratingKey &&
+        lhs.item.thumb == rhs.item.thumb &&
+        lhs.item.viewOffset == rhs.item.viewOffset &&
+        lhs.item.viewCount == rhs.item.viewCount &&
+        lhs.serverURL == rhs.serverURL
+    }
 
     #if os(tvOS)
     private let posterWidth: CGFloat = 220
@@ -66,8 +92,13 @@ struct MediaPosterCard: View {
                 .overlay(alignment: .topTrailing) {
                     unwatchedBadge
                 }
+                #if os(tvOS)
+                .hoverEffect(.highlight)  // Native tvOS focus effect on poster only
+                .shadow(color: .black.opacity(0.4), radius: 12, y: 6)
+                .padding(.bottom, 10)  // Space for hover scale effect
+                #endif
 
-            // Metadata
+            // Metadata - fixed height ensures grid alignment
             VStack(alignment: .leading, spacing: 6) {
                 Text(item.title ?? "Unknown")
                     #if os(tvOS)
@@ -75,8 +106,9 @@ struct MediaPosterCard: View {
                     #else
                     .font(.system(size: 15, weight: .medium))
                     #endif
-                    .foregroundStyle(isFocused ? .white : .white.opacity(0.85))
-                    .lineLimit(2)
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                     .frame(width: posterWidth, alignment: .leading)
 
                 if let subtitle = subtitleText {
@@ -88,11 +120,14 @@ struct MediaPosterCard: View {
                         #endif
                         .foregroundStyle(.white.opacity(0.5))
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(width: posterWidth, alignment: .leading)
                 }
             }
             #if os(tvOS)
-            .opacity(isFocused ? 1.0 : 0.8)
-            .animation(.easeOut(duration: 0.2), value: isFocused)
+            .frame(height: 52, alignment: .top)  // Fixed height for consistent grid alignment
+            #else
+            .frame(height: 44, alignment: .top)
             #endif
         }
     }
@@ -100,7 +135,7 @@ struct MediaPosterCard: View {
     // MARK: - Poster Image
 
     private var posterImage: some View {
-        AsyncImage(url: posterURL) { phase in
+        CachedAsyncImage(url: posterURL) { phase in
             switch phase {
             case .empty:
                 Rectangle()
@@ -127,9 +162,6 @@ struct MediaPosterCard: View {
                             .font(.system(size: 32, weight: .light))
                             .foregroundStyle(.white.opacity(0.3))
                     }
-            @unknown default:
-                Rectangle()
-                    .fill(Color(white: 0.15))
             }
         }
     }
@@ -158,25 +190,49 @@ struct MediaPosterCard: View {
         }
     }
 
-    // MARK: - Unwatched Badge
+    // MARK: - Status Badge
 
     @ViewBuilder
     private var unwatchedBadge: some View {
-        if item.viewCount == nil || item.viewCount == 0 {
-            if let leafCount = item.leafCount, leafCount > 0 {
-                Text("\(leafCount)")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule()
-                            .fill(.blue)
-                            .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
-                    )
-                    .padding(10)
+        // For TV shows: show unwatched episode count
+        if let leafCount = item.leafCount, leafCount > 0, item.type == "show" {
+            Text("\(leafCount)")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(.blue)
+                        .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                )
+                .padding(10)
+        }
+        // For movies/episodes: show corner tag if fully watched
+        else if isFullyWatched {
+            WatchedCornerTag()
+        }
+    }
+
+    /// Check if item is fully watched (no progress bar, has been viewed)
+    private var isFullyWatched: Bool {
+        // Must have been viewed at least once
+        guard let viewCount = item.viewCount, viewCount > 0 else {
+            return false
+        }
+        // Must not have partial progress (would show progress bar instead)
+        if let progress = item.watchProgress, progress > 0 && progress < 1 {
+            return false
+        }
+        // For episodes, check viewOffset vs duration
+        if let viewOffset = item.viewOffset, let duration = item.duration {
+            // If there's significant remaining time, not fully watched
+            let remaining = duration - viewOffset
+            if remaining > 60000 { // More than 1 minute remaining
+                return false
             }
         }
+        return true
     }
 
     // MARK: - Computed Properties
@@ -243,7 +299,14 @@ struct MediaRow: View {
     let items: [PlexMetadata]
     let serverURL: String
     let authToken: String
+    var contextMenuSource: MediaItemContextSource = .other
     var onItemSelected: ((PlexMetadata) -> Void)?
+    var onRefreshNeeded: MediaItemRefreshCallback?
+    var focusTrigger: Int? = nil
+    var focusMemoryItemId: Binding<String?>? = nil
+
+    // Track focused item for proper initial focus
+    @FocusState private var focusedItemId: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -266,15 +329,55 @@ struct MediaRow: View {
                         }
                         #if os(tvOS)
                         .buttonStyle(CardButtonStyle())
+                        .focused($focusedItemId, equals: item.ratingKey)
                         #else
                         .buttonStyle(.plain)
                         #endif
+                        .mediaItemContextMenu(
+                            item: item,
+                            serverURL: serverURL,
+                            authToken: authToken,
+                            source: contextMenuSource,
+                            onRefreshNeeded: onRefreshNeeded
+                        )
                     }
                 }
                 .padding(.horizontal, 48)
-                .padding(.vertical, 20)  // Room for scale effect
+                .padding(.vertical, 32)  // Room for scale effect and shadow
+            }
+            .scrollClipDisabled()  // Allow shadow overflow
+        }
+        .onChange(of: focusTrigger) { _, newValue in
+            if newValue != nil {
+                setFocusedItemWithoutAnimation(items.first?.ratingKey)
             }
         }
+        .onChange(of: focusedItemId) { _, newValue in
+            if let newValue {
+                focusMemoryItemId?.wrappedValue = newValue
+            }
+        }
+        .focusSection()
+        #if os(tvOS)
+        // Set first item as default focus when this row receives focus
+        .defaultFocus($focusedItemId, defaultFocusItemId)
+        #endif
+    }
+
+    private func setFocusedItemWithoutAnimation(_ itemId: String?) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            focusedItemId = itemId
+        }
+    }
+
+    private var defaultFocusItemId: String? {
+        if let storedId = focusMemoryItemId?.wrappedValue,
+           items.contains(where: { $0.ratingKey == storedId }) {
+            return storedId
+        }
+        return items.first?.ratingKey
     }
 }
 
@@ -284,7 +387,12 @@ struct MediaGrid: View {
     let items: [PlexMetadata]
     let serverURL: String
     let authToken: String
+    var contextMenuSource: MediaItemContextSource = .library
     var onItemSelected: ((PlexMetadata) -> Void)?
+    var onRefreshNeeded: MediaItemRefreshCallback?
+
+    // Track focused item for proper initial focus
+    @FocusState private var focusedItemId: String?
 
     #if os(tvOS)
     private let columns = [
@@ -310,13 +418,26 @@ struct MediaGrid: View {
                 }
                 #if os(tvOS)
                 .buttonStyle(CardButtonStyle())
+                .focused($focusedItemId, equals: item.ratingKey)
                 #else
                 .buttonStyle(.plain)
                 #endif
+                .mediaItemContextMenu(
+                    item: item,
+                    serverURL: serverURL,
+                    authToken: authToken,
+                    source: contextMenuSource,
+                    onRefreshNeeded: onRefreshNeeded
+                )
             }
         }
         .padding(.horizontal, 48)
-        .padding(.vertical, 20)  // Room for scale effect
+        .padding(.vertical, 32)  // Room for scale effect and shadow
+        .focusSection()
+        #if os(tvOS)
+        // Set first item as default focus when this grid receives focus
+        .defaultFocus($focusedItemId, items.first?.ratingKey)
+        #endif
     }
 }
 

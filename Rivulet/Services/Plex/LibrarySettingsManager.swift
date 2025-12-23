@@ -52,7 +52,6 @@ class LibrarySettingsManager: ObservableObject {
             self.libraryOrder = []
         }
 
-        print("📚 LibrarySettingsManager: Initialized with \(hiddenLibraryKeys.count) hidden, \(libraryOrder.count) ordered")
     }
 
     // MARK: - Public Methods
@@ -169,11 +168,9 @@ class LibrarySettingsManager: ObservableObject {
 
     private func saveHiddenLibraries() {
         userDefaults.set(Array(hiddenLibraryKeys), forKey: hiddenLibrariesKey)
-        print("📚 LibrarySettingsManager: Saved \(hiddenLibraryKeys.count) hidden libraries")
     }
 
     private func saveLibraryOrder() {
         userDefaults.set(libraryOrder, forKey: libraryOrderKey)
-        print("📚 LibrarySettingsManager: Saved library order (\(libraryOrder.count) items)")
     }
 }

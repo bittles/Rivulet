@@ -9,6 +9,43 @@
 
 import Foundation
 
+// MARK: - Cast & Crew Models
+
+/// Actor/cast member with role information
+struct PlexRole: Codable, Identifiable, Sendable {
+    var id: String { "\(tag ?? "")-\(role ?? "")" }
+    var tag: String?        // Actor name
+    var role: String?       // Character name
+    var thumb: String?      // Photo URL
+}
+
+/// Director/Writer/Producer
+struct PlexCrewMember: Codable, Identifiable, Sendable {
+    var id: String { tag ?? UUID().uuidString }
+    var tag: String?
+    var thumb: String?
+}
+
+/// Trailer/Extra content
+struct PlexExtra: Codable, Identifiable, Sendable {
+    var id: String { ratingKey ?? UUID().uuidString }
+    var ratingKey: String?
+    var key: String?
+    var type: String?
+    var title: String?
+    var subtype: String?    // "trailer", "behindTheScenes", etc.
+    var thumb: String?
+    var duration: Int?
+    var extraType: Int?     // 1=trailer
+}
+
+/// Container for extras in Plex API response
+struct PlexExtrasContainer: Codable, Sendable {
+    var Metadata: [PlexExtra]?
+}
+
+// MARK: - Main Metadata Model
+
 /// Plex media item metadata (movie, show, season, episode)
 struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
     var id: String {
@@ -88,6 +125,14 @@ struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
     // MARK: - Media Files
     var Media: [PlexMedia]?
 
+    // MARK: - Cast & Crew
+    var Role: [PlexRole]?
+    var Director: [PlexCrewMember]?
+    var Writer: [PlexCrewMember]?
+
+    // MARK: - Extras (Trailers, etc.)
+    var Extras: PlexExtrasContainer?
+
     // MARK: - Additional Metadata
     var hasPremiumPrimaryExtra: String?
     var primaryExtraKey: String?
@@ -153,6 +198,10 @@ struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
         userRating: Double? = nil,
         lastRatedAt: Int? = nil,
         Media: [PlexMedia]? = nil,
+        Role: [PlexRole]? = nil,
+        Director: [PlexCrewMember]? = nil,
+        Writer: [PlexCrewMember]? = nil,
+        Extras: PlexExtrasContainer? = nil,
         hasPremiumPrimaryExtra: String? = nil,
         primaryExtraKey: String? = nil
     ) {
@@ -205,6 +254,10 @@ struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
         self.userRating = userRating
         self.lastRatedAt = lastRatedAt
         self.Media = Media
+        self.Role = Role
+        self.Director = Director
+        self.Writer = Writer
+        self.Extras = Extras
         self.hasPremiumPrimaryExtra = hasPremiumPrimaryExtra
         self.primaryExtraKey = primaryExtraKey
     }
@@ -299,5 +352,32 @@ extension PlexMetadata {
     /// First media file's streaming key
     var streamKey: String? {
         Media?.first?.Part?.first?.key
+    }
+
+    // MARK: - Cast & Crew Helpers
+
+    /// All cast members
+    var cast: [PlexRole] {
+        Role ?? []
+    }
+
+    /// Primary director name
+    var primaryDirector: String? {
+        Director?.first?.tag
+    }
+
+    /// Primary writer name
+    var primaryWriter: String? {
+        Writer?.first?.tag
+    }
+
+    /// First trailer if available
+    var trailer: PlexExtra? {
+        Extras?.Metadata?.first { $0.extraType == 1 || $0.subtype == "trailer" }
+    }
+
+    /// All extras (trailers, behind the scenes, etc.)
+    var allExtras: [PlexExtra] {
+        Extras?.Metadata ?? []
     }
 }

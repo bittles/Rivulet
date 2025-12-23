@@ -11,6 +11,7 @@ import SwiftData
 /// Sidebar navigation sections (used on macOS/iOS)
 enum SidebarSection: Hashable {
     // Plex sections
+    case plexSearch
     case plexHome
     case plexLibrary(key: String, title: String)
 
@@ -52,6 +53,9 @@ struct SidebarView: View {
             // MARK: - Plex Section
             if hasPlexServer {
                 Section {
+                    Label("Search", systemImage: "magnifyingglass")
+                        .tag(SidebarSection.plexSearch)
+
                     Label("Home", systemImage: "house.fill")
                         .tag(SidebarSection.plexHome)
 

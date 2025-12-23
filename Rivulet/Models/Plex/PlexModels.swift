@@ -154,12 +154,23 @@ struct PlexLibraryLocation: Codable, Sendable {
 
 struct PlexMediaContainer: Codable, Sendable {
     var size: Int?
+    var totalSize: Int?  // Total items in collection (for pagination)
     var Metadata: [PlexMetadata]?
     var Hub: [PlexHub]?
 }
 
 struct PlexMediaContainerWrapper: Codable, Sendable {
     var MediaContainer: PlexMediaContainer
+}
+
+/// Container for extras API response
+struct PlexExtrasMediaContainer: Codable, Sendable {
+    var size: Int?
+    var Metadata: [PlexExtra]?
+}
+
+struct PlexExtrasContainerWrapper: Codable, Sendable {
+    var MediaContainer: PlexExtrasMediaContainer
 }
 
 // MARK: - Hub (for home screen sections)

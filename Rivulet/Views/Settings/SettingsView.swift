@@ -13,6 +13,7 @@ enum SettingsDestination: Hashable {
     case plex
     case iptv
     case libraries
+    case cache
 }
 
 // MARK: - Settings View
@@ -23,6 +24,7 @@ struct SettingsView: View {
     @AppStorage("showLibraryHero") private var showLibraryHero = true
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
     @Environment(\.contentFocusVersion) private var contentFocusVersion
+    @Environment(\.nestedNavigationState) private var nestedNavState
     @State private var focusTrigger = 0  // Increment to trigger first row focus
 
     var body: some View {
@@ -31,7 +33,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 32) {
                     // Header
                     Text("Settings")
-                        .font(.system(size: 48, weight: .bold))
+                        .font(.system(size: 56, weight: .bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 80)
                         .padding(.top, 60)
@@ -97,6 +99,18 @@ struct SettingsView: View {
                             )
                         }
 
+                        // Storage section
+                        SettingsSection(title: "Storage") {
+                            SettingsRow(
+                                icon: "internaldrive",
+                                iconColor: .gray,
+                                title: "Cache & Storage",
+                                subtitle: "Manage cached images and data"
+                            ) {
+                                navigationPath.append(SettingsDestination.cache)
+                            }
+                        }
+
                         // Playback section (for future use)
                         SettingsSection(title: "Playback") {
                             SettingsRow(
@@ -129,6 +143,12 @@ struct SettingsView: View {
                 }
             }
             .background(Color.black)
+            .onAppear {
+                // Set initial focus when view first appears
+                DispatchQueue.main.async {
+                    focusTrigger += 1
+                }
+            }
             .onChange(of: contentFocusVersion) { _, _ in
                 // Trigger first row to claim focus when sidebar closes
                 focusTrigger += 1
@@ -141,11 +161,28 @@ struct SettingsView: View {
                     IPTVSettingsView(goBack: { navigationPath.removeLast() })
                 case .libraries:
                     LibrarySettingsView(goBack: { navigationPath.removeLast() })
+                case .cache:
+                    CacheSettingsView(goBack: { navigationPath.removeLast() })
                 }
             }
         }
         // Tell parent we're in nested navigation when path is not empty
-        .preference(key: IsInNestedNavigationKey.self, value: !navigationPath.isEmpty)
+        .onChange(of: navigationPath.count) { _, newCount in
+            let isNested = newCount > 0
+            nestedNavState.isNested = isNested
+            if isNested {
+                nestedNavState.goBackAction = { [weak nestedNavState] in
+                    if !navigationPath.isEmpty {
+                        navigationPath.removeLast()
+                    }
+                    if navigationPath.isEmpty {
+                        nestedNavState?.isNested = false
+                    }
+                }
+            } else {
+                nestedNavState.goBackAction = nil
+            }
+        }
     }
 }
 

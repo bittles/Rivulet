@@ -13,9 +13,14 @@ struct PlexHomeView: View {
     @StateObject private var authManager = PlexAuthManager.shared
     @AppStorage("showHomeHero") private var showHomeHero = true
     @Environment(\.contentFocusVersion) private var contentFocusVersion
+    @Environment(\.nestedNavigationState) private var nestedNavState
     @State private var selectedItem: PlexMetadata?
     @State private var heroItem: PlexMetadata?
     @State private var focusTrigger = 0  // Increment to trigger first row focus
+    @State private var shouldRestoreHeroFocus = false
+    @State private var rowFocusMemory: [String: Int] = [:]
+    @State private var shouldForceFirstRowFocus = false
+    @FocusState private var isHeroPlayButtonFocused: Bool
 
     // MARK: - Computed Hubs (merged Continue Watching + On Deck)
 
@@ -72,44 +77,74 @@ struct PlexHomeView: View {
     }
 
     var body: some View {
-        ZStack {
-            if !authManager.isAuthenticated {
-                notConnectedView
-            } else if dataStore.isLoadingHubs && dataStore.hubs.isEmpty {
-                loadingView
-            } else if let error = dataStore.hubsError, dataStore.hubs.isEmpty {
-                errorView(error)
-            } else if dataStore.hubs.isEmpty {
-                emptyView
-            } else {
-                contentView
+        NavigationStack {
+            ZStack {
+                if !authManager.isAuthenticated {
+                    notConnectedView
+                } else if dataStore.isLoadingHubs && dataStore.hubs.isEmpty {
+                    loadingView
+                } else if let error = dataStore.hubsError, dataStore.hubs.isEmpty {
+                    errorView(error)
+                } else if dataStore.hubs.isEmpty {
+                    emptyView
+                } else {
+                    contentView
+                }
+            }
+            .refreshable {
+                await dataStore.refreshHubs()
+            }
+            .onAppear {
+                selectHeroItem()
+            }
+            .onChange(of: dataStore.hubs.count) { _, _ in
+                selectHeroItem()
+            }
+            .navigationDestination(item: $selectedItem) { item in
+                PlexDetailView(item: item)
             }
         }
-        .refreshable {
-            await dataStore.refreshHubs()
-        }
-        .onAppear {
-            selectHeroItem()
-        }
-        .onChange(of: dataStore.hubs.count) { _, _ in
-            selectHeroItem()
+        // Tell parent we're in nested navigation when viewing detail
+        .onChange(of: selectedItem) { _, newValue in
+            let isNested = newValue != nil
+            nestedNavState.isNested = isNested
+            if isNested {
+                // Set the go back action to clear selectedItem
+                nestedNavState.goBackAction = { [weak nestedNavState] in
+                    selectedItem = nil
+                    nestedNavState?.isNested = false
+                }
+            } else {
+                nestedNavState.goBackAction = nil
+            }
         }
     }
 
     // MARK: - Hero Selection
 
     private func selectHeroItem() {
+        // Check cache first - hero persists across navigation
+        if let cachedHero = dataStore.getCachedHero(forLibrary: "home") {
+            heroItem = cachedHero
+            return
+        }
+
         // Pick a random item from recently added for the hero
-        guard heroItem == nil else { return }
         let recentlyAdded = dataStore.hubs.first { hub in
             hub.hubIdentifier?.contains("recentlyAdded") == true ||
             hub.title?.lowercased().contains("recently added") == true
         }
         if let items = recentlyAdded?.Metadata, !items.isEmpty {
-            heroItem = items.randomElement()
+            if let newHero = items.randomElement() {
+                heroItem = newHero
+                dataStore.cacheHero(newHero, forLibrary: "home")
+            }
         } else if let firstHub = dataStore.hubs.first,
                   let items = firstHub.Metadata, !items.isEmpty {
-            heroItem = items.first
+            if let newHero = items.first {
+                heroItem = newHero
+                dataStore.cacheHero(newHero, forLibrary: "home")
+            }
         }
     }
 
@@ -123,7 +158,14 @@ struct PlexHomeView: View {
                     HeroView(
                         item: hero,
                         serverURL: authManager.selectedServerURL ?? "",
-                        authToken: authManager.authToken ?? ""
+                        authToken: authManager.authToken ?? "",
+                        isPlayButtonFocused: $isHeroPlayButtonFocused,
+                        onMoveDown: {
+                            if shouldForceFirstRowFocus {
+                                focusTrigger += 1
+                                shouldForceFirstRowFocus = false
+                            }
+                        }
                     ) {
                         selectedItem = hero
                     }
@@ -133,16 +175,24 @@ struct PlexHomeView: View {
                 VStack(alignment: .leading, spacing: 48) {
                     ForEach(Array(processedHubs.enumerated()), id: \.element.id) { index, hub in
                         if let items = hub.Metadata, !items.isEmpty {
+                            let isContinueWatching = hub.hubIdentifier?.lowercased().contains("continuewatching") == true ||
+                                                     hub.title?.lowercased().contains("continue watching") == true
+                            let focusKey = focusMemoryKey(for: hub, index: index)
                             InfiniteContentRow(
                                 title: hub.title ?? "Unknown",
                                 initialItems: items,
                                 hubKey: hub.key ?? hub.hubKey,
                                 serverURL: authManager.selectedServerURL ?? "",
                                 authToken: authManager.authToken ?? "",
+                                contextMenuSource: isContinueWatching ? .continueWatching : .other,
                                 onItemSelected: { item in
                                     selectedItem = item
                                 },
-                                focusTrigger: index == 0 ? focusTrigger : nil  // First row gets focus trigger
+                                onRefreshNeeded: {
+                                    await dataStore.refreshHubs()
+                                },
+                                focusTrigger: index == 0 ? focusTrigger : nil,  // First row gets focus trigger
+                                focusMemoryIndex: focusMemoryBinding(for: focusKey)
                             )
                         }
                     }
@@ -151,16 +201,52 @@ struct PlexHomeView: View {
                 .padding(.bottom, 80)
             }
         }
+        .scrollClipDisabled()  // Allow shadow overflow
         #if os(tvOS)
         .ignoresSafeArea(edges: .top)
+        .defaultFocus($isHeroPlayButtonFocused, true)  // Set initial focus to hero play button
         #endif
         .onChange(of: contentFocusVersion) { _, _ in
-            // Trigger first row to claim focus when sidebar closes
-            focusTrigger += 1
+            if let key = firstRowFocusKey {
+                rowFocusMemory[key] = 0
+            }
+            if showHomeHero, heroItem != nil {
+                shouldForceFirstRowFocus = true
+                isHeroPlayButtonFocused = false
+                DispatchQueue.main.async {
+                    isHeroPlayButtonFocused = true
+                }
+            } else if showHomeHero {
+                shouldForceFirstRowFocus = true
+                shouldRestoreHeroFocus = true
+            } else {
+                // Trigger first row to claim focus when sidebar closes
+                focusTrigger += 1
+            }
         }
-        .sheet(item: $selectedItem) { item in
-            PlexDetailView(item: item)
+        .onChange(of: heroItem) { _, newValue in
+            if shouldRestoreHeroFocus, newValue != nil {
+                isHeroPlayButtonFocused = true
+                shouldRestoreHeroFocus = false
+            }
         }
+    }
+
+    private var firstRowFocusKey: String? {
+        guard let firstHub = processedHubs.first else { return nil }
+        return focusMemoryKey(for: firstHub, index: 0)
+    }
+
+    private func focusMemoryKey(for hub: PlexHub, index: Int) -> String {
+        let base = hub.hubIdentifier ?? hub.hubKey ?? hub.key ?? hub.title ?? "row-\(index)"
+        return "home.\(base)"
+    }
+
+    private func focusMemoryBinding(for key: String) -> Binding<Int?> {
+        Binding(
+            get: { rowFocusMemory[key] },
+            set: { rowFocusMemory[key] = $0 }
+        )
     }
 
     // MARK: - Loading View
@@ -257,13 +343,64 @@ struct PlexHomeView: View {
 
 // MARK: - Hero View
 
-struct HeroView: View {
+struct HeroView<FocusTarget: Hashable>: View {
     let item: PlexMetadata
     let serverURL: String
     let authToken: String
     let onSelect: () -> Void
+    let onMoveDown: (() -> Void)?
 
-    @FocusState private var isPlayButtonFocused: Bool
+    // Focus binding - supports both Bool and enum-based patterns
+    private let focusBinding: FocusBinding<FocusTarget>
+
+    enum FocusBinding<T: Hashable> {
+        case bool(FocusState<Bool>.Binding)
+        case enumTarget(FocusState<T?>.Binding, T)
+    }
+
+    /// Initialize with boolean focus binding (for PlexHomeView compatibility)
+    init(
+        item: PlexMetadata,
+        serverURL: String,
+        authToken: String,
+        isPlayButtonFocused: FocusState<Bool>.Binding,
+        onMoveDown: (() -> Void)? = nil,
+        onSelect: @escaping () -> Void
+    ) where FocusTarget == Bool {
+        self.item = item
+        self.serverURL = serverURL
+        self.authToken = authToken
+        self.focusBinding = .bool(isPlayButtonFocused)
+        self.onMoveDown = onMoveDown
+        self.onSelect = onSelect
+    }
+
+    /// Initialize with enum-based focus binding (for unified focus management)
+    init(
+        item: PlexMetadata,
+        serverURL: String,
+        authToken: String,
+        focusTarget: FocusState<FocusTarget?>.Binding,
+        targetValue: FocusTarget,
+        onMoveDown: (() -> Void)? = nil,
+        onSelect: @escaping () -> Void
+    ) {
+        self.item = item
+        self.serverURL = serverURL
+        self.authToken = authToken
+        self.focusBinding = .enumTarget(focusTarget, targetValue)
+        self.onMoveDown = onMoveDown
+        self.onSelect = onSelect
+    }
+
+    private var isFocused: Bool {
+        switch focusBinding {
+        case .bool(let binding):
+            return binding.wrappedValue
+        case .enumTarget(let binding, let target):
+            return binding.wrappedValue == target
+        }
+    }
 
     private var artURL: URL? {
         // Prefer art (backdrop) over thumb (poster)
@@ -278,10 +415,19 @@ struct HeroView: View {
     }
 
     var body: some View {
+        #if os(tvOS)
+        heroButtonView
+        #else
+        heroContentView
+            .frame(height: 400)
+        #endif
+    }
+
+    private var heroContentView: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottomLeading) {
                 // Background art - full width edge to edge
-                AsyncImage(url: artURL) { phase in
+                CachedAsyncImage(url: artURL) { phase in
                     switch phase {
                     case .success(let image):
                         image
@@ -289,7 +435,7 @@ struct HeroView: View {
                             .aspectRatio(contentMode: .fill)
                             .frame(width: geo.size.width, height: geo.size.height)
                             .clipped()
-                    default:
+                    case .empty, .failure:
                         Rectangle()
                             .fill(
                                 LinearGradient(
@@ -357,25 +503,22 @@ struct HeroView: View {
                             .frame(maxWidth: 800, alignment: .leading)
                     }
 
-                    // Play button - this receives focus instead of the whole hero
                     #if os(tvOS)
-                    Button(action: onSelect) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 20, weight: .semibold))
-                            Text("Play")
-                                .font(.system(size: 22, weight: .semibold))
-                        }
-                        .foregroundStyle(isPlayButtonFocused ? .black : .white)
-                        .padding(.horizontal, 36)
-                        .padding(.vertical, 16)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(isPlayButtonFocused ? .white : .white.opacity(0.25))
-                        )
+                    // More Info indicator
+                    HStack(spacing: 10) {
+                        Image(systemName: "info.circle.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                        Text("More Info")
+                            .font(.system(size: 20, weight: .semibold))
                     }
-                    .buttonStyle(.plain)
-                    .focused($isPlayButtonFocused)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(.white.opacity(isFocused ? 0.3 : 0.15))
+                    )
+                    .opacity(isFocused ? 1 : 0.7)
                     .padding(.top, 8)
                     #endif
                 }
@@ -383,12 +526,64 @@ struct HeroView: View {
                 .padding(.bottom, 70)
             }
         }
-        #if os(tvOS)
-        .frame(height: 700)
-        #else
-        .frame(height: 400)
-        #endif
     }
+
+    #if os(tvOS)
+    @ViewBuilder
+    private var heroButtonView: some View {
+        switch focusBinding {
+        case .bool(let binding):
+            Button(action: onSelect) {
+                heroContentView
+            }
+            .buttonStyle(.plain)
+            .focused(binding)
+            .onMoveCommand { direction in
+                if direction == .down {
+                    onMoveDown?()
+                }
+            }
+            .frame(height: 750)
+            .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+            .padding(.horizontal, 48)
+            .padding(.top, 20)
+            .brightness(isFocused ? 0.05 : 0)
+            .overlay(
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .stroke(.white.opacity(isFocused ? 0.4 : 0), lineWidth: 4)
+                    .padding(.horizontal, 48)
+                    .padding(.top, 20)
+            )
+            .scaleEffect(isFocused ? 1.02 : 1.0)
+            .animation(.easeInOut(duration: 0.2), value: isFocused)
+
+        case .enumTarget(let binding, let target):
+            Button(action: onSelect) {
+                heroContentView
+            }
+            .buttonStyle(.plain)
+            .focused(binding, equals: target)
+            .onMoveCommand { direction in
+                if direction == .down {
+                    onMoveDown?()
+                }
+            }
+            .frame(height: 750)
+            .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+            .padding(.horizontal, 48)
+            .padding(.top, 20)
+            .brightness(isFocused ? 0.05 : 0)
+            .overlay(
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .stroke(.white.opacity(isFocused ? 0.4 : 0), lineWidth: 4)
+                    .padding(.horizontal, 48)
+                    .padding(.top, 20)
+            )
+            .scaleEffect(isFocused ? 1.02 : 1.0)
+            .animation(.easeInOut(duration: 0.2), value: isFocused)
+        }
+    }
+    #endif
 
     private func formatDuration(_ ms: Int) -> String {
         let minutes = ms / 60000
@@ -399,6 +594,7 @@ struct HeroView: View {
         }
         return "\(mins)m"
     }
+
 }
 
 // MARK: - Content Row (replaces MediaRow for Home)
@@ -435,8 +631,9 @@ struct ContentRow: View {
                     }
                 }
                 .padding(.horizontal, 80)
-                .padding(.vertical, 24)  // Room for scale effect and shadow
+                .padding(.vertical, 32)  // Room for scale effect and shadow
             }
+            .scrollClipDisabled()  // Allow shadow overflow
         }
     }
 }
@@ -450,8 +647,11 @@ struct InfiniteContentRow: View {
     let hubKey: String?  // The hub's key for fetching more items
     let serverURL: String
     let authToken: String
+    var contextMenuSource: MediaItemContextSource = .other
     var onItemSelected: ((PlexMetadata) -> Void)?
+    var onRefreshNeeded: MediaItemRefreshCallback?
     var focusTrigger: Int? = nil  // When non-nil and changes, focus first item
+    var focusMemoryIndex: Binding<Int?>? = nil
 
     @Environment(\.openSidebar) private var openSidebar
     @FocusState private var focusedIndex: Int?
@@ -463,6 +663,18 @@ struct InfiniteContentRow: View {
 
     private let networkManager = PlexNetworkManager.shared
     private let pageSize = 24
+
+    /// Hash that changes when items or their watch status changes
+    private var initialItemsHash: Int {
+        var hasher = Hasher()
+        hasher.combine(initialItems.count)
+        for item in initialItems.prefix(20) {
+            hasher.combine(item.ratingKey)
+            hasher.combine(item.viewCount)
+            hasher.combine(item.viewOffset)
+        }
+        return hasher.finalize()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -499,13 +711,14 @@ struct InfiniteContentRow: View {
                         }
                         .buttonStyle(CardButtonStyle())
                         .focused($focusedIndex, equals: index)
-                        .onMoveCommand { direction in
-                            if direction == .left && index == 0 {
-                                // Left arrow pressed on first item - open sidebar
-                                print("🟢 [DEBUG] InfiniteContentRow: Left pressed on first item, opening sidebar")
-                                openSidebar()
-                            }
-                        }
+                        .modifier(LeftEdgeSidebarTrigger(isFirstItem: index == 0, openSidebar: openSidebar))
+                        .mediaItemContextMenu(
+                            item: item,
+                            serverURL: serverURL,
+                            authToken: authToken,
+                            source: contextMenuSource,
+                            onRefreshNeeded: onRefreshNeeded
+                        )
                         .onAppear {
                             // Load more when user is 5 items from the end
                             if index >= items.count - 5 {
@@ -524,9 +737,9 @@ struct InfiniteContentRow: View {
                     }
                 }
                 .padding(.horizontal, 80)
-                .padding(.vertical, 24)  // Room for scale effect and shadow
+                .padding(.vertical, 32)  // Room for scale effect and shadow
             }
-            // Removed .focusSection() to allow focus to escape to LeftEdgeTrigger when at leftmost position
+            .scrollClipDisabled()  // Allow shadow overflow
         }
         .onAppear {
             if items.isEmpty {
@@ -537,19 +750,42 @@ struct InfiniteContentRow: View {
                 }
             }
         }
-        .onChange(of: initialItems.count) { _, newCount in
-            // Reset when initial items change (e.g., on refresh)
-            if newCount != items.count || items.isEmpty {
-                items = initialItems
-                hasReachedEnd = false
-            }
+        .onChange(of: initialItemsHash) { _, _ in
+            // Reset when initial items change (e.g., on refresh or watch status change)
+            items = initialItems
+            hasReachedEnd = false
         }
         .onChange(of: focusTrigger) { _, newValue in
             // Focus first item when trigger changes (sidebar closed)
             if newValue != nil {
-                focusedIndex = 0
+                setFocusedIndexWithoutAnimation(0)
             }
         }
+        .onChange(of: focusedIndex) { _, newValue in
+            if let newValue {
+                focusMemoryIndex?.wrappedValue = newValue
+            }
+        }
+        .focusSection()
+        #if os(tvOS)
+        .defaultFocus($focusedIndex, defaultFocusIndex)
+        #endif
+    }
+
+    private func setFocusedIndexWithoutAnimation(_ index: Int?) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            focusedIndex = index
+        }
+    }
+
+    private var defaultFocusIndex: Int {
+        if let storedIndex = focusMemoryIndex?.wrappedValue,
+           items.indices.contains(storedIndex) {
+            return storedIndex
+        }
+        return 0
     }
 
     private var loadingIndicator: some View {
@@ -635,6 +871,26 @@ struct InfiniteContentRow: View {
         }
 
         isLoadingMore = false
+    }
+}
+
+// MARK: - Left Edge Sidebar Trigger Modifier
+
+/// A modifier that only adds onMoveCommand to the first item in a row
+struct LeftEdgeSidebarTrigger: ViewModifier {
+    let isFirstItem: Bool
+    let openSidebar: () -> Void
+
+    func body(content: Content) -> some View {
+        if isFirstItem {
+            content.onMoveCommand { direction in
+                if direction == .left {
+                    openSidebar()
+                }
+            }
+        } else {
+            content
+        }
     }
 }
 

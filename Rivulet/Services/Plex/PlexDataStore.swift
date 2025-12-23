@@ -21,6 +21,26 @@ class PlexDataStore: ObservableObject {
     @Published var hubsError: String?
     @Published var librariesError: String?
 
+    // MARK: - Hero Cache (per library)
+
+    /// Cached hero items per library key - persists across navigation
+    private var heroCache: [String: PlexMetadata] = [:]
+
+    /// Get cached hero for a library (returns nil if not cached)
+    func getCachedHero(forLibrary libraryKey: String) -> PlexMetadata? {
+        return heroCache[libraryKey]
+    }
+
+    /// Cache a hero for a library
+    func cacheHero(_ hero: PlexMetadata, forLibrary libraryKey: String) {
+        heroCache[libraryKey] = hero
+    }
+
+    /// Clear hero cache (e.g., on sign out)
+    func clearHeroCache() {
+        heroCache.removeAll()
+    }
+
     // MARK: - Dependencies
 
     private let networkManager = PlexNetworkManager.shared
@@ -108,14 +128,14 @@ class PlexDataStore: ObservableObject {
             let fetchedHubs = try await networkManager.getHubs(serverURL: serverURL, authToken: token)
             print("📦 PlexDataStore: ✅ Fetched \(fetchedHubs.count) hubs")
 
-            // Log hub details
-            for hub in fetchedHubs {
-                let itemCount = hub.Metadata?.count ?? 0
-                print("📦   Hub: '\(hub.title ?? "?")' - \(itemCount) items")
-            }
-
             await MainActor.run {
-                self.hubs = fetchedHubs
+                // Only update if hubs actually changed (prevents unnecessary re-renders)
+                if !hubsAreEqual(self.hubs, fetchedHubs) {
+                    self.hubs = fetchedHubs
+                    print("📦 PlexDataStore: Hubs updated (changed)")
+                } else {
+                    print("📦 PlexDataStore: Hubs unchanged, skipping update")
+                }
                 self.hubsError = nil
                 if updateLoading {
                     self.isLoadingHubs = false
@@ -213,13 +233,14 @@ class PlexDataStore: ObservableObject {
             let fetched = try await networkManager.getLibraries(serverURL: serverURL, authToken: token)
             print("📦 PlexDataStore: ✅ Fetched \(fetched.count) libraries")
 
-            // Log library details
-            for lib in fetched {
-                print("📦   Library: '\(lib.title)' (type: \(lib.type), key: \(lib.key))")
-            }
-
             await MainActor.run {
-                self.libraries = fetched
+                // Only update if libraries actually changed (prevents unnecessary re-renders)
+                if !librariesAreEqual(self.libraries, fetched) {
+                    self.libraries = fetched
+                    print("📦 PlexDataStore: Libraries updated (changed)")
+                } else {
+                    print("📦 PlexDataStore: Libraries unchanged, skipping update")
+                }
                 self.librariesError = nil
                 if updateLoading {
                     self.isLoadingLibraries = false
@@ -273,5 +294,33 @@ class PlexDataStore: ObservableObject {
         librariesError = nil
         isLoadingHubs = false
         isLoadingLibraries = false
+    }
+
+    // MARK: - Diffing Helpers
+
+    /// Compare two hub arrays to avoid unnecessary state updates
+    private func hubsAreEqual(_ lhs: [PlexHub], _ rhs: [PlexHub]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        for (l, r) in zip(lhs, rhs) {
+            if l.hubIdentifier != r.hubIdentifier { return false }
+            if l.Metadata?.count != r.Metadata?.count { return false }
+            // Also compare item watch status to detect changes
+            if let lItems = l.Metadata, let rItems = r.Metadata {
+                for (lItem, rItem) in zip(lItems, rItems) {
+                    if lItem.ratingKey != rItem.ratingKey { return false }
+                    if lItem.viewCount != rItem.viewCount { return false }
+                    if lItem.viewOffset != rItem.viewOffset { return false }
+                }
+            }
+        }
+        return true
+    }
+
+    /// Compare two library arrays to avoid unnecessary state updates
+    private func librariesAreEqual(_ lhs: [PlexLibrary], _ rhs: [PlexLibrary]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        let lhsKeys = lhs.map { $0.key }
+        let rhsKeys = rhs.map { $0.key }
+        return lhsKeys == rhsKeys
     }
 }

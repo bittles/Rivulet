@@ -14,21 +14,21 @@ struct SettingsSection<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 18) {
             Text(title.uppercased())
-                .font(.system(size: 15, weight: .bold))
-                .tracking(1.5)
-                .foregroundStyle(.white.opacity(0.6))
-                .padding(.leading, 10)
+                .font(.system(size: 21, weight: .bold))
+                .tracking(2)
+                .foregroundStyle(.white.opacity(0.5))
+                .padding(.leading, 12)
 
             VStack(spacing: 2) {
                 content
             }
             .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(.white.opacity(0.85))  // Solid white base for contrast
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(.white.opacity(0.08))
             )
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
     }
 }
@@ -46,41 +46,41 @@ struct SettingsRow: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 20) {
             // Icon
             ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(iconColor.gradient)
-                    .frame(width: 52, height: 52)
+                    .frame(width: 64, height: 64)
 
                 Image(systemName: icon)
-                    .font(.system(size: 24, weight: .semibold))
+                    .font(.system(size: 28, weight: .semibold))
                     .foregroundStyle(.white)
             }
 
-            // Text - dark colors for contrast on white glass background
-            VStack(alignment: .leading, spacing: 3) {
+            // Text - white for dark glass background
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.system(size: 23, weight: .medium))
-                    .foregroundStyle(Color(white: 0.1))
+                    .font(.system(size: 29, weight: .medium))
+                    .foregroundStyle(.white)
 
                 Text(subtitle)
-                    .font(.system(size: 17))
-                    .foregroundStyle(Color(white: 0.4))
+                    .font(.system(size: 23))
+                    .foregroundStyle(.white.opacity(0.6))
             }
 
             Spacer()
 
             // Chevron
             Image(systemName: "chevron.right")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Color(white: 0.5))
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.4))
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(isFocused ? .black.opacity(0.1) : .clear)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(isFocused ? .white.opacity(0.15) : .clear)
         )
         .focusable()
         .focused($isFocused)
@@ -105,17 +105,17 @@ struct SettingsInfoRow: View {
     var body: some View {
         HStack {
             Text(title)
-                .font(.system(size: 19))
-                .foregroundStyle(Color(white: 0.2))
+                .font(.system(size: 26))
+                .foregroundStyle(.white.opacity(0.7))
 
             Spacer()
 
             Text(value)
-                .font(.system(size: 19))
-                .foregroundStyle(Color(white: 0.45))
+                .font(.system(size: 26))
+                .foregroundStyle(.white.opacity(0.5))
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
     }
 }
 
@@ -131,41 +131,41 @@ struct SettingsToggleRow: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 20) {
             // Icon
             ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(iconColor.gradient)
-                    .frame(width: 52, height: 52)
+                    .frame(width: 64, height: 64)
 
                 Image(systemName: icon)
-                    .font(.system(size: 24, weight: .semibold))
+                    .font(.system(size: 28, weight: .semibold))
                     .foregroundStyle(.white)
             }
 
-            // Text - dark colors for contrast on white glass background
-            VStack(alignment: .leading, spacing: 3) {
+            // Text - white for dark glass background
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.system(size: 23, weight: .medium))
-                    .foregroundStyle(Color(white: 0.1))
+                    .font(.system(size: 29, weight: .medium))
+                    .foregroundStyle(.white)
 
                 Text(subtitle)
-                    .font(.system(size: 17))
-                    .foregroundStyle(Color(white: 0.4))
+                    .font(.system(size: 23))
+                    .foregroundStyle(.white.opacity(0.6))
             }
 
             Spacer()
 
-            // On/Off text (Apple tvOS Settings style)
+            // On/Off text
             Text(isOn ? "On" : "Off")
-                .font(.system(size: 19))
-                .foregroundStyle(Color(white: 0.45))
+                .font(.system(size: 26, weight: .medium))
+                .foregroundStyle(isOn ? .green : .white.opacity(0.5))
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(isFocused ? .black.opacity(0.1) : .clear)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(isFocused ? .white.opacity(0.15) : .clear)
         )
         .focusable()
         .focused($isFocused)
@@ -189,14 +189,14 @@ struct SettingsActionRow: View {
         HStack {
             Spacer()
             Text(title)
-                .font(.system(size: 21, weight: .medium))
-                .foregroundStyle(isDestructive ? Color(red: 0.75, green: 0.15, blue: 0.15) : Color(white: 0.15))
+                .font(.system(size: 28, weight: .medium))
+                .foregroundStyle(isDestructive ? .red : .white)
             Spacer()
         }
-        .padding(.vertical, 16)
+        .padding(.vertical, 20)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(isFocused ? (isDestructive ? .red.opacity(0.12) : .black.opacity(0.1)) : .clear)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(isFocused ? (isDestructive ? .red.opacity(0.25) : .white.opacity(0.15)) : .clear)
         )
         .focusable()
         .focused($isFocused)
@@ -215,17 +215,17 @@ struct ConnectButton: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             Image(systemName: "link")
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(size: 26, weight: .semibold))
             Text("Connect to Plex")
-                .font(.system(size: 21, weight: .semibold))
+                .font(.system(size: 28, weight: .semibold))
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 32)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 40)
+        .padding(.vertical, 20)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(isFocused ? Color.blue : Color.blue.opacity(0.85))
         )
         .scaleEffect(isFocused ? 1.05 : 1.0)

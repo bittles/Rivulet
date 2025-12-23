@@ -10,6 +10,7 @@ import SwiftUI
 struct LibrarySettingsView: View {
     @StateObject private var dataStore = PlexDataStore.shared
     @StateObject private var librarySettings = LibrarySettingsManager.shared
+    @State private var reorderingLibrary: PlexLibrary?  // Library currently being reordered
     var goBack: () -> Void = {}
 
     var body: some View {
@@ -17,38 +18,38 @@ struct LibrarySettingsView: View {
             VStack(alignment: .leading, spacing: 32) {
                 // Header (Menu button on remote navigates back)
                 Text("Sidebar Libraries")
-                    .font(.system(size: 48, weight: .bold))
+                    .font(.system(size: 56, weight: .bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 80)
                     .padding(.top, 60)
 
-                Text("Choose which libraries appear in the sidebar. Tap to toggle visibility, use arrows to reorder.")
-                    .font(.system(size: 17))
+                Text("Choose which libraries appear in the sidebar. Click to toggle, long press for more options.")
+                    .font(.system(size: 24))
                     .foregroundStyle(.white.opacity(0.5))
                     .padding(.horizontal, 80)
 
                 if dataStore.libraries.isEmpty {
                     // No libraries
-                    VStack(spacing: 28) {
+                    VStack(spacing: 32) {
                         Image(systemName: "folder")
-                            .font(.system(size: 64, weight: .thin))
-                            .foregroundStyle(Color(white: 0.5))
+                            .font(.system(size: 80, weight: .thin))
+                            .foregroundStyle(.white.opacity(0.5))
 
                         Text("No Libraries")
-                            .font(.system(size: 32, weight: .semibold))
-                            .foregroundStyle(Color(white: 0.1))
+                            .font(.system(size: 40, weight: .semibold))
+                            .foregroundStyle(.white)
 
                         Text("Connect to a Plex server to manage library visibility.")
-                            .font(.system(size: 19))
-                            .foregroundStyle(Color(white: 0.4))
+                            .font(.system(size: 26))
+                            .foregroundStyle(.white.opacity(0.6))
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 60)
+                    .padding(.vertical, 70)
                     .background(
-                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .fill(.white.opacity(0.85))
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .fill(.white.opacity(0.08))
                     )
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
                     .padding(.horizontal, 80)
                 } else {
                     // Library list
@@ -61,8 +62,9 @@ struct LibrarySettingsView: View {
                                     onToggle: {
                                         librarySettings.toggleVisibility(for: library.key)
                                     },
-                                    onMoveUp: canMoveUp(library) ? { moveUp(library) } : nil,
-                                    onMoveDown: canMoveDown(library) ? { moveDown(library) } : nil
+                                    onLongPress: {
+                                        reorderingLibrary = library
+                                    }
                                 )
                             }
                         }
@@ -83,6 +85,14 @@ struct LibrarySettingsView: View {
             }
         }
         .background(Color.black)
+        .sheet(item: $reorderingLibrary) { library in
+            LibraryReorderSheet(
+                library: library,
+                librarySettings: librarySettings,
+                allLibraries: orderedLibraries,
+                onDismiss: { reorderingLibrary = nil }
+            )
+        }
     }
 
     // MARK: - Helpers
@@ -131,8 +141,7 @@ struct LibraryVisibilityRow: View {
     let library: PlexLibrary
     let isVisible: Bool
     let onToggle: () -> Void
-    var onMoveUp: (() -> Void)?
-    var onMoveDown: (() -> Void)?
+    let onLongPress: () -> Void
 
     @FocusState private var isFocused: Bool
 
@@ -146,68 +155,241 @@ struct LibraryVisibilityRow: View {
         }
     }
 
+    private var iconColor: Color {
+        switch library.type {
+        case "movie": return .blue
+        case "show": return .purple
+        case "artist": return .pink
+        case "photo": return .green
+        default: return .gray
+        }
+    }
+
     var body: some View {
-        HStack(spacing: 16) {
-            // Reorder controls (always visible, subtle)
-            VStack(spacing: 4) {
-                Image(systemName: "chevron.up")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Color(white: onMoveUp != nil ? 0.35 : 0.6))
-                    .onTapGesture {
-                        onMoveUp?()
-                    }
-
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Color(white: onMoveDown != nil ? 0.35 : 0.6))
-                    .onTapGesture {
-                        onMoveDown?()
-                    }
-            }
-            .frame(width: 24)
-
-            // Library icon
+        HStack(spacing: 20) {
+            // Icon
             ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isVisible ? Color.blue.gradient : Color.gray.opacity(0.5).gradient)
-                    .frame(width: 52, height: 52)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(iconColor.gradient)
+                    .frame(width: 64, height: 64)
 
                 Image(systemName: iconName)
-                    .font(.system(size: 24, weight: .semibold))
+                    .font(.system(size: 28, weight: .semibold))
                     .foregroundStyle(.white)
             }
 
-            // Library info - dark colors for contrast on white glass background
-            VStack(alignment: .leading, spacing: 3) {
+            // Library info
+            VStack(alignment: .leading, spacing: 4) {
                 Text(library.title)
-                    .font(.system(size: 23, weight: .medium))
-                    .foregroundStyle(Color(white: isVisible ? 0.1 : 0.4))
+                    .font(.system(size: 29, weight: .medium))
+                    .foregroundStyle(.white)
 
                 Text(library.type.capitalized)
-                    .font(.system(size: 17))
-                    .foregroundStyle(Color(white: 0.4))
+                    .font(.system(size: 23))
+                    .foregroundStyle(.white.opacity(0.6))
             }
 
             Spacer()
 
-            // On/Off indicator (Apple tvOS Settings style)
+            // On/Off indicator
             Text(isVisible ? "On" : "Off")
-                .font(.system(size: 19))
-                .foregroundStyle(Color(white: 0.45))
+                .font(.system(size: 26, weight: .medium))
+                .foregroundStyle(isVisible ? .green : .white.opacity(0.5))
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(isFocused ? .black.opacity(0.1) : .clear)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(isFocused ? .white.opacity(0.15) : .clear)
         )
         .focusable()
         .focused($isFocused)
-        .onTapGesture {
-            onToggle()
+        .onTapGesture { onToggle() }
+        .onLongPressGesture(minimumDuration: 0.5) {
+            onLongPress()
         }
         .animation(.easeOut(duration: 0.15), value: isFocused)
         .animation(.easeOut(duration: 0.2), value: isVisible)
+    }
+}
+
+// MARK: - Library Reorder Sheet
+
+struct LibraryReorderSheet: View {
+    let library: PlexLibrary
+    @ObservedObject var librarySettings: LibrarySettingsManager
+    let allLibraries: [PlexLibrary]
+    let onDismiss: () -> Void
+
+    @FocusState private var focusedButton: ReorderButton?
+
+    private enum ReorderButton: Hashable {
+        case up, down, done
+    }
+
+    private var iconName: String {
+        switch library.type {
+        case "movie": return "film.fill"
+        case "show": return "tv.fill"
+        case "artist": return "music.note"
+        case "photo": return "photo.fill"
+        default: return "folder.fill"
+        }
+    }
+
+    private var iconColor: Color {
+        switch library.type {
+        case "movie": return .blue
+        case "show": return .purple
+        case "artist": return .pink
+        case "photo": return .green
+        default: return .gray
+        }
+    }
+
+    /// Current index in the sorted order
+    private var currentIndex: Int? {
+        let sortedLibraries = librarySettings.sortLibraries(allLibraries)
+        return sortedLibraries.firstIndex(where: { $0.key == library.key })
+    }
+
+    /// Can move up (not first in list)
+    private var canMoveUp: Bool {
+        guard let index = currentIndex else { return false }
+        return index > 0
+    }
+
+    /// Can move down (not last in list)
+    private var canMoveDown: Bool {
+        guard let index = currentIndex else { return false }
+        let sortedLibraries = librarySettings.sortLibraries(allLibraries)
+        return index < sortedLibraries.count - 1
+    }
+
+    /// Current position text (e.g., "2 of 5")
+    private var positionText: String {
+        let sortedLibraries = librarySettings.sortLibraries(allLibraries)
+        guard let index = currentIndex else { return "Reorder Library" }
+        return "Position \(index + 1) of \(sortedLibraries.count)"
+    }
+
+    private func moveUp() {
+        guard let orderIndex = librarySettings.libraryOrder.firstIndex(of: library.key),
+              orderIndex > 0 else { return }
+        librarySettings.moveLibrary(from: orderIndex, to: orderIndex - 1)
+    }
+
+    private func moveDown() {
+        guard let orderIndex = librarySettings.libraryOrder.firstIndex(of: library.key),
+              orderIndex < librarySettings.libraryOrder.count - 1 else { return }
+        librarySettings.moveLibrary(from: orderIndex, to: orderIndex + 2)
+    }
+
+    var body: some View {
+        VStack(spacing: 36) {
+            // Header
+            VStack(spacing: 18) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(iconColor.gradient)
+                        .frame(width: 88, height: 88)
+
+                    Image(systemName: iconName)
+                        .font(.system(size: 40, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+
+                Text(library.title)
+                    .font(.system(size: 40, weight: .bold))
+                    .foregroundStyle(.white)
+
+                Text(positionText)
+                    .font(.system(size: 26))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            .padding(.top, 48)
+
+            // Reorder buttons
+            VStack(spacing: 18) {
+                // Move Up button
+                Button {
+                    moveUp()
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 26, weight: .semibold))
+                        Text("Move Up")
+                            .font(.system(size: 28, weight: .medium))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(focusedButton == .up ? .white.opacity(0.2) : .white.opacity(0.08))
+                    )
+                }
+                .buttonStyle(.plain)
+                .focused($focusedButton, equals: .up)
+                .disabled(!canMoveUp)
+                .opacity(canMoveUp ? 1.0 : 0.4)
+
+                // Move Down button
+                Button {
+                    moveDown()
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 26, weight: .semibold))
+                        Text("Move Down")
+                            .font(.system(size: 28, weight: .medium))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(focusedButton == .down ? .white.opacity(0.2) : .white.opacity(0.08))
+                    )
+                }
+                .buttonStyle(.plain)
+                .focused($focusedButton, equals: .down)
+                .disabled(!canMoveDown)
+                .opacity(canMoveDown ? 1.0 : 0.4)
+            }
+            .padding(.horizontal, 56)
+
+            Spacer()
+
+            // Done button
+            Button {
+                onDismiss()
+            } label: {
+                Text("Done")
+                    .font(.system(size: 28, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(focusedButton == .done ? .blue : .blue.opacity(0.8))
+                    )
+            }
+            .buttonStyle(.plain)
+            .focused($focusedButton, equals: .done)
+            .padding(.horizontal, 56)
+            .padding(.bottom, 48)
+        }
+        .frame(width: 480)
+        .background(Color.black.opacity(0.95))
+        .foregroundStyle(.white)
+        .onAppear {
+            // Focus on first available button
+            if canMoveUp {
+                focusedButton = .up
+            } else if canMoveDown {
+                focusedButton = .down
+            } else {
+                focusedButton = .done
+            }
+        }
     }
 }
 

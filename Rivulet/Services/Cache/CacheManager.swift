@@ -161,24 +161,30 @@ actor CacheManager {
 
     func cacheMovies(_ movies: [PlexMetadata], forLibrary libraryKey: String) {
         let fileName = "\(moviesCachePrefix)\(libraryKey).json"
+        print("💾 CacheManager: Caching \(movies.count) movies for library \(libraryKey)")
         cacheData(movies, fileName: fileName)
     }
 
     func getCachedMovies(forLibrary libraryKey: String) -> [PlexMetadata]? {
         let fileName = "\(moviesCachePrefix)\(libraryKey).json"
-        return decodedCache(for: fileName, as: [PlexMetadata].self)
+        let result = decodedCache(for: fileName, as: [PlexMetadata].self)
+        print("💾 CacheManager: getCachedMovies(\(libraryKey)) -> \(result?.count ?? 0) items (file: \(fileName))")
+        return result
     }
 
     // MARK: - TV Shows Cache
 
     func cacheShows(_ shows: [PlexMetadata], forLibrary libraryKey: String) {
         let fileName = "\(showsCachePrefix)\(libraryKey).json"
+        print("💾 CacheManager: Caching \(shows.count) shows for library \(libraryKey)")
         cacheData(shows, fileName: fileName)
     }
 
     func getCachedShows(forLibrary libraryKey: String) -> [PlexMetadata]? {
         let fileName = "\(showsCachePrefix)\(libraryKey).json"
-        return decodedCache(for: fileName, as: [PlexMetadata].self)
+        let result = decodedCache(for: fileName, as: [PlexMetadata].self)
+        print("💾 CacheManager: getCachedShows(\(libraryKey)) -> \(result?.count ?? 0) items (file: \(fileName))")
+        return result
     }
 
     // MARK: - Seasons Cache
