@@ -16,8 +16,15 @@ actor IPTVProvider: LiveTVProvider {
     let sourceId: String
     let displayName: String
 
-    private let m3uURL: URL
-    private let epgURL: URL?
+    /// Base URL for Dispatcharr sources (nil for generic M3U)
+    nonisolated let baseURL: URL?
+
+    /// M3U playlist URL
+    nonisolated let m3uURL: URL?
+
+    /// EPG/XMLTV URL (optional)
+    nonisolated let epgURL: URL?
+
     private let dispatcharrService: DispatcharrService?
 
     // Cached data
@@ -37,6 +44,7 @@ actor IPTVProvider: LiveTVProvider {
         self.sourceType = .dispatcharr
         self.sourceId = sourceId
         self.displayName = displayName
+        self.baseURL = dispatcharrURL
         self.dispatcharrService = DispatcharrService(baseURL: dispatcharrURL)
         self.m3uURL = dispatcharrURL.appendingPathComponent("output/m3u")
         self.epgURL = dispatcharrURL.appendingPathComponent("output/epg")
@@ -47,6 +55,7 @@ actor IPTVProvider: LiveTVProvider {
         self.sourceType = .genericM3U
         self.sourceId = sourceId
         self.displayName = displayName
+        self.baseURL = nil
         self.dispatcharrService = nil
         self.m3uURL = m3uURL
         self.epgURL = epgURL
@@ -57,8 +66,9 @@ actor IPTVProvider: LiveTVProvider {
     var isConnected: Bool {
         get async {
             // Check if we can reach the M3U URL
+            guard let url = m3uURL else { return false }
             do {
-                var request = URLRequest(url: m3uURL)
+                var request = URLRequest(url: url)
                 request.httpMethod = "HEAD"
                 let (_, response) = try await URLSession.shared.data(for: request)
                 if let httpResponse = response as? HTTPURLResponse {
@@ -84,7 +94,11 @@ actor IPTVProvider: LiveTVProvider {
     }
 
     func refreshChannels() async throws -> [UnifiedChannel] {
-        print("📺 IPTVProvider [\(displayName)]: Fetching channels from \(m3uURL)")
+        guard let url = m3uURL else {
+            throw LiveTVProviderError.sourceNotConfigured
+        }
+
+        print("📺 IPTVProvider [\(displayName)]: Fetching channels from \(url)")
 
         let parser = M3UParser()
         let parsedChannels: [M3UParser.ParsedChannel]
@@ -92,7 +106,7 @@ actor IPTVProvider: LiveTVProvider {
         if let dispatcharr = dispatcharrService {
             parsedChannels = try await dispatcharr.fetchChannels()
         } else {
-            parsedChannels = try await parser.parse(from: m3uURL)
+            parsedChannels = try await parser.parse(from: url)
         }
 
         print("📺 IPTVProvider [\(displayName)]: ✅ Parsed \(parsedChannels.count) channels")

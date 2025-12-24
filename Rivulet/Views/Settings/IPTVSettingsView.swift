@@ -60,10 +60,10 @@ struct IPTVSettingsView: View {
             }
         }
         .background(Color.black)
-        .sheet(isPresented: $showAddSourceSheet) {
+        .fullScreenCover(isPresented: $showAddSourceSheet) {
             AddLiveTVSourceSheet()
         }
-        .sheet(item: $selectedSourceForDetail) { source in
+        .fullScreenCover(item: $selectedSourceForDetail) { source in
             LiveTVSourceDetailSheet(source: source)
         }
     }

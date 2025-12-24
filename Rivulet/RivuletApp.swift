@@ -7,9 +7,22 @@
 
 import SwiftUI
 import SwiftData
+// import Sentry  // TODO: Add Sentry package when SPM issue is resolved
 
 @main
 struct RivuletApp: App {
+
+    // TODO: Uncomment when Sentry package is added
+    // init() {
+    //     SentrySDK.start { options in
+    //         options.dsn = "YOUR_SENTRY_DSN_HERE"
+    //         options.debug = false
+    //         options.tracesSampleRate = 1.0
+    //         options.attachStacktrace = true
+    //         options.enableAutoSessionTracking = true
+    //     }
+    // }
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             ServerConfiguration.self,

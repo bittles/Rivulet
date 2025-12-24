@@ -2,7 +2,7 @@
 //  LiveTVSourceDetailSheet.swift
 //  Rivulet
 //
-//  Detail view for managing an individual Live TV source
+//  Full-screen detail view for managing an individual Live TV source
 //
 
 import SwiftUI
@@ -41,107 +41,28 @@ struct LiveTVSourceDetailSheet: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.7)
-                .ignoresSafeArea()
+            // Solid black background
+            Color.black.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                // Header
-                HStack {
-                    Button("Done") {
-                        dismiss()
-                    }
-                    .buttonStyle(.bordered)
-
-                    Spacer()
-
-                    Text("Source Details")
-                        .font(.system(size: 28, weight: .bold))
-
-                    Spacer()
-
-                    // Invisible spacer for alignment
-                    Button("Done") { }
-                        .buttonStyle(.bordered)
-                        .opacity(0)
-                }
-                .padding(.horizontal, 40)
-                .padding(.top, 32)
-                .padding(.bottom, 24)
+                // Header bar
+                headerBar
 
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 32) {
+                    VStack(spacing: 40) {
                         // Source icon and name
-                        VStack(spacing: 16) {
-                            ZStack {
-                                Circle()
-                                    .fill(iconColor.gradient)
-                                    .frame(width: 100, height: 100)
-
-                                Image(systemName: iconName)
-                                    .font(.system(size: 44, weight: .semibold))
-                                    .foregroundStyle(.white)
-                            }
-
-                            VStack(spacing: 6) {
-                                Text(source.displayName)
-                                    .font(.system(size: 32, weight: .bold))
-
-                                Text(sourceTypeLabel)
-                                    .font(.system(size: 18))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
+                        sourceHeader
 
                         // Status card
-                        VStack(spacing: 0) {
-                            statusRow(title: "Status", value: source.isConnected ? "Connected" : "Disconnected", valueColor: source.isConnected ? .green : .red)
-                            Divider().padding(.horizontal, 16)
-                            statusRow(title: "Channels", value: "\(source.channelCount)")
-                            if let lastSync = source.lastSync {
-                                Divider().padding(.horizontal, 16)
-                                statusRow(title: "Last Synced", value: lastSync.formatted(date: .abbreviated, time: .shortened))
-                            }
-                        }
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color.primary.opacity(0.08))
-                        )
-                        .padding(.horizontal, 40)
+                        statusCard
 
                         // Actions
-                        VStack(spacing: 12) {
-                            // Refresh button
-                            ActionButton(
-                                icon: "arrow.clockwise",
-                                title: "Refresh Channels",
-                                subtitle: "Reload channel list from source",
-                                isLoading: isRefreshing
-                            ) {
-                                refreshSource()
-                            }
-
-                            // Remove button
-                            ActionButton(
-                                icon: "trash",
-                                title: "Remove Source",
-                                subtitle: "Disconnect this Live TV source",
-                                isDestructive: true
-                            ) {
-                                showDeleteConfirmation = true
-                            }
-                        }
-                        .padding(.horizontal, 40)
-                        .padding(.bottom, 40)
+                        actionsSection
                     }
+                    .padding(.horizontal, 80)
+                    .padding(.bottom, 60)
                 }
             }
-            .frame(maxWidth: 700)
-            .background(
-                RoundedRectangle(cornerRadius: 32, style: .continuous)
-                    .fill(.ultraThinMaterial)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
-            .padding(40)
 
             // Delete confirmation overlay
             if showDeleteConfirmation {
@@ -150,70 +71,205 @@ struct LiveTVSourceDetailSheet: View {
         }
     }
 
-    private func statusRow(title: String, value: String, valueColor: Color = .primary) -> some View {
+    // MARK: - Header Bar
+
+    private var headerBar: some View {
+        HStack {
+            Button {
+                dismiss()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 18, weight: .semibold))
+                    Text("Done")
+                        .font(.system(size: 24, weight: .medium))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(.white.opacity(0.1))
+                )
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Text("Source Details")
+                .font(.system(size: 32, weight: .bold))
+                .foregroundStyle(.white)
+
+            Spacer()
+
+            // Invisible spacer for balance
+            Text("Done")
+                .font(.system(size: 24, weight: .medium))
+                .padding(.horizontal, 24)
+                .padding(.vertical, 14)
+                .opacity(0)
+        }
+        .padding(.horizontal, 60)
+        .padding(.top, 40)
+        .padding(.bottom, 24)
+    }
+
+    // MARK: - Source Header
+
+    private var sourceHeader: some View {
+        VStack(spacing: 20) {
+            ZStack {
+                Circle()
+                    .fill(iconColor.gradient)
+                    .frame(width: 120, height: 120)
+
+                Image(systemName: iconName)
+                    .font(.system(size: 52, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+
+            VStack(spacing: 8) {
+                Text(source.displayName)
+                    .font(.system(size: 36, weight: .bold))
+                    .foregroundStyle(.white)
+
+                Text(sourceTypeLabel)
+                    .font(.system(size: 22))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+        }
+        .padding(.top, 24)
+    }
+
+    // MARK: - Status Card
+
+    private var statusCard: some View {
+        VStack(spacing: 0) {
+            statusRow(title: "Status", value: source.isConnected ? "Connected" : "Disconnected", valueColor: source.isConnected ? .green : .red)
+
+            Divider()
+                .background(.white.opacity(0.15))
+                .padding(.horizontal, 20)
+
+            statusRow(title: "Channels", value: "\(source.channelCount)")
+
+            if let lastSync = source.lastSync {
+                Divider()
+                    .background(.white.opacity(0.15))
+                    .padding(.horizontal, 20)
+
+                statusRow(title: "Last Synced", value: lastSync.formatted(date: .abbreviated, time: .shortened))
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.white.opacity(0.08))
+        )
+    }
+
+    private func statusRow(title: String, value: String, valueColor: Color = .white) -> some View {
         HStack {
             Text(title)
-                .font(.system(size: 18))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 22))
+                .foregroundStyle(.white.opacity(0.6))
             Spacer()
             Text(value)
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: 22, weight: .medium))
                 .foregroundStyle(valueColor)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 18)
     }
+
+    // MARK: - Actions Section
+
+    private var actionsSection: some View {
+        VStack(spacing: 16) {
+            // Refresh button
+            SourceActionButton(
+                icon: "arrow.clockwise",
+                iconColor: .blue,
+                title: "Refresh Channels",
+                subtitle: "Reload channel list from source",
+                isLoading: isRefreshing
+            ) {
+                refreshSource()
+            }
+
+            // Remove button
+            SourceActionButton(
+                icon: "trash",
+                iconColor: .red,
+                title: "Remove Source",
+                subtitle: "Disconnect this Live TV source",
+                isDestructive: true
+            ) {
+                showDeleteConfirmation = true
+            }
+        }
+    }
+
+    // MARK: - Delete Confirmation Overlay
 
     private var deleteConfirmationOverlay: some View {
         ZStack {
-            Color.black.opacity(0.6)
+            Color.black.opacity(0.8)
                 .ignoresSafeArea()
 
-            VStack(spacing: 24) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 48))
-                    .foregroundStyle(.red)
+            VStack(spacing: 32) {
+                // Warning icon
+                ZStack {
+                    Circle()
+                        .fill(.red.opacity(0.15))
+                        .frame(width: 100, height: 100)
 
-                VStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.red)
+                }
+
+                // Text
+                VStack(spacing: 12) {
                     Text("Remove Source?")
-                        .font(.system(size: 28, weight: .bold))
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(.white)
 
                     Text("This will remove \"\(source.displayName)\" and all its channels from Live TV.")
-                        .font(.system(size: 18))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 22))
+                        .foregroundStyle(.white.opacity(0.6))
                         .multilineTextAlignment(.center)
-                        .frame(maxWidth: 400)
+                        .frame(maxWidth: 500)
                 }
 
-                HStack(spacing: 16) {
-                    Button("Cancel") {
+                // Buttons
+                HStack(spacing: 24) {
+                    // Cancel button
+                    DeleteConfirmButton(
+                        title: "Cancel",
+                        isDestructive: false
+                    ) {
                         showDeleteConfirmation = false
                     }
-                    .buttonStyle(.bordered)
 
-                    Button {
+                    // Remove button
+                    DeleteConfirmButton(
+                        title: "Remove",
+                        isDestructive: true
+                    ) {
                         removeSource()
-                    } label: {
-                        Text("Remove")
-                            .font(.system(size: 19, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 28)
-                            .padding(.vertical, 12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(.red)
-                            )
                     }
-                    .buttonStyle(.plain)
                 }
             }
-            .padding(40)
+            .padding(48)
             .background(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(.ultraThickMaterial)
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(Color(white: 0.12))
             )
+            .padding(60)
         }
     }
+
+    // MARK: - Actions
 
     private func refreshSource() {
         isRefreshing = true
@@ -238,10 +294,11 @@ struct LiveTVSourceDetailSheet: View {
     }
 }
 
-// MARK: - Action Button
+// MARK: - Source Action Button
 
-struct ActionButton: View {
+private struct SourceActionButton: View {
     let icon: String
+    let iconColor: Color
     let title: String
     let subtitle: String
     var isLoading: Bool = false
@@ -251,44 +308,48 @@ struct ActionButton: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 20) {
+            // Icon
             ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isDestructive ? Color.red.opacity(0.15) : Color.blue.opacity(0.15))
-                    .frame(width: 52, height: 52)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(iconColor.opacity(0.15))
+                    .frame(width: 64, height: 64)
 
                 if isLoading {
                     ProgressView()
-                        .tint(isDestructive ? .red : .blue)
+                        .tint(iconColor)
                 } else {
                     Image(systemName: icon)
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(isDestructive ? .red : .blue)
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundStyle(iconColor)
                 }
             }
 
-            VStack(alignment: .leading, spacing: 3) {
+            // Text
+            VStack(alignment: .leading, spacing: 5) {
                 Text(title)
-                    .font(.system(size: 21, weight: .medium))
-                    .foregroundStyle(isDestructive ? .red : .primary)
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(isDestructive ? .red : .white)
 
                 Text(subtitle)
-                    .font(.system(size: 15))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 19))
+                    .foregroundStyle(.white.opacity(0.5))
             }
 
             Spacer()
 
+            // Chevron
             Image(systemName: "chevron.right")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.4))
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(isFocused ? Color.primary.opacity(0.12) : Color.primary.opacity(0.06))
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(isFocused ? (isDestructive ? .red.opacity(0.15) : .white.opacity(0.15)) : .white.opacity(0.08))
         )
+        .scaleEffect(isFocused ? 1.02 : 1.0)
         .focusable()
         .focused($isFocused)
         .onTapGesture {
@@ -297,6 +358,44 @@ struct ActionButton: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: isFocused)
+    }
+}
+
+// MARK: - Delete Confirm Button
+
+private struct DeleteConfirmButton: View {
+    let title: String
+    let isDestructive: Bool
+    let action: () -> Void
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button {
+            action()
+        } label: {
+            Text(title)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 40)
+                .padding(.vertical, 18)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(backgroundColor)
+                )
+                .scaleEffect(isFocused ? 1.05 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .focused($isFocused)
+        .animation(.easeOut(duration: 0.15), value: isFocused)
+    }
+
+    private var backgroundColor: Color {
+        if isDestructive {
+            return isFocused ? .red : .red.opacity(0.85)
+        } else {
+            return isFocused ? .white.opacity(0.25) : .white.opacity(0.15)
+        }
     }
 }
 

@@ -712,17 +712,7 @@ struct NavigationSplitViewContent: View {
     }
 }
 
-// MARK: - Placeholder Views (to be implemented in Phase 5)
-
-struct ChannelListView: View {
-    var body: some View {
-        ContentUnavailableView(
-            "Channels",
-            systemImage: "tv",
-            description: Text("Live TV channels will appear here")
-        )
-    }
-}
+// MARK: - Placeholder Views (to be implemented in Phase 6)
 
 struct EPGGridView: View {
     var body: some View {

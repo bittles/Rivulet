@@ -25,8 +25,6 @@ struct PlexDetailView: View {
     @State private var isWatched = false
     @State private var isLoadingExtras = false
     @State private var showTrailerPlayer = false
-    @State private var castFocusTrigger = 0
-    @FocusState private var isPlayButtonFocused: Bool
 
     private let networkManager = PlexNetworkManager.shared
 
@@ -68,11 +66,7 @@ struct PlexDetailView: View {
                         directors: metadata.Director ?? [],
                         writers: metadata.Writer ?? [],
                         serverURL: authManager.selectedServerURL ?? "",
-                        authToken: authManager.authToken ?? "",
-                        focusTrigger: castFocusTrigger,
-                        onMoveUp: shouldRouteBetweenActionsAndCast ? {
-                            isPlayButtonFocused = true
-                        } : nil
+                        authToken: authManager.authToken ?? ""
                     )
                     .padding(.top, 32)
                 }
@@ -105,11 +99,12 @@ struct PlexDetailView: View {
         }
         .fullScreenCover(isPresented: $showPlayer) {
             // Play the selected episode if available, otherwise play the main item (movie)
-            if let episode = selectedEpisode {
-                VideoPlayerView(item: episode)
-            } else {
-                VideoPlayerView(item: item)
-            }
+            let playItem = selectedEpisode ?? item
+            let resumeOffset = Double(playItem.viewOffset ?? 0) / 1000.0
+            UniversalPlayerView(
+                metadata: playItem,
+                startOffset: resumeOffset > 0 ? resumeOffset : nil
+            )
         }
         .fullScreenCover(isPresented: $showTrailerPlayer) {
             // Play trailer if available
@@ -283,10 +278,6 @@ struct PlexDetailView: View {
                 .padding(.vertical, 12)
             }
             .buttonStyle(.borderedProminent)
-            #if os(tvOS)
-            .focused($isPlayButtonFocused)
-            .onMoveCommand(perform: handleActionMove)
-            #endif
 
             // Watched toggle button
             Button {
@@ -299,9 +290,6 @@ struct PlexDetailView: View {
                     .foregroundStyle(isWatched ? .green : .secondary)
             }
             .buttonStyle(.bordered)
-            #if os(tvOS)
-            .onMoveCommand(perform: handleActionMove)
-            #endif
 
             // Trailer button (only show if available)
             if fullMetadata?.trailer != nil {
@@ -313,9 +301,6 @@ struct PlexDetailView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.bordered)
-                #if os(tvOS)
-                .onMoveCommand(perform: handleActionMove)
-                #endif
             }
 
             Spacer()
@@ -411,7 +396,7 @@ struct PlexDetailView: View {
                 .padding(.horizontal, 48)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 24) {
+                HStack(spacing: 24) {
                     ForEach(relatedItems, id: \.ratingKey) { relatedItem in
                         NavigationLink(value: relatedItem) {
                             MediaPosterCard(
@@ -543,20 +528,6 @@ struct PlexDetailView: View {
         isLoadingEpisodes = false
     }
 
-    #if os(tvOS)
-    private func handleActionMove(_ direction: MoveCommandDirection) {
-        if direction == .down, shouldRouteBetweenActionsAndCast {
-            castFocusTrigger += 1
-        }
-    }
-    #endif
-
-    private var shouldRouteBetweenActionsAndCast: Bool {
-        if item.type == "show" {
-            return seasons.isEmpty
-        }
-        return true
-    }
 
     // MARK: - URL Helpers
 

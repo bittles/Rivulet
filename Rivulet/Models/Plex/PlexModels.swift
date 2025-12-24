@@ -232,4 +232,5 @@ struct PlexPart: Codable, Sendable {
     let file: String?
     let size: Int?
     let container: String?
+    let Stream: [PlexStream]?
 }

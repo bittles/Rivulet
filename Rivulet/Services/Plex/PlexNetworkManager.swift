@@ -760,25 +760,52 @@ class PlexNetworkManager: NSObject {
     ) -> URL? {
         // Use the part key if available, otherwise construct from rating key
         let path = partKey ?? "/library/parts/\(ratingKey)/file"
-        
+
         guard var components = URLComponents(string: "\(serverURL)\(path)") else {
             return nil
         }
-        
+
         components.queryItems = [
             URLQueryItem(name: "X-Plex-Token", value: authToken),
             URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
             URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform),
             URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName)
         ]
-        
+
+        return components.url
+    }
+
+    /// VLC Direct Play - streams the raw file without any transcoding
+    /// VLCKit can play virtually any format: MKV, HEVC, H264, DTS, TrueHD, ASS/SSA subs, etc.
+    /// This is the most efficient option and preserves all original quality/tracks
+    func buildVLCDirectPlayURL(
+        serverURL: String,
+        authToken: String,
+        partKey: String
+    ) -> URL? {
+        guard var components = URLComponents(string: "\(serverURL)\(partKey)") else {
+            return nil
+        }
+
+        components.queryItems = [
+            URLQueryItem(name: "X-Plex-Token", value: authToken),
+            URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
+            URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform),
+            URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName),
+            URLQueryItem(name: "X-Plex-Product", value: PlexAPI.productName)
+        ]
+
+        if let url = components.url {
+            print("🎬 VLC Direct Play URL: \(url.absoluteString)")
+        }
+
         return components.url
     }
     
     /// Direct stream - remux container only, copy video stream
     /// Only transcodes audio if incompatible (like DTS → AAC)
     /// Video is passed through unchanged (no re-encoding)
-    private func buildDirectStreamURL(
+    func buildDirectStreamURL(
         serverURL: String,
         authToken: String,
         ratingKey: String,
@@ -879,7 +906,7 @@ class PlexNetworkManager: NSObject {
 
     /// HLS transcode - full transcode to H.264/AAC HLS stream
     /// Use as fallback when direct play/stream fails
-    private func buildHLSTranscodeURL(
+    func buildHLSTranscodeURL(
         serverURL: String,
         authToken: String,
         ratingKey: String,

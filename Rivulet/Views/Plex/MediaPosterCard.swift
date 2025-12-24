@@ -302,8 +302,6 @@ struct MediaRow: View {
     var contextMenuSource: MediaItemContextSource = .other
     var onItemSelected: ((PlexMetadata) -> Void)?
     var onRefreshNeeded: MediaItemRefreshCallback?
-    var focusTrigger: Int? = nil
-    var focusMemoryItemId: Binding<String?>? = nil
 
     // Track focused item for proper initial focus
     @FocusState private var focusedItemId: String?
@@ -316,7 +314,7 @@ struct MediaRow: View {
                 .padding(.horizontal, 48)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 24) {
+                HStack(spacing: 24) {
                     ForEach(items, id: \.ratingKey) { item in
                         Button {
                             onItemSelected?(item)
@@ -347,37 +345,11 @@ struct MediaRow: View {
             }
             .scrollClipDisabled()  // Allow shadow overflow
         }
-        .onChange(of: focusTrigger) { _, newValue in
-            if newValue != nil {
-                setFocusedItemWithoutAnimation(items.first?.ratingKey)
-            }
-        }
-        .onChange(of: focusedItemId) { _, newValue in
-            if let newValue {
-                focusMemoryItemId?.wrappedValue = newValue
-            }
-        }
         .focusSection()
         #if os(tvOS)
         // Set first item as default focus when this row receives focus
-        .defaultFocus($focusedItemId, defaultFocusItemId)
+        .defaultFocus($focusedItemId, items.first?.ratingKey)
         #endif
-    }
-
-    private func setFocusedItemWithoutAnimation(_ itemId: String?) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            focusedItemId = itemId
-        }
-    }
-
-    private var defaultFocusItemId: String? {
-        if let storedId = focusMemoryItemId?.wrappedValue,
-           items.contains(where: { $0.ratingKey == storedId }) {
-            return storedId
-        }
-        return items.first?.ratingKey
     }
 }
 

@@ -2,7 +2,7 @@
 //  AddLiveTVSourceSheet.swift
 //  Rivulet
 //
-//  Sheet for adding a new Live TV source (Plex or M3U)
+//  Full-screen view for adding a new Live TV source (Plex or M3U)
 //
 
 import SwiftUI
@@ -19,32 +19,12 @@ struct AddLiveTVSourceSheet: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.7)
-                .ignoresSafeArea()
+            // Solid black background - no blur/material issues
+            Color.black.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                // Header
-                HStack {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                    .buttonStyle(.bordered)
-
-                    Spacer()
-
-                    Text("Add Live TV Source")
-                        .font(.system(size: 28, weight: .bold))
-
-                    Spacer()
-
-                    // Invisible spacer for alignment
-                    Button("Cancel") { }
-                        .buttonStyle(.bordered)
-                        .opacity(0)
-                }
-                .padding(.horizontal, 40)
-                .padding(.top, 32)
-                .padding(.bottom, 24)
+                // Header bar
+                headerBar
 
                 if let sourceType = selectedSourceType {
                     // Configuration form for selected source type
@@ -54,13 +34,62 @@ struct AddLiveTVSourceSheet: View {
                     sourceTypePicker
                 }
             }
-            .frame(maxWidth: 800)
-            .background(
-                RoundedRectangle(cornerRadius: 32, style: .continuous)
-                    .fill(.ultraThinMaterial)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
-            .padding(40)
+        }
+    }
+
+    // MARK: - Header Bar
+
+    private var headerBar: some View {
+        HStack {
+            Button {
+                if selectedSourceType != nil {
+                    selectedSourceType = nil
+                } else {
+                    dismiss()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: selectedSourceType != nil ? "chevron.left" : "xmark")
+                        .font(.system(size: 18, weight: .semibold))
+                    Text(selectedSourceType != nil ? "Back" : "Cancel")
+                        .font(.system(size: 24, weight: .medium))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(.white.opacity(0.1))
+                )
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Text(headerTitle)
+                .font(.system(size: 32, weight: .bold))
+                .foregroundStyle(.white)
+
+            Spacer()
+
+            // Invisible spacer for balance
+            Text("Cancel")
+                .font(.system(size: 24, weight: .medium))
+                .padding(.horizontal, 24)
+                .padding(.vertical, 14)
+                .opacity(0)
+        }
+        .padding(.horizontal, 60)
+        .padding(.top, 40)
+        .padding(.bottom, 24)
+    }
+
+    private var headerTitle: String {
+        switch selectedSourceType {
+        case .plex: return "Add Plex Live TV"
+        case .dispatcharr: return "Add M3U Server"
+        case .genericM3U: return "Add M3U Playlist"
+        case nil: return "Add Live TV Source"
         }
     }
 
@@ -68,71 +97,88 @@ struct AddLiveTVSourceSheet: View {
 
     private var sourceTypePicker: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 16) {
-                Text("Choose Source Type")
-                    .font(.system(size: 22))
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 8)
+            VStack(spacing: 20) {
+                Text("Choose a source type to add Live TV channels")
+                    .font(.system(size: 26))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.bottom, 16)
 
-                // Plex Live TV option (only if authenticated)
-                if authManager.isAuthenticated {
-                    SourceTypeButton(
-                        icon: "play.rectangle.fill",
-                        iconColor: .orange,
-                        title: "Plex Live TV",
-                        subtitle: "Use Live TV from your Plex server",
-                        isLoading: isCheckingPlex
-                    ) {
-                        checkPlexLiveTV()
+                VStack(spacing: 12) {
+                    // Plex Live TV option (only if authenticated)
+                    if authManager.isAuthenticated {
+                        SourceTypeCard(
+                            icon: "play.rectangle.fill",
+                            iconColor: .orange,
+                            title: "Plex Live TV",
+                            subtitle: "Use Live TV from your Plex server",
+                            isLoading: isCheckingPlex
+                        ) {
+                            checkPlexLiveTV()
+                        }
                     }
-                }
 
-                // M3U Server option (Dispatcharr-style with auto EPG)
-                SourceTypeButton(
-                    icon: "server.rack",
-                    iconColor: .blue,
-                    title: "M3U Server",
-                    subtitle: "Server with M3U and EPG endpoints"
-                ) {
-                    selectedSourceType = .dispatcharr
-                }
+                    // M3U Server option (Dispatcharr-style with auto EPG)
+                    SourceTypeCard(
+                        icon: "server.rack",
+                        iconColor: .blue,
+                        title: "M3U Server",
+                        subtitle: "Server with M3U and EPG endpoints (like Dispatcharr)"
+                    ) {
+                        selectedSourceType = .dispatcharr
+                    }
 
-                // Generic M3U option
-                SourceTypeButton(
-                    icon: "list.bullet.rectangle",
-                    iconColor: .green,
-                    title: "M3U Playlist",
-                    subtitle: "Add any M3U/M3U8 playlist URL"
-                ) {
-                    selectedSourceType = .genericM3U
+                    // Generic M3U option
+                    SourceTypeCard(
+                        icon: "list.bullet.rectangle",
+                        iconColor: .green,
+                        title: "M3U Playlist",
+                        subtitle: "Add any M3U/M3U8 playlist URL"
+                    ) {
+                        selectedSourceType = .genericM3U
+                    }
                 }
 
                 // Error message for Plex
                 if let error = plexError {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 22))
                             .foregroundStyle(.yellow)
                         Text(error)
-                            .font(.system(size: 16))
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 20))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .multilineTextAlignment(.leading)
                     }
-                    .padding(.top, 12)
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(.yellow.opacity(0.1))
+                    )
+                    .padding(.top, 16)
                 }
 
                 // Plex not connected hint
                 if !authManager.isAuthenticated {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 12) {
                         Image(systemName: "info.circle.fill")
+                            .font(.system(size: 22))
                             .foregroundStyle(.blue)
                         Text("Connect your Plex server in Settings to access Plex Live TV")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 20))
+                            .foregroundStyle(.white.opacity(0.7))
                     }
-                    .padding(.top, 12)
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(.blue.opacity(0.1))
+                    )
+                    .padding(.top, 16)
                 }
             }
-            .padding(.horizontal, 40)
-            .padding(.bottom, 40)
+            .padding(.horizontal, 80)
+            .padding(.bottom, 60)
         }
     }
 
@@ -142,11 +188,11 @@ struct AddLiveTVSourceSheet: View {
     private func configurationView(for sourceType: LiveTVSourceType) -> some View {
         switch sourceType {
         case .plex:
-            PlexLiveTVConfigView(onComplete: { dismiss() }, onBack: { selectedSourceType = nil })
+            PlexLiveTVConfigForm(onComplete: { dismiss() })
         case .dispatcharr:
-            DispatcharrConfigView(onComplete: { dismiss() }, onBack: { selectedSourceType = nil })
+            DispatcharrConfigForm(onComplete: { dismiss() })
         case .genericM3U:
-            M3UConfigView(onComplete: { dismiss() }, onBack: { selectedSourceType = nil })
+            M3UConfigForm(onComplete: { dismiss() })
         }
     }
 
@@ -180,9 +226,9 @@ struct AddLiveTVSourceSheet: View {
     }
 }
 
-// MARK: - Source Type Button
+// MARK: - Source Type Card
 
-struct SourceTypeButton: View {
+private struct SourceTypeCard: View {
     let icon: String
     let iconColor: Color
     let title: String
@@ -193,44 +239,48 @@ struct SourceTypeButton: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 24) {
+            // Icon
             ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(iconColor.gradient)
-                    .frame(width: 60, height: 60)
+                    .frame(width: 72, height: 72)
 
                 if isLoading {
                     ProgressView()
                         .tint(.white)
                 } else {
                     Image(systemName: icon)
-                        .font(.system(size: 28, weight: .semibold))
+                        .font(.system(size: 32, weight: .semibold))
                         .foregroundStyle(.white)
                 }
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            // Text
+            VStack(alignment: .leading, spacing: 6) {
                 Text(title)
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(.white)
 
                 Text(subtitle)
-                    .font(.system(size: 17))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 20))
+                    .foregroundStyle(.white.opacity(0.6))
             }
 
             Spacer()
 
+            // Chevron
             Image(systemName: "chevron.right")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.4))
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 24)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(isFocused ? Color.primary.opacity(0.15) : Color.primary.opacity(0.08))
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(isFocused ? .white.opacity(0.2) : .white.opacity(0.08))
         )
+        .scaleEffect(isFocused ? 1.02 : 1.0)
         .focusable()
         .focused($isFocused)
         .onTapGesture {
@@ -242,98 +292,90 @@ struct SourceTypeButton: View {
     }
 }
 
-// MARK: - Plex Live TV Config
+// MARK: - Plex Live TV Config Form
 
-struct PlexLiveTVConfigView: View {
+private struct PlexLiveTVConfigForm: View {
     let onComplete: () -> Void
-    let onBack: () -> Void
 
     @StateObject private var authManager = PlexAuthManager.shared
     @StateObject private var dataStore = LiveTVDataStore.shared
     @State private var isAdding = false
     @State private var errorMessage: String?
 
+    @FocusState private var addButtonFocused: Bool
+
     var body: some View {
-        VStack(spacing: 24) {
-            // Back button
-            HStack {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 40) {
+                // Icon and info
+                VStack(spacing: 24) {
+                    ZStack {
+                        Circle()
+                            .fill(.orange.gradient)
+                            .frame(width: 120, height: 120)
+
+                        Image(systemName: "play.rectangle.fill")
+                            .font(.system(size: 52, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+
+                    VStack(spacing: 10) {
+                        if let serverName = authManager.savedServerName {
+                            Text(serverName)
+                                .font(.system(size: 34, weight: .bold))
+                                .foregroundStyle(.white)
+                        }
+
+                        Text("Live TV channels from your Plex server will be added. You can watch live channels and see the program guide.")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 600)
+                    }
+                }
+                .padding(.top, 40)
+
+                // Error message
+                if let error = errorMessage {
+                    HStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.red)
+                        Text(error)
+                            .foregroundStyle(.red)
+                    }
+                    .font(.system(size: 20))
+                }
+
+                // Add button
                 Button {
-                    onBack()
+                    addPlexLiveTV()
                 } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "chevron.left")
-                        Text("Back")
+                    HStack(spacing: 12) {
+                        if isAdding {
+                            ProgressView()
+                                .tint(.white)
+                        }
+                        Text(isAdding ? "Adding..." : "Add Plex Live TV")
+                            .font(.system(size: 26, weight: .semibold))
                     }
+                    .foregroundStyle(.white)
+                    .frame(minWidth: 280)
+                    .padding(.horizontal, 48)
+                    .padding(.vertical, 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(addButtonFocused ? .orange : .orange.opacity(0.85))
+                    )
+                    .scaleEffect(addButtonFocused ? 1.05 : 1.0)
                 }
-                .buttonStyle(.bordered)
-                Spacer()
+                .buttonStyle(.plain)
+                .focused($addButtonFocused)
+                .disabled(isAdding)
+                .animation(.easeOut(duration: 0.15), value: addButtonFocused)
+
+                Spacer(minLength: 60)
             }
-            .padding(.horizontal, 40)
-
-            Spacer()
-
-            // Icon and info
-            VStack(spacing: 20) {
-                ZStack {
-                    Circle()
-                        .fill(.orange.gradient)
-                        .frame(width: 100, height: 100)
-
-                    Image(systemName: "play.rectangle.fill")
-                        .font(.system(size: 44, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
-
-                VStack(spacing: 8) {
-                    Text("Add Plex Live TV")
-                        .font(.system(size: 32, weight: .bold))
-
-                    if let serverName = authManager.savedServerName {
-                        Text("From \(serverName)")
-                            .font(.system(size: 20))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Text("This will add Live TV channels from your Plex server. You'll be able to watch live channels and see the program guide.")
-                    .font(.system(size: 17))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 500)
-            }
-
-            if let error = errorMessage {
-                Text(error)
-                    .font(.system(size: 16))
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-            }
-
-            Spacer()
-
-            // Add button
-            Button {
-                addPlexLiveTV()
-            } label: {
-                HStack(spacing: 10) {
-                    if isAdding {
-                        ProgressView()
-                            .tint(.white)
-                    }
-                    Text(isAdding ? "Adding..." : "Add Plex Live TV")
-                        .font(.system(size: 21, weight: .semibold))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 40)
-                .padding(.vertical, 16)
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.orange)
-                )
-            }
-            .buttonStyle(.plain)
-            .disabled(isAdding)
-            .padding(.bottom, 40)
+            .padding(.horizontal, 80)
         }
     }
 
@@ -356,8 +398,6 @@ struct PlexLiveTVConfigView: View {
             )
 
             await dataStore.addPlexSource(provider: provider)
-
-            // Load channels immediately
             await dataStore.loadChannels()
 
             await MainActor.run {
@@ -368,11 +408,10 @@ struct PlexLiveTVConfigView: View {
     }
 }
 
-// MARK: - M3U Server Config
+// MARK: - M3U Server Config Form
 
-struct DispatcharrConfigView: View {
+private struct DispatcharrConfigForm: View {
     let onComplete: () -> Void
-    let onBack: () -> Void
 
     @StateObject private var dataStore = LiveTVDataStore.shared
     @State private var serverURL = ""
@@ -384,11 +423,11 @@ struct DispatcharrConfigView: View {
 
     @FocusState private var focusedField: Field?
 
-    enum Field {
-        case url, name
+    enum Field: Hashable {
+        case url, name, validate, add
     }
 
-    enum ValidationStatus {
+    enum ValidationStatus: Equatable {
         case idle
         case validating
         case valid(channelCount: Int)
@@ -397,106 +436,73 @@ struct DispatcharrConfigView: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 24) {
-                // Back button
-                HStack {
-                    Button {
-                        onBack()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chevron.left")
-                            Text("Back")
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    Spacer()
-                }
-                .padding(.horizontal, 40)
-
-                // Header
-                VStack(spacing: 12) {
-                    ZStack {
-                        Circle()
-                            .fill(.blue.gradient)
-                            .frame(width: 80, height: 80)
-
-                        Image(systemName: "server.rack")
-                            .font(.system(size: 36, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
-
-                    Text("Add M3U Server")
-                        .font(.system(size: 28, weight: .bold))
-                }
-                .padding(.top, 8)
-
-                // Form
-                VStack(spacing: 20) {
+            VStack(spacing: 32) {
+                // Form fields
+                VStack(spacing: 24) {
                     // Server URL field
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Server URL")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(.secondary)
-
-                        TextField("http://192.168.1.100:9191", text: $serverURL)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 20))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color.primary.opacity(0.08))
-                            )
-                            .focused($focusedField, equals: .url)
-                            .autocorrectionDisabled()
-                            #if os(tvOS)
-                            .keyboardType(.URL)
-                            #endif
-
-                        Text("Base URL of your M3U server (expects /output/m3u and /output/epg)")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                    }
+                    TVTextField(
+                        label: "Server URL",
+                        placeholder: "http://192.168.1.100:9191",
+                        text: $serverURL,
+                        hint: "Base URL of your M3U server (expects /output/m3u and /output/epg)",
+                        isFocused: focusedField == .url
+                    )
+                    .focused($focusedField, equals: .url)
 
                     // Display name field
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Display Name")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(.secondary)
-
-                        TextField("Live TV", text: $displayName)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 20))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color.primary.opacity(0.08))
-                            )
-                            .focused($focusedField, equals: .name)
-                    }
+                    TVTextField(
+                        label: "Display Name",
+                        placeholder: "Live TV",
+                        text: $displayName,
+                        isFocused: focusedField == .name
+                    )
+                    .focused($focusedField, equals: .name)
 
                     // Validation status
-                    validationStatusView
-                }
-                .padding(.horizontal, 40)
+                    if validationStatus != .idle {
+                        validationStatusView
+                    }
 
-                if let error = errorMessage {
-                    Text(error)
-                        .font(.system(size: 16))
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
+                    // Error message
+                    if let error = errorMessage {
+                        HStack(spacing: 12) {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .foregroundStyle(.red)
+                            Text(error)
+                                .foregroundStyle(.red)
+                        }
+                        .font(.system(size: 20))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
 
                 // Buttons
-                HStack(spacing: 16) {
-                    Button("Validate") {
+                HStack(spacing: 20) {
+                    // Validate button
+                    Button {
                         validateServer()
+                    } label: {
+                        HStack(spacing: 10) {
+                            if isValidating {
+                                ProgressView()
+                                    .tint(.white)
+                            }
+                            Text(isValidating ? "Checking..." : "Validate")
+                                .font(.system(size: 24, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 36)
+                        .padding(.vertical, 18)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(focusedField == .validate ? .white.opacity(0.25) : .white.opacity(0.15))
+                        )
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.plain)
+                    .focused($focusedField, equals: .validate)
                     .disabled(serverURL.isEmpty || isValidating)
 
+                    // Add button
                     Button {
                         addDispatcharr()
                     } label: {
@@ -506,62 +512,62 @@ struct DispatcharrConfigView: View {
                                     .tint(.white)
                             }
                             Text(isAdding ? "Adding..." : "Add Source")
-                                .font(.system(size: 19, weight: .semibold))
+                                .font(.system(size: 24, weight: .semibold))
                         }
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 28)
-                        .padding(.vertical, 14)
+                        .padding(.horizontal, 36)
+                        .padding(.vertical, 18)
                         .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(canAdd ? Color.blue : Color.gray)
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(canAdd ? (focusedField == .add ? .blue : .blue.opacity(0.85)) : .gray.opacity(0.5))
                         )
+                        .scaleEffect(focusedField == .add && canAdd ? 1.03 : 1.0)
                     }
                     .buttonStyle(.plain)
+                    .focused($focusedField, equals: .add)
                     .disabled(!canAdd || isAdding)
                 }
-                .padding(.top, 8)
-                .padding(.bottom, 40)
+                .animation(.easeOut(duration: 0.15), value: focusedField)
+
+                Spacer(minLength: 60)
             }
+            .padding(.horizontal, 80)
+            .padding(.top, 24)
+        }
+        .onAppear {
+            focusedField = .url
         }
     }
 
     @ViewBuilder
     private var validationStatusView: some View {
-        switch validationStatus {
-        case .idle:
-            EmptyView()
-        case .validating:
-            HStack(spacing: 10) {
+        HStack(spacing: 12) {
+            switch validationStatus {
+            case .idle:
+                EmptyView()
+            case .validating:
                 ProgressView()
                 Text("Checking server...")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.secondary)
-            }
-        case .valid(let count):
-            HStack(spacing: 10) {
+                    .foregroundStyle(.white.opacity(0.6))
+            case .valid(let count):
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
                 Text("Connected! Found \(count) channels")
-                    .font(.system(size: 16))
                     .foregroundStyle(.green)
-            }
-        case .invalid(let message):
-            HStack(spacing: 10) {
+            case .invalid(let message):
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.red)
                 Text(message)
-                    .font(.system(size: 16))
                     .foregroundStyle(.red)
             }
         }
+        .font(.system(size: 20))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
     }
 
     private var canAdd: Bool {
-        if case .valid = validationStatus {
-            return !serverURL.isEmpty && !displayName.isEmpty
-        }
-        // Allow adding without validation, but prefer validated
-        return !serverURL.isEmpty && !displayName.isEmpty
+        !serverURL.isEmpty && !displayName.isEmpty
     }
 
     private func validateServer() {
@@ -571,24 +577,39 @@ struct DispatcharrConfigView: View {
         }
 
         validationStatus = .validating
+        isValidating = true
 
         Task {
             do {
                 let channels = try await service.fetchChannels()
                 await MainActor.run {
                     validationStatus = .valid(channelCount: channels.count)
+                    isValidating = false
                 }
             } catch {
                 await MainActor.run {
                     validationStatus = .invalid(error.localizedDescription)
+                    isValidating = false
                 }
             }
         }
     }
 
     private func addDispatcharr() {
-        guard let url = URL(string: serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "/$", with: "", options: .regularExpression)) else {
+        // Use the same URL normalization as DispatcharrService.create()
+        var cleanedURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Remove trailing slash
+        if cleanedURL.hasSuffix("/") {
+            cleanedURL = String(cleanedURL.dropLast())
+        }
+
+        // Add http:// if no scheme
+        if !cleanedURL.hasPrefix("http://") && !cleanedURL.hasPrefix("https://") {
+            cleanedURL = "http://" + cleanedURL
+        }
+
+        guard let url = URL(string: cleanedURL) else {
             errorMessage = "Invalid URL"
             return
         }
@@ -612,11 +633,10 @@ struct DispatcharrConfigView: View {
     }
 }
 
-// MARK: - M3U Config
+// MARK: - M3U Playlist Config Form
 
-struct M3UConfigView: View {
+private struct M3UConfigForm: View {
     let onComplete: () -> Void
-    let onBack: () -> Void
 
     @StateObject private var dataStore = LiveTVDataStore.shared
     @State private var m3uURL = ""
@@ -627,167 +647,115 @@ struct M3UConfigView: View {
 
     @FocusState private var focusedField: Field?
 
-    enum Field {
-        case m3u, epg, name
+    enum Field: Hashable {
+        case m3u, epg, name, add
     }
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 24) {
-                // Back button
-                HStack {
-                    Button {
-                        onBack()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chevron.left")
-                            Text("Back")
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    Spacer()
-                }
-                .padding(.horizontal, 40)
-
-                // Header
-                VStack(spacing: 12) {
-                    ZStack {
-                        Circle()
-                            .fill(.green.gradient)
-                            .frame(width: 80, height: 80)
-
-                        Image(systemName: "list.bullet.rectangle")
-                            .font(.system(size: 36, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
-
-                    Text("Add M3U Playlist")
-                        .font(.system(size: 28, weight: .bold))
-                }
-                .padding(.top, 8)
-
-                // Form
-                VStack(spacing: 20) {
+            VStack(spacing: 32) {
+                // Form fields
+                VStack(spacing: 24) {
                     // M3U URL field
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("M3U Playlist URL")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(.secondary)
-
-                        TextField("http://example.com/playlist.m3u", text: $m3uURL)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 20))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color.primary.opacity(0.08))
-                            )
-                            .focused($focusedField, equals: .m3u)
-                            .autocorrectionDisabled()
-                            #if os(tvOS)
-                            .keyboardType(.URL)
-                            #endif
-
-                        Text("URL to your M3U or M3U8 playlist file")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                    }
+                    TVTextField(
+                        label: "M3U Playlist URL",
+                        placeholder: "http://example.com/playlist.m3u",
+                        text: $m3uURL,
+                        hint: "URL to your M3U or M3U8 playlist file",
+                        isFocused: focusedField == .m3u
+                    )
+                    .focused($focusedField, equals: .m3u)
 
                     // EPG URL field (optional)
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("EPG URL")
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(.secondary)
-                            Text("(Optional)")
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary.opacity(0.7))
-                        }
-
-                        TextField("http://example.com/epg.xml", text: $epgURL)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 20))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color.primary.opacity(0.08))
-                            )
-                            .focused($focusedField, equals: .epg)
-                            .autocorrectionDisabled()
-                            #if os(tvOS)
-                            .keyboardType(.URL)
-                            #endif
-
-                        Text("XMLTV format EPG for program guide data")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                    }
+                    TVTextField(
+                        label: "EPG URL (Optional)",
+                        placeholder: "http://example.com/epg.xml",
+                        text: $epgURL,
+                        hint: "XMLTV format EPG for program guide data",
+                        isFocused: focusedField == .epg
+                    )
+                    .focused($focusedField, equals: .epg)
 
                     // Display name field
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Display Name")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(.secondary)
+                    TVTextField(
+                        label: "Display Name",
+                        placeholder: "IPTV",
+                        text: $displayName,
+                        isFocused: focusedField == .name
+                    )
+                    .focused($focusedField, equals: .name)
 
-                        TextField("IPTV", text: $displayName)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 20))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color.primary.opacity(0.08))
-                            )
-                            .focused($focusedField, equals: .name)
+                    // Error message
+                    if let error = errorMessage {
+                        HStack(spacing: 12) {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .foregroundStyle(.red)
+                            Text(error)
+                                .foregroundStyle(.red)
+                        }
+                        .font(.system(size: 20))
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                }
-                .padding(.horizontal, 40)
-
-                if let error = errorMessage {
-                    Text(error)
-                        .font(.system(size: 16))
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
                 }
 
                 // Add button
                 Button {
                     addM3U()
                 } label: {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 12) {
                         if isAdding {
                             ProgressView()
                                 .tint(.white)
                         }
                         Text(isAdding ? "Adding..." : "Add Source")
-                            .font(.system(size: 19, weight: .semibold))
+                            .font(.system(size: 24, weight: .semibold))
                     }
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, 14)
+                    .frame(minWidth: 200)
+                    .padding(.horizontal, 48)
+                    .padding(.vertical, 18)
                     .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(m3uURL.isEmpty ? Color.gray : Color.green)
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(m3uURL.isEmpty ? .gray.opacity(0.5) : (focusedField == .add ? .green : .green.opacity(0.85)))
                     )
+                    .scaleEffect(focusedField == .add && !m3uURL.isEmpty ? 1.03 : 1.0)
                 }
                 .buttonStyle(.plain)
+                .focused($focusedField, equals: .add)
                 .disabled(m3uURL.isEmpty || isAdding)
-                .padding(.top, 8)
-                .padding(.bottom, 40)
+                .animation(.easeOut(duration: 0.15), value: focusedField)
+
+                Spacer(minLength: 60)
             }
+            .padding(.horizontal, 80)
+            .padding(.top, 24)
+        }
+        .onAppear {
+            focusedField = .m3u
         }
     }
 
     private func addM3U() {
-        guard let m3u = URL(string: m3uURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        // Normalize M3U URL
+        var cleanedM3U = m3uURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleanedM3U.hasPrefix("http://") && !cleanedM3U.hasPrefix("https://") {
+            cleanedM3U = "http://" + cleanedM3U
+        }
+
+        guard let m3u = URL(string: cleanedM3U) else {
             errorMessage = "Invalid M3U URL"
             return
         }
 
-        let epg: URL? = epgURL.isEmpty ? nil : URL(string: epgURL.trimmingCharacters(in: .whitespacesAndNewlines))
+        // Normalize EPG URL if provided
+        var epg: URL? = nil
+        if !epgURL.isEmpty {
+            var cleanedEPG = epgURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleanedEPG.hasPrefix("http://") && !cleanedEPG.hasPrefix("https://") {
+                cleanedEPG = "http://" + cleanedEPG
+            }
+            epg = URL(string: cleanedEPG)
+        }
 
         isAdding = true
         errorMessage = nil
@@ -806,6 +774,50 @@ struct M3UConfigView: View {
                 onComplete()
             }
         }
+    }
+}
+
+// MARK: - TV Text Field
+
+private struct TVTextField: View {
+    let label: String
+    let placeholder: String
+    @Binding var text: String
+    var hint: String? = nil
+    var isFocused: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(label)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.white.opacity(0.7))
+
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 26))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 18)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(isFocused ? Color(white: 0.25) : Color(white: 0.15))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(isFocused ? .blue : .clear, lineWidth: 3)
+                )
+                .autocorrectionDisabled()
+                #if os(tvOS)
+                .keyboardType(.URL)
+                #endif
+
+            if let hint = hint {
+                Text(hint)
+                    .font(.system(size: 18))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: isFocused)
     }
 }
 

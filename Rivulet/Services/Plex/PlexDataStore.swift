@@ -280,6 +280,31 @@ class PlexDataStore: ObservableObject {
         await fetchLibrariesFromServer(serverURL: serverURL, token: token, updateLoading: true)
     }
 
+    // MARK: - Optimistic Updates
+
+    /// Update an item's watch status locally (optimistic update)
+    /// This immediately reflects the change in UI before the server refresh completes
+    func updateItemWatchStatus(ratingKey: String, watched: Bool) {
+        // Update in hubs
+        for hubIndex in hubs.indices {
+            if var metadata = hubs[hubIndex].Metadata {
+                for itemIndex in metadata.indices {
+                    if metadata[itemIndex].ratingKey == ratingKey {
+                        if watched {
+                            metadata[itemIndex].viewCount = (metadata[itemIndex].viewCount ?? 0) + 1
+                            metadata[itemIndex].viewOffset = nil
+                        } else {
+                            metadata[itemIndex].viewCount = 0
+                            metadata[itemIndex].viewOffset = nil
+                        }
+                        hubs[hubIndex].Metadata = metadata
+                        print("📦 PlexDataStore: Optimistically updated \(ratingKey) watched=\(watched) in hub \(hubs[hubIndex].title ?? "unknown")")
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Reset (on sign out)
 
     func reset() {

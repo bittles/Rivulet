@@ -46,6 +46,18 @@ class LiveTVDataStore: ObservableObject {
 
     private let userDefaults = UserDefaults.standard
     private let favoritesKey = "liveTVFavoriteChannelIds"
+    private let sourcesKey = "liveTVSourceConfigurations"
+
+    // MARK: - Source Configuration (Persistable)
+
+    struct SourceConfiguration: Codable {
+        let id: String
+        let type: String  // "dispatcharr", "m3u", "plex"
+        let name: String
+        let baseURL: String?
+        let m3uURL: String?
+        let epgURL: String?
+    }
 
     // MARK: - Source Info
 
@@ -92,6 +104,7 @@ class LiveTVDataStore: ObservableObject {
 
     private init() {
         loadFavorites()
+        loadSavedSources()
         print("📺 LiveTVDataStore: Initialized")
     }
 
@@ -106,6 +119,7 @@ class LiveTVDataStore: ObservableObject {
             displayName: name
         )
         providers[sourceId] = provider
+        saveSources()
         await updateSourceInfo()
         print("📺 LiveTVDataStore: Added Dispatcharr source '\(name)'")
     }
@@ -120,6 +134,7 @@ class LiveTVDataStore: ObservableObject {
             displayName: name
         )
         providers[sourceId] = provider
+        saveSources()
         await updateSourceInfo()
         print("📺 LiveTVDataStore: Added M3U source '\(name)'")
     }
@@ -127,6 +142,7 @@ class LiveTVDataStore: ObservableObject {
     /// Add a Plex Live TV source
     func addPlexSource(provider: any LiveTVProvider) async {
         providers[provider.sourceId] = provider
+        // Note: Plex sources are recreated from PlexAuthManager on launch, not persisted here
         await updateSourceInfo()
         print("📺 LiveTVDataStore: Added Plex Live TV source")
     }
@@ -134,6 +150,7 @@ class LiveTVDataStore: ObservableObject {
     /// Remove a source by ID
     func removeSource(id: String) async {
         providers.removeValue(forKey: id)
+        saveSources()
         await updateSourceInfo()
 
         // Remove channels from this source
@@ -146,6 +163,98 @@ class LiveTVDataStore: ObservableObject {
         }
 
         print("📺 LiveTVDataStore: Removed source '\(id)'")
+    }
+
+    // MARK: - Source Persistence
+
+    /// Load saved source configurations and recreate providers
+    private func loadSavedSources() {
+        guard let data = userDefaults.data(forKey: sourcesKey),
+              let configs = try? JSONDecoder().decode([SourceConfiguration].self, from: data) else {
+            print("📺 LiveTVDataStore: No saved sources found")
+            return
+        }
+
+        print("📺 LiveTVDataStore: Loading \(configs.count) saved sources")
+
+        for config in configs {
+            switch config.type {
+            case "dispatcharr":
+                if let urlString = config.baseURL, let url = URL(string: urlString) {
+                    let provider = IPTVProvider(
+                        dispatcharrURL: url,
+                        sourceId: config.id,
+                        displayName: config.name
+                    )
+                    providers[config.id] = provider
+                    print("📺 LiveTVDataStore: Restored Dispatcharr source '\(config.name)'")
+                }
+
+            case "m3u":
+                if let m3uString = config.m3uURL, let m3uURL = URL(string: m3uString) {
+                    let epgURL = config.epgURL.flatMap { URL(string: $0) }
+                    let provider = IPTVProvider(
+                        m3uURL: m3uURL,
+                        epgURL: epgURL,
+                        sourceId: config.id,
+                        displayName: config.name
+                    )
+                    providers[config.id] = provider
+                    print("📺 LiveTVDataStore: Restored M3U source '\(config.name)'")
+                }
+
+            default:
+                // Plex sources are handled separately via PlexAuthManager
+                break
+            }
+        }
+
+        // Update source info (async but we don't wait)
+        Task {
+            await updateSourceInfo()
+        }
+    }
+
+    /// Save current source configurations to UserDefaults
+    private func saveSources() {
+        var configs: [SourceConfiguration] = []
+
+        for (id, provider) in providers {
+            switch provider.sourceType {
+            case .dispatcharr:
+                if let iptvProvider = provider as? IPTVProvider {
+                    configs.append(SourceConfiguration(
+                        id: id,
+                        type: "dispatcharr",
+                        name: provider.displayName,
+                        baseURL: iptvProvider.baseURL?.absoluteString,
+                        m3uURL: nil,
+                        epgURL: nil
+                    ))
+                }
+
+            case .genericM3U:
+                if let iptvProvider = provider as? IPTVProvider {
+                    configs.append(SourceConfiguration(
+                        id: id,
+                        type: "m3u",
+                        name: provider.displayName,
+                        baseURL: nil,
+                        m3uURL: iptvProvider.m3uURL?.absoluteString,
+                        epgURL: iptvProvider.epgURL?.absoluteString
+                    ))
+                }
+
+            case .plex:
+                // Plex sources are recreated from PlexAuthManager, not persisted here
+                break
+            }
+        }
+
+        if let data = try? JSONEncoder().encode(configs) {
+            userDefaults.set(data, forKey: sourcesKey)
+            print("📺 LiveTVDataStore: Saved \(configs.count) source configurations")
+        }
     }
 
     /// Update source info for UI

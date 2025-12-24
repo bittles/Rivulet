@@ -12,14 +12,9 @@ struct PlexHomeView: View {
     @StateObject private var dataStore = PlexDataStore.shared
     @StateObject private var authManager = PlexAuthManager.shared
     @AppStorage("showHomeHero") private var showHomeHero = true
-    @Environment(\.contentFocusVersion) private var contentFocusVersion
     @Environment(\.nestedNavigationState) private var nestedNavState
     @State private var selectedItem: PlexMetadata?
     @State private var heroItem: PlexMetadata?
-    @State private var focusTrigger = 0  // Increment to trigger first row focus
-    @State private var shouldRestoreHeroFocus = false
-    @State private var rowFocusMemory: [String: Int] = [:]
-    @State private var shouldForceFirstRowFocus = false
     @FocusState private var isHeroPlayButtonFocused: Bool
 
     // MARK: - Computed Hubs (merged Continue Watching + On Deck)
@@ -159,13 +154,7 @@ struct PlexHomeView: View {
                         item: hero,
                         serverURL: authManager.selectedServerURL ?? "",
                         authToken: authManager.authToken ?? "",
-                        isPlayButtonFocused: $isHeroPlayButtonFocused,
-                        onMoveDown: {
-                            if shouldForceFirstRowFocus {
-                                focusTrigger += 1
-                                shouldForceFirstRowFocus = false
-                            }
-                        }
+                        isPlayButtonFocused: $isHeroPlayButtonFocused
                     ) {
                         selectedItem = hero
                     }
@@ -173,11 +162,10 @@ struct PlexHomeView: View {
 
                 // Content rows (uses processedHubs which merges Continue Watching + On Deck)
                 VStack(alignment: .leading, spacing: 48) {
-                    ForEach(Array(processedHubs.enumerated()), id: \.element.id) { index, hub in
+                    ForEach(processedHubs, id: \.id) { hub in
                         if let items = hub.Metadata, !items.isEmpty {
                             let isContinueWatching = hub.hubIdentifier?.lowercased().contains("continuewatching") == true ||
                                                      hub.title?.lowercased().contains("continue watching") == true
-                            let focusKey = focusMemoryKey(for: hub, index: index)
                             InfiniteContentRow(
                                 title: hub.title ?? "Unknown",
                                 initialItems: items,
@@ -190,9 +178,7 @@ struct PlexHomeView: View {
                                 },
                                 onRefreshNeeded: {
                                     await dataStore.refreshHubs()
-                                },
-                                focusTrigger: index == 0 ? focusTrigger : nil,  // First row gets focus trigger
-                                focusMemoryIndex: focusMemoryBinding(for: focusKey)
+                                }
                             )
                         }
                     }
@@ -206,47 +192,6 @@ struct PlexHomeView: View {
         .ignoresSafeArea(edges: .top)
         .defaultFocus($isHeroPlayButtonFocused, true)  // Set initial focus to hero play button
         #endif
-        .onChange(of: contentFocusVersion) { _, _ in
-            if let key = firstRowFocusKey {
-                rowFocusMemory[key] = 0
-            }
-            if showHomeHero, heroItem != nil {
-                shouldForceFirstRowFocus = true
-                isHeroPlayButtonFocused = false
-                DispatchQueue.main.async {
-                    isHeroPlayButtonFocused = true
-                }
-            } else if showHomeHero {
-                shouldForceFirstRowFocus = true
-                shouldRestoreHeroFocus = true
-            } else {
-                // Trigger first row to claim focus when sidebar closes
-                focusTrigger += 1
-            }
-        }
-        .onChange(of: heroItem) { _, newValue in
-            if shouldRestoreHeroFocus, newValue != nil {
-                isHeroPlayButtonFocused = true
-                shouldRestoreHeroFocus = false
-            }
-        }
-    }
-
-    private var firstRowFocusKey: String? {
-        guard let firstHub = processedHubs.first else { return nil }
-        return focusMemoryKey(for: firstHub, index: 0)
-    }
-
-    private func focusMemoryKey(for hub: PlexHub, index: Int) -> String {
-        let base = hub.hubIdentifier ?? hub.hubKey ?? hub.key ?? hub.title ?? "row-\(index)"
-        return "home.\(base)"
-    }
-
-    private func focusMemoryBinding(for key: String) -> Binding<Int?> {
-        Binding(
-            get: { rowFocusMemory[key] },
-            set: { rowFocusMemory[key] = $0 }
-        )
     }
 
     // MARK: - Loading View
@@ -348,7 +293,6 @@ struct HeroView<FocusTarget: Hashable>: View {
     let serverURL: String
     let authToken: String
     let onSelect: () -> Void
-    let onMoveDown: (() -> Void)?
 
     // Focus binding - supports both Bool and enum-based patterns
     private let focusBinding: FocusBinding<FocusTarget>
@@ -364,14 +308,12 @@ struct HeroView<FocusTarget: Hashable>: View {
         serverURL: String,
         authToken: String,
         isPlayButtonFocused: FocusState<Bool>.Binding,
-        onMoveDown: (() -> Void)? = nil,
         onSelect: @escaping () -> Void
     ) where FocusTarget == Bool {
         self.item = item
         self.serverURL = serverURL
         self.authToken = authToken
         self.focusBinding = .bool(isPlayButtonFocused)
-        self.onMoveDown = onMoveDown
         self.onSelect = onSelect
     }
 
@@ -382,14 +324,12 @@ struct HeroView<FocusTarget: Hashable>: View {
         authToken: String,
         focusTarget: FocusState<FocusTarget?>.Binding,
         targetValue: FocusTarget,
-        onMoveDown: (() -> Void)? = nil,
         onSelect: @escaping () -> Void
     ) {
         self.item = item
         self.serverURL = serverURL
         self.authToken = authToken
         self.focusBinding = .enumTarget(focusTarget, targetValue)
-        self.onMoveDown = onMoveDown
         self.onSelect = onSelect
     }
 
@@ -538,11 +478,6 @@ struct HeroView<FocusTarget: Hashable>: View {
             }
             .buttonStyle(.plain)
             .focused(binding)
-            .onMoveCommand { direction in
-                if direction == .down {
-                    onMoveDown?()
-                }
-            }
             .frame(height: 750)
             .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
             .padding(.horizontal, 48)
@@ -563,11 +498,6 @@ struct HeroView<FocusTarget: Hashable>: View {
             }
             .buttonStyle(.plain)
             .focused(binding, equals: target)
-            .onMoveCommand { direction in
-                if direction == .down {
-                    onMoveDown?()
-                }
-            }
             .frame(height: 750)
             .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
             .padding(.horizontal, 48)
@@ -616,7 +546,7 @@ struct ContentRow: View {
 
             // Horizontal scroll of posters
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 24) {
+                HStack(spacing: 24) {
                     ForEach(items, id: \.ratingKey) { item in
                         Button {
                             onItemSelected?(item)
@@ -627,7 +557,11 @@ struct ContentRow: View {
                                 authToken: authToken
                             )
                         }
+                        #if os(tvOS)
                         .buttonStyle(CardButtonStyle())
+                        #else
+                        .buttonStyle(.plain)
+                        #endif
                     }
                 }
                 .padding(.horizontal, 80)
@@ -650,11 +584,8 @@ struct InfiniteContentRow: View {
     var contextMenuSource: MediaItemContextSource = .other
     var onItemSelected: ((PlexMetadata) -> Void)?
     var onRefreshNeeded: MediaItemRefreshCallback?
-    var focusTrigger: Int? = nil  // When non-nil and changes, focus first item
-    var focusMemoryIndex: Binding<Int?>? = nil
 
     @Environment(\.openSidebar) private var openSidebar
-    @FocusState private var focusedIndex: Int?
 
     @State private var items: [PlexMetadata] = []
     @State private var isLoadingMore = false
@@ -698,7 +629,7 @@ struct InfiniteContentRow: View {
 
             // Horizontal scroll of posters with infinite loading
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 24) {
+                HStack(spacing: 24) {
                     ForEach(Array(items.enumerated()), id: \.element.ratingKey) { index, item in
                         Button {
                             onItemSelected?(item)
@@ -709,9 +640,12 @@ struct InfiniteContentRow: View {
                                 authToken: authToken
                             )
                         }
+                        #if os(tvOS)
                         .buttonStyle(CardButtonStyle())
-                        .focused($focusedIndex, equals: index)
                         .modifier(LeftEdgeSidebarTrigger(isFirstItem: index == 0, openSidebar: openSidebar))
+                        #else
+                        .buttonStyle(.plain)
+                        #endif
                         .mediaItemContextMenu(
                             item: item,
                             serverURL: serverURL,
@@ -755,37 +689,7 @@ struct InfiniteContentRow: View {
             items = initialItems
             hasReachedEnd = false
         }
-        .onChange(of: focusTrigger) { _, newValue in
-            // Focus first item when trigger changes (sidebar closed)
-            if newValue != nil {
-                setFocusedIndexWithoutAnimation(0)
-            }
-        }
-        .onChange(of: focusedIndex) { _, newValue in
-            if let newValue {
-                focusMemoryIndex?.wrappedValue = newValue
-            }
-        }
         .focusSection()
-        #if os(tvOS)
-        .defaultFocus($focusedIndex, defaultFocusIndex)
-        #endif
-    }
-
-    private func setFocusedIndexWithoutAnimation(_ index: Int?) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            focusedIndex = index
-        }
-    }
-
-    private var defaultFocusIndex: Int {
-        if let storedIndex = focusMemoryIndex?.wrappedValue,
-           items.indices.contains(storedIndex) {
-            return storedIndex
-        }
-        return 0
     }
 
     private var loadingIndicator: some View {

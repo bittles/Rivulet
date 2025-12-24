@@ -147,8 +147,6 @@ struct CastCrewRow: View {
     let writers: [PlexCrewMember]
     let serverURL: String
     let authToken: String
-    var focusTrigger: Int? = nil  // When non-nil and changes, focus first person
-    var onMoveUp: (() -> Void)? = nil
 
     // Use @FocusState instead of prefersDefaultFocus (which is broken in ScrollView)
     @FocusState private var focusedPersonId: String?
@@ -174,7 +172,7 @@ struct CastCrewRow: View {
                 .padding(.horizontal, 48)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 24) {
+                HStack(spacing: 24) {
                     // Directors first
                     ForEach(directors) { director in
                         Button { } label: {
@@ -190,12 +188,6 @@ struct CastCrewRow: View {
                         #if os(tvOS)
                         .buttonStyle(CardButtonStyle())
                         .focused($focusedPersonId, equals: director.id)
-                        .onMoveCommand { direction in
-                            if direction == .up, let onMoveUp {
-                                focusedPersonId = nil
-                                onMoveUp()
-                            }
-                        }
                         #else
                         .buttonStyle(.plain)
                         #endif
@@ -215,12 +207,6 @@ struct CastCrewRow: View {
                         #if os(tvOS)
                         .buttonStyle(CardButtonStyle())
                         .focused($focusedPersonId, equals: actor.id)
-                        .onMoveCommand { direction in
-                            if direction == .up, let onMoveUp {
-                                focusedPersonId = nil
-                                onMoveUp()
-                            }
-                        }
                         #else
                         .buttonStyle(.plain)
                         #endif
@@ -242,12 +228,6 @@ struct CastCrewRow: View {
                             #if os(tvOS)
                             .buttonStyle(CardButtonStyle())
                             .focused($focusedPersonId, equals: writer.id)
-                            .onMoveCommand { direction in
-                                if direction == .up, let onMoveUp {
-                                    focusedPersonId = nil
-                                    onMoveUp()
-                                }
-                            }
                             #else
                             .buttonStyle(.plain)
                             #endif
@@ -259,24 +239,11 @@ struct CastCrewRow: View {
             }
             .scrollClipDisabled()
         }
-        .onChange(of: focusTrigger) { _, newValue in
-            if newValue != nil {
-                setFocusedPersonWithoutAnimation(firstPersonId)
-            }
-        }
         .focusSection()
         #if os(tvOS)
         // defaultFocus sets which item receives focus when this section becomes focused
         .defaultFocus($focusedPersonId, firstPersonId)
         #endif
-    }
-
-    private func setFocusedPersonWithoutAnimation(_ personId: String?) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            focusedPersonId = personId
-        }
     }
 }
 

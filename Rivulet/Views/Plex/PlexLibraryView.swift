@@ -12,7 +12,6 @@ struct PlexLibraryView: View {
     let libraryKey: String
     let libraryTitle: String
 
-    @Environment(\.contentFocusVersion) private var contentFocusVersion
     @Environment(\.openSidebar) private var openSidebar
     @Environment(\.nestedNavigationState) private var nestedNavState
 
@@ -27,19 +26,15 @@ struct PlexLibraryView: View {
     @State private var error: String?
     @State private var selectedItem: PlexMetadata?
     @State private var heroItem: PlexMetadata?
-    @State private var focusTrigger = 0  // Increment to trigger first row focus
     @State private var lastLoadedLibraryKey: String?  // Track which library is currently loaded
     @State private var hasPrefetched = false  // Track if we've already prefetched for this library
     @State private var hasMoreItems = true  // Whether there are more items to load
     @State private var totalItemCount: Int = 0  // Total items in this library
-    @State private var shouldRestoreFocus = false  // Flag to trigger focus restoration
     @State private var cachedProcessedHubs: [PlexHub] = []  // Memoized hubs to avoid recalculation
     @State private var loadingTask: Task<Void, Never>?  // Track current loading task for cancellation
-    @State private var curatedRowFocusMemory: [String: String] = [:]
 
     #if os(tvOS)
     @FocusState private var isHeroFocused: Bool  // Hero button focus state
-    @FocusState private var focusedGridIndex: Int?  // Grid focus state
     @State private var lastPrefetchIndex: Int = -18  // Track last prefetch position for throttling
     #endif
 
@@ -58,7 +53,7 @@ struct PlexLibraryView: View {
 
     // MARK: - Processed Hubs (merged Continue Watching + On Deck)
 
-    /// Essential hub types that are always shown
+    /// Essential hub types that are always shown (Continue Watching, Recently Added, Recently Released)
     private func isEssentialHub(_ hub: PlexHub) -> Bool {
         let identifier = hub.hubIdentifier?.lowercased() ?? ""
         let title = hub.title?.lowercased() ?? ""
@@ -81,6 +76,16 @@ struct PlexLibraryView: View {
         }
 
         return false
+    }
+
+    /// Essential hubs only (Continue Watching, Recently Added, Recently Released)
+    private var essentialHubs: [PlexHub] {
+        cachedProcessedHubs.filter { isEssentialHub($0) }
+    }
+
+    /// Discovery/recommendation hubs (Rediscover, Because you watched, etc.)
+    private var discoveryHubs: [PlexHub] {
+        cachedProcessedHubs.filter { !isEssentialHub($0) }
     }
 
     /// Processes hubs to combine Continue Watching and On Deck, similar to PlexHomeView
@@ -111,11 +116,8 @@ struct PlexLibraryView: View {
                     }
                 }
             } else {
-                // Filter: always show essential hubs, others only if setting enabled
-                let isEssential = isEssentialHub(hub)
-                if isEssential || showLibraryRecommendations {
-                    result.append(hub)
-                }
+                // Include all non-continue-watching hubs
+                result.append(hub)
             }
         }
 
@@ -166,6 +168,10 @@ struct PlexLibraryView: View {
 
                 if authManager.isAuthenticated {
                     if isNewLibrary {
+                        // IMMEDIATELY update hero and clear hubs to prevent stale content flash
+                        hubs = []  // Clear hubs first so essentialHubs is empty
+                        heroItem = dataStore.getCachedHero(forLibrary: libraryKey)  // Load cached hero immediately (sync)
+
                         // Reset state for new library
                         hasPrefetched = false
                         hasMoreItems = true
@@ -177,29 +183,21 @@ struct PlexLibraryView: View {
                         if !cachedItems.isEmpty {
                             // Atomic swap: replace items and select new hero in one go
                             items = cachedItems
-                            hubs = []  // Clear hubs, they'll load in background
                             lastLoadedLibraryKey = libraryKey
-                            selectHeroItemFromCurrentData()
 
-                            // Trigger focus restoration after a brief delay for view to settle
-                            #if os(tvOS)
-                            shouldRestoreFocus = true
-                            #endif
+                            // Only select hero if we don't have a cached one
+                            if heroItem == nil {
+                                selectHeroItemFromCurrentData()
+                            }
 
                             // Refresh in background silently
                             await loadItemsInBackground()
                         } else {
                             // No cache - need to show loading state
                             items = []
-                            hubs = []
-                            heroItem = nil
                             lastLoadedLibraryKey = libraryKey
                             await loadItems()
 
-                            // Trigger focus restoration after initial load
-                            #if os(tvOS)
-                            shouldRestoreFocus = true
-                            #endif
                         }
                     } else {
                         // Same library - just refresh in background
@@ -241,8 +239,9 @@ struct PlexLibraryView: View {
     private var contentView: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 0) {
-                curatedRowsView
+                essentialRowsView
                 heroSectionView
+                discoveryRowsView
                 librarySectionHeader
                 libraryGridView
 
@@ -274,40 +273,12 @@ struct PlexLibraryView: View {
                 selectHeroItem()
             }
             handleItemsCountChange(oldCount: oldCount, newCount: newCount)
-            #if os(tvOS)
-            if shouldRestoreFocus && newCount > 0 {
-                restoreFocusPosition()
-                shouldRestoreFocus = false
-            }
-            #endif
         }
         .onChange(of: hubs.count) { _, _ in
             // Recompute cached hubs (memoization) and reselect hero
             cachedProcessedHubs = computeProcessedHubs(from: hubs)
             selectHeroItem()
         }
-        .onChange(of: contentFocusVersion) { _, _ in
-            // Restore focus when sidebar closes
-            #if os(tvOS)
-            shouldRestoreFocus = true
-            if let key = firstCuratedRowFocusKey {
-                curatedRowFocusMemory[key] = cachedProcessedHubs.first?.Metadata?.first?.ratingKey
-            }
-            if !items.isEmpty {
-                restoreFocusAfterSidebar()
-                shouldRestoreFocus = false
-            }
-            #endif
-        }
-        #if os(tvOS)
-        .onChange(of: shouldRestoreFocus) { _, shouldRestore in
-            // Restore focus when flag is set
-            if shouldRestore && !items.isEmpty {
-                restoreFocusPosition()
-                shouldRestoreFocus = false
-            }
-        }
-        #endif
     }
 
     // MARK: - Hero Selection
@@ -349,38 +320,32 @@ struct PlexLibraryView: View {
     @ViewBuilder
     private var heroSectionView: some View {
         #if os(tvOS)
-        if showLibraryHero, let hero = heroItem {
+        // Only show hero when there are essential rows above it (prevents flash at top during library switch)
+        if showLibraryHero, let hero = heroItem, !essentialHubs.isEmpty {
             HeroView(
                 item: hero,
                 serverURL: authManager.selectedServerURL ?? "",
                 authToken: authManager.authToken ?? "",
-                isPlayButtonFocused: $isHeroFocused,
-                onMoveDown: {
-                    // Move to grid when pressing down from hero
-                    if !items.isEmpty {
-                        setGridFocusWithoutAnimation(0)
-                    }
-                }
+                isPlayButtonFocused: $isHeroFocused
             ) {
                 selectedItem = hero
             }
             .id("hero-\(libraryKey)-\(hero.ratingKey ?? "")")
-            .padding(.top, cachedProcessedHubs.isEmpty ? 0 : 48)
+            .padding(.top, 48)
         }
         #endif
     }
 
-    // MARK: - Curated Rows View
+    // MARK: - Essential Rows View (Continue Watching, Recently Added, Recently Released)
 
     @ViewBuilder
-    private var curatedRowsView: some View {
-        if !cachedProcessedHubs.isEmpty {
+    private var essentialRowsView: some View {
+        if !essentialHubs.isEmpty {
             VStack(alignment: .leading, spacing: 40) {
-                ForEach(Array(cachedProcessedHubs.enumerated()), id: \.element.hubIdentifier) { index, hub in
+                ForEach(essentialHubs, id: \.hubIdentifier) { hub in
                     if let hubItems = hub.Metadata, !hubItems.isEmpty {
                         let isContinueWatching = hub.hubIdentifier?.lowercased().contains("continuewatching") == true ||
                                                  hub.title?.lowercased().contains("continue watching") == true
-                        let focusKey = curatedRowFocusKey(for: hub, index: index)
                         MediaRow(
                             title: hub.title ?? "Untitled",
                             items: hubItems,
@@ -392,16 +357,14 @@ struct PlexLibraryView: View {
                             },
                             onRefreshNeeded: {
                                 await refresh()
-                            },
-                            focusTrigger: index == 0 ? focusTrigger : nil,
-                            focusMemoryItemId: curatedRowFocusBinding(for: focusKey)
+                            }
                         )
                     }
                 }
             }
             #if os(tvOS)
             .padding(.horizontal, 80)
-            .padding(.top, 100)  // Extra top padding since curated rows are now first
+            .padding(.top, 100)  // Extra top padding since essential rows are first
             #else
             .padding(.horizontal, 40)
             .padding(.top, 24)
@@ -409,21 +372,38 @@ struct PlexLibraryView: View {
         }
     }
 
-    private var firstCuratedRowFocusKey: String? {
-        guard let firstHub = cachedProcessedHubs.first else { return nil }
-        return curatedRowFocusKey(for: firstHub, index: 0)
-    }
+    // MARK: - Discovery Rows View (Rediscover, Recommendations, etc.)
 
-    private func curatedRowFocusKey(for hub: PlexHub, index: Int) -> String {
-        let base = hub.hubIdentifier ?? hub.hubKey ?? hub.key ?? hub.title ?? "row-\(index)"
-        return "\(libraryKey).\(base)"
-    }
-
-    private func curatedRowFocusBinding(for key: String) -> Binding<String?> {
-        Binding(
-            get: { curatedRowFocusMemory[key] },
-            set: { curatedRowFocusMemory[key] = $0 }
-        )
+    @ViewBuilder
+    private var discoveryRowsView: some View {
+        if showLibraryRecommendations && !discoveryHubs.isEmpty {
+            VStack(alignment: .leading, spacing: 40) {
+                ForEach(discoveryHubs, id: \.hubIdentifier) { hub in
+                    if let hubItems = hub.Metadata, !hubItems.isEmpty {
+                        MediaRow(
+                            title: hub.title ?? "Untitled",
+                            items: hubItems,
+                            serverURL: authManager.selectedServerURL ?? "",
+                            authToken: authManager.authToken ?? "",
+                            contextMenuSource: .library,
+                            onItemSelected: { item in
+                                selectedItem = item
+                            },
+                            onRefreshNeeded: {
+                                await refresh()
+                            }
+                        )
+                    }
+                }
+            }
+            #if os(tvOS)
+            .padding(.horizontal, 80)
+            .padding(.top, 48)
+            #else
+            .padding(.horizontal, 40)
+            .padding(.top, 24)
+            #endif
+        }
     }
 
     // MARK: - Library Section Header
@@ -487,7 +467,6 @@ struct PlexLibraryView: View {
         }
         #if os(tvOS)
         .buttonStyle(CardButtonStyle())
-        .focused($focusedGridIndex, equals: index)
         .modifier(LeftEdgeSidebarTrigger(isFirstItem: index % 6 == 0, openSidebar: openSidebar))
         .onAppear {
             // Trigger loading more items when nearing the end
@@ -855,42 +834,6 @@ struct PlexLibraryView: View {
     // MARK: - Focus Management
 
     #if os(tvOS)
-    /// Restore focus to hero when content loads
-    private func restoreFocusPosition() {
-        guard !items.isEmpty || !cachedProcessedHubs.isEmpty else { return }
-
-        if heroItem == nil {
-            selectHeroItem()
-        }
-
-        // Focus first content: curated rows first, then hero, then grid
-        focusFirstContentItem()
-    }
-
-    /// Restore focus after returning from sidebar
-    private func restoreFocusAfterSidebar() {
-        focusFirstContentItem()
-    }
-
-    private func focusFirstContentItem() {
-        // Priority: curated rows > hero > grid
-        if !cachedProcessedHubs.isEmpty {
-            focusTrigger += 1
-        } else if showLibraryHero && heroItem != nil {
-            isHeroFocused = true
-        } else if !items.isEmpty {
-            setGridFocusWithoutAnimation(0)
-        }
-    }
-
-    private func setGridFocusWithoutAnimation(_ index: Int?) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            focusedGridIndex = index
-        }
-    }
-
     /// Prefetch poster images for visible and upcoming items
     private func prefetchImages() {
         guard !items.isEmpty,
