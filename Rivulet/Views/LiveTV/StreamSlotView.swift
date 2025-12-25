@@ -11,6 +11,7 @@ struct StreamSlotView: View {
     let slot: MultiStreamViewModel.StreamSlot
     let index: Int
     let isFocused: Bool
+    var showBorder: Bool = true
     let onControllerReady: (MPVMetalViewController) -> Void
 
     @State private var playerController: MPVMetalViewController?
@@ -35,33 +36,35 @@ struct StreamSlotView: View {
                 )
             }
 
-            // Focus border
-            if isFocused {
+            // Focus border (only in grid mode)
+            if isFocused && showBorder {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(Color.white, lineWidth: 4)
                     .shadow(color: .white.opacity(0.3), radius: 8)
             }
 
-            // Mini channel badge (bottom-left, always visible)
-            VStack {
-                Spacer()
-                HStack {
-                    miniChannelBadge
-                    Spacer()
-                }
-            }
-            .padding(12)
-
-            // Muted indicator (top-right, when not focused)
-            if slot.isMuted && !isFocused {
+            // Mini channel badge (only in grid mode)
+            if showBorder {
                 VStack {
-                    HStack {
-                        Spacer()
-                        mutedIndicator
-                    }
                     Spacer()
+                    HStack {
+                        miniChannelBadge
+                        Spacer()
+                    }
                 }
                 .padding(12)
+
+                // Muted indicator (top-right, when not focused)
+                if slot.isMuted && !isFocused {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            mutedIndicator
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                }
             }
 
             // Loading/buffering overlay
@@ -74,7 +77,7 @@ struct StreamSlotView: View {
                 errorOverlay
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: showBorder ? 8 : 0, style: .continuous))
         .onChange(of: playerController) { _, controller in
             if let controller = controller {
                 onControllerReady(controller)

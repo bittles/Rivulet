@@ -37,21 +37,18 @@ struct ChannelPickerSheet: View {
             // Dimmed background
             Color.black.opacity(0.85)
                 .ignoresSafeArea()
-                .onTapGesture {
-                    onDismiss()
-                }
 
             // Sheet content
             VStack(spacing: 0) {
-                // Header
+                // Header with close button
                 header
-                    .padding(.horizontal, 60)
-                    .padding(.top, 50)
-                    .padding(.bottom, 24)
+                    .padding(.horizontal, 40)
+                    .padding(.top, 30)
+                    .padding(.bottom, 16)
 
                 // Channel grid
                 ScrollView(.vertical, showsIndicators: false) {
-                    LazyVGrid(columns: gridColumns, spacing: 20) {
+                    LazyVGrid(columns: gridColumns, spacing: 12) {
                         ForEach(filteredChannels) { channel in
                             PickerChannelCard(
                                 channel: channel,
@@ -59,40 +56,41 @@ struct ChannelPickerSheet: View {
                             ) {
                                 onSelect(channel)
                             }
-                            .focusable()
                             .focused($focusedChannelId, equals: channel.id)
                         }
                     }
-                    .padding(.horizontal, 60)
-                    .padding(.bottom, 60)
+                    .padding(.horizontal, 40)
+                    .padding(.bottom, 40)
                 }
             }
             .background(
-                RoundedRectangle(cornerRadius: 32, style: .continuous)
-                    .fill(Color(white: 0.1))
-                    .ignoresSafeArea()
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(Color(white: 0.12))
             )
-            .padding(.horizontal, 120)
-            .padding(.vertical, 80)
+            .padding(.horizontal, 80)
+            .padding(.vertical, 40)
         }
-        #if os(tvOS)
-        .onExitCommand {
-            onDismiss()
+        .onAppear {
+            // Focus the first channel on appear
+            if let firstChannel = filteredChannels.first {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    focusedChannelId = firstChannel.id
+                }
+            }
         }
-        #endif
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 8) {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Add Channel")
-                    .font(.system(size: 40, weight: .bold))
+                    .font(.system(size: 32, weight: .bold))
                     .foregroundStyle(.white)
 
                 Text("\(availableChannels.count) channels available")
-                    .font(.system(size: 20))
+                    .font(.system(size: 16))
                     .foregroundStyle(.white.opacity(0.5))
             }
 
@@ -103,16 +101,20 @@ struct ChannelPickerSheet: View {
                 onDismiss()
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 36))
+                    .font(.system(size: 32))
                     .foregroundStyle(.white.opacity(0.6))
             }
+            #if os(tvOS)
+            .buttonStyle(.card)
+            #else
             .buttonStyle(.plain)
+            #endif
         }
     }
 
     private var gridColumns: [GridItem] {
         [
-            GridItem(.adaptive(minimum: 240, maximum: 300), spacing: 20)
+            GridItem(.adaptive(minimum: 400, maximum: 500), spacing: 16)
         ]
     }
 }
@@ -132,10 +134,10 @@ private struct PickerChannelCard: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 16) {
+            HStack(spacing: 14) {
                 // Logo
                 ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(Color(white: 0.2))
 
                     if let logoURL = channel.logoURL {
@@ -145,7 +147,7 @@ private struct PickerChannelCard: View {
                                 image
                                     .resizable()
                                     .aspectRatio(contentMode: .fit)
-                                    .padding(12)
+                                    .padding(8)
                             default:
                                 channelPlaceholder
                             }
@@ -154,69 +156,84 @@ private struct PickerChannelCard: View {
                         channelPlaceholder
                     }
                 }
-                .frame(width: 80, height: 60)
+                .frame(width: 70, height: 52)
 
-                // Info
+                // Info - takes all available space
                 VStack(alignment: .leading, spacing: 4) {
+                    // Channel number and name
                     HStack(spacing: 8) {
                         if let number = channel.channelNumber {
                             Text("\(number)")
-                                .font(.system(size: 16, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.5))
+                                .font(.system(size: 18, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.6))
+                                .frame(minWidth: 30, alignment: .leading)
                         }
 
                         Text(channel.name)
-                            .font(.system(size: 18, weight: .semibold))
+                            .font(.system(size: 20, weight: .semibold))
                             .foregroundStyle(.white)
                             .lineLimit(1)
 
                         if channel.isHD {
                             Text("HD")
-                                .font(.system(size: 10, weight: .bold))
+                                .font(.system(size: 11, weight: .bold))
                                 .foregroundStyle(.black)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
                                 .background(
                                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                        .fill(.white.opacity(0.8))
+                                        .fill(.white.opacity(0.9))
                                 )
                         }
                     }
 
+                    // Program info
                     if let program = currentProgram {
                         Text(program.title)
-                            .font(.system(size: 14))
+                            .font(.system(size: 15))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .lineLimit(1)
+                    } else if let callSign = channel.callSign {
+                        Text(callSign)
+                            .font(.system(size: 15))
                             .foregroundStyle(.white.opacity(0.5))
                             .lineLimit(1)
                     }
                 }
 
-                Spacer()
+                Spacer(minLength: 8)
 
                 // Add indicator
-                Image(systemName: "plus.circle")
-                    .font(.system(size: 24))
-                    .foregroundStyle(.white.opacity(isFocused ? 0.8 : 0.3))
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(isFocused ? .green : .white.opacity(0.3))
             }
-            .padding(16)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
             .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(isFocused ? .white.opacity(0.2) : .white.opacity(0.05))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(isFocused ? .white.opacity(0.5) : .clear, lineWidth: 2)
-                    )
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isFocused ? .white.opacity(0.15) : .white.opacity(0.05))
             )
         }
-        .buttonStyle(.plain)
-        .scaleEffect(isFocused ? 1.02 : 1.0)
-        .animation(.easeOut(duration: 0.15), value: isFocused)
+        .buttonStyle(PickerCardButtonStyle(isFocused: isFocused))
     }
 
     private var channelPlaceholder: some View {
         Image(systemName: "tv")
-            .font(.system(size: 24, weight: .light))
+            .font(.system(size: 20, weight: .light))
             .foregroundStyle(.white.opacity(0.3))
+    }
+}
+
+// MARK: - Picker Card Button Style
+
+private struct PickerCardButtonStyle: ButtonStyle {
+    let isFocused: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(isFocused ? 1.02 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: isFocused)
     }
 }
 

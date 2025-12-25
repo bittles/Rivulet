@@ -10,8 +10,9 @@ import SwiftUI
 struct PlayerControlsOverlay: View {
     @ObservedObject var viewModel: UniversalPlayerViewModel
 
-    @State private var showInfoPanel = false
     @State private var selectedInfoTab: InfoTab = .info
+    @FocusState private var focusedTab: InfoTab?
+    @Namespace private var infoPanelNamespace
 
     enum InfoTab: String, CaseIterable {
         case info = "Info"
@@ -27,23 +28,20 @@ struct PlayerControlsOverlay: View {
                 transportBar
             }
 
-            // Info panel overlay (swipe down to show)
-            if showInfoPanel {
+            // Info panel overlay (controlled by viewModel)
+            if viewModel.showInfoPanel {
                 infoPanel
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        #if os(tvOS)
-        .onMoveCommand { direction in
-            handleMoveCommand(direction)
+        .onChange(of: viewModel.showInfoPanel) { _, showPanel in
+            if showPanel {
+                // Set focus state - prefersDefaultFocus will handle initial focus
+                focusedTab = .info
+            } else {
+                focusedTab = nil
+            }
         }
-        .onExitCommand {
-            handleExitCommand()
-        }
-        .onPlayPauseCommand {
-            viewModel.togglePlayPause()
-        }
-        #endif
     }
 
     // MARK: - Transport Bar (Bottom)
@@ -77,14 +75,14 @@ struct PlayerControlsOverlay: View {
             }
             .padding(.horizontal, 80)
 
-            // Progress bar
+            // Progress bar with scrubbing support
             TransportProgressBar(
                 currentTime: viewModel.currentTime,
                 duration: viewModel.duration,
-                isFocused: false,
-                onSeek: { time in
-                    Task { await viewModel.seek(to: time) }
-                }
+                isScrubbing: viewModel.isScrubbing,
+                scrubTime: viewModel.scrubTime,
+                scrubSpeed: viewModel.scrubSpeed,
+                scrubThumbnail: viewModel.scrubThumbnail
             )
             .padding(.horizontal, 80)
             .padding(.bottom, 50)
@@ -104,63 +102,78 @@ struct PlayerControlsOverlay: View {
 
     private var infoPanel: some View {
         VStack(spacing: 0) {
-            // Panel content
-            VStack(spacing: 24) {
-                // Close indicator
-                Capsule()
-                    .fill(.white.opacity(0.4))
-                    .frame(width: 40, height: 4)
-                    .padding(.top, 12)
-
-                // Tab selector
-                HStack(spacing: 32) {
-                    ForEach(InfoTab.allCases, id: \.self) { tab in
-                        InfoTabButton(
-                            title: tab.rawValue,
-                            isSelected: selectedInfoTab == tab,
-                            isEnabled: isTabEnabled(tab)
-                        ) {
-                            if isTabEnabled(tab) {
-                                selectedInfoTab = tab
-                            }
-                        }
+            // Tab bar
+            HStack(spacing: 16) {
+                ForEach(availableTabs, id: \.self) { tab in
+                    Button {
+                        selectedInfoTab = tab
+                    } label: {
+                        Text(tab.rawValue)
+                            .font(.body)
+                            .fontWeight(selectedInfoTab == tab ? .semibold : .medium)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 12)
                     }
+                    .buttonStyle(.card)
+                    .focusable()
+                    .focused($focusedTab, equals: tab)
+                    .prefersDefaultFocus(tab == .info, in: infoPanelNamespace)
                 }
-                .padding(.horizontal, 60)
-
-                // Tab content
-                Group {
-                    switch selectedInfoTab {
-                    case .info:
-                        infoTabContent
-                    case .audio:
-                        audioTabContent
-                    case .subtitles:
-                        subtitlesTabContent
-                    }
-                }
-                .frame(maxWidth: .infinity, minHeight: 200)
-                .padding(.horizontal, 60)
-                .padding(.bottom, 40)
             }
-            .background(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .ignoresSafeArea()
-            )
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24))
+            .padding(.top, 24)
+            .padding(.bottom, 16)
 
-            Spacer()
+            // Tab content
+            Group {
+                switch selectedInfoTab {
+                case .info:
+                    infoTabContent
+                case .audio:
+                    audioTabContent
+                case .subtitles:
+                    subtitlesTabContent
+                }
+            }
+            .padding(.horizontal, 32)
+            .padding(.bottom, 24)
         }
-        .padding(.top, 60)
+        .focusScope(infoPanelNamespace)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 80)  // 80pt on each side ≈ 90% width on 1920px screen
+        .background {
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .padding(.horizontal, 80)
+        }
+        .padding(.top, 48)  // Same margin as sidebar from left
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        #if os(tvOS)
+        .onExitCommand {
+            // Close info panel when pressing back/menu
+            withAnimation(.easeOut(duration: 0.3)) {
+                viewModel.showInfoPanel = false
+            }
+        }
+        #endif
+    }
+
+    private var availableTabs: [InfoTab] {
+        var tabs: [InfoTab] = [.info]
+        // Show audio tab if there are multiple audio tracks to choose from
+        if viewModel.audioTracks.count > 1 {
+            tabs.append(.audio)
+        }
+        // Always show subtitles tab - user can turn them on/off
+        tabs.append(.subtitles)
+        return tabs
     }
 
     // MARK: - Info Tab Content
 
     private var infoTabContent: some View {
         HStack(alignment: .top, spacing: 40) {
-            // Metadata
-            VStack(alignment: .leading, spacing: 16) {
+            // Left side: Title and description
+            VStack(alignment: .leading, spacing: 12) {
                 Text(viewModel.title)
                     .font(.title2)
                     .fontWeight(.bold)
@@ -172,53 +185,64 @@ struct PlayerControlsOverlay: View {
                         .foregroundStyle(.white.opacity(0.7))
                 }
 
-                // Runtime
-                if viewModel.duration > 0 {
-                    Text(formatDuration(viewModel.duration))
-                        .font(.subheadline)
+                // Summary/description if available
+                if let summary = viewModel.metadata.summary, !summary.isEmpty {
+                    Text(summary)
+                        .font(.callout)
                         .foregroundStyle(.white.opacity(0.6))
+                        .lineLimit(3)
+                        .padding(.top, 4)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
-
-            // Current track info
-            VStack(alignment: .trailing, spacing: 12) {
-                if let audioTrack = currentAudioTrack {
-                    Label(audioTrack.displayName, systemImage: "speaker.wave.2")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.7))
+            // Right side: Technical info
+            VStack(alignment: .trailing, spacing: 8) {
+                // Video info
+                if let videoInfo = videoInfoString {
+                    InfoBadge(icon: "film", text: videoInfo)
                 }
 
-                if let subtitleTrack = currentSubtitleTrack {
-                    Label(subtitleTrack.displayName, systemImage: "captions.bubble")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.7))
-                } else if !viewModel.subtitleTracks.isEmpty {
-                    Label("Off", systemImage: "captions.bubble")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.5))
+                // HDR badge
+                if let hdrInfo = hdrInfoString {
+                    InfoBadge(icon: "sparkles", text: hdrInfo, highlight: true)
+                }
+
+                // Audio info
+                if let audioInfo = audioInfoString {
+                    InfoBadge(icon: "speaker.wave.2", text: audioInfo)
+                }
+
+                // File info
+                if let fileInfo = fileInfoString {
+                    InfoBadge(icon: "doc", text: fileInfo)
+                }
+
+                // Duration/Runtime
+                if viewModel.duration > 0 {
+                    InfoBadge(icon: "clock", text: formatDuration(viewModel.duration))
                 }
             }
         }
+        .padding(.vertical, 8)
     }
 
     // MARK: - Audio Tab Content
 
     private var audioTabContent: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 16) {
+            HStack(spacing: 12) {
                 ForEach(viewModel.audioTracks) { track in
-                    TrackCard(
-                        title: track.displayName,
-                        subtitle: track.codec?.uppercased(),
+                    TrackButton(
+                        title: track.name,
+                        subtitle: formatAudioTrackInfo(track),
                         isSelected: track.id == viewModel.currentAudioTrackId
                     ) {
                         viewModel.selectAudioTrack(id: track.id)
                     }
                 }
             }
-            .padding(.horizontal, 4)
+            .padding(.vertical, 8)
         }
     }
 
@@ -226,47 +250,187 @@ struct PlayerControlsOverlay: View {
 
     private var subtitlesTabContent: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 16) {
+            HStack(spacing: 12) {
                 // Off option
-                TrackCard(
+                TrackButton(
                     title: "Off",
-                    subtitle: nil,
+                    subtitle: "Disabled",
                     isSelected: viewModel.currentSubtitleTrackId == nil
                 ) {
                     viewModel.selectSubtitleTrack(id: nil)
                 }
 
                 ForEach(viewModel.subtitleTracks) { track in
-                    TrackCard(
-                        title: track.displayName,
-                        subtitle: track.codec?.uppercased(),
+                    TrackButton(
+                        title: track.name,
+                        subtitle: formatSubtitleTrackInfo(track),
                         isSelected: track.id == viewModel.currentSubtitleTrackId
                     ) {
                         viewModel.selectSubtitleTrack(id: track.id)
                     }
                 }
             }
-            .padding(.horizontal, 4)
+            .padding(.vertical, 8)
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Media Info Helpers
 
-    private func isTabEnabled(_ tab: InfoTab) -> Bool {
-        switch tab {
-        case .info: return true
-        case .audio: return viewModel.audioTracks.count > 1
-        case .subtitles: return !viewModel.subtitleTracks.isEmpty
+    private var videoInfoString: String? {
+        guard let media = viewModel.metadata.Media?.first else { return nil }
+        var parts: [String] = []
+
+        // Resolution
+        if let width = media.width, let height = media.height {
+            if height >= 2160 {
+                parts.append("4K")
+            } else if height >= 1080 {
+                parts.append("1080p")
+            } else if height >= 720 {
+                parts.append("720p")
+            } else {
+                parts.append("\(height)p")
+            }
+        } else if let res = media.videoResolution {
+            parts.append(res.uppercased())
         }
+
+        // Codec
+        if let codec = media.videoCodec?.uppercased() {
+            if codec.contains("HEVC") || codec.contains("H265") {
+                parts.append("HEVC")
+            } else if codec.contains("AVC") || codec.contains("H264") {
+                parts.append("H.264")
+            } else if codec.contains("AV1") {
+                parts.append("AV1")
+            } else {
+                parts.append(codec)
+            }
+        }
+
+        // Frame rate
+        if let fps = media.videoFrameRate {
+            if fps.contains("24") || fps.lowercased().contains("24p") {
+                parts.append("24fps")
+            } else if fps.contains("60") {
+                parts.append("60fps")
+            }
+        }
+
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    private var currentAudioTrack: MediaTrack? {
-        viewModel.audioTracks.first { $0.id == viewModel.currentAudioTrackId }
+    private var hdrInfoString: String? {
+        guard let streams = viewModel.metadata.Media?.first?.Part?.first?.Stream else { return nil }
+        let videoStream = streams.first { $0.isVideo }
+
+        var hdrParts: [String] = []
+
+        if videoStream?.isDolbyVision == true {
+            hdrParts.append("Dolby Vision")
+        } else if videoStream?.isHDR == true {
+            hdrParts.append("HDR10")
+        }
+
+        if let bitDepth = videoStream?.bitDepth, bitDepth >= 10 {
+            hdrParts.append("\(bitDepth)-bit")
+        }
+
+        return hdrParts.isEmpty ? nil : hdrParts.joined(separator: " · ")
     }
 
-    private var currentSubtitleTrack: MediaTrack? {
-        guard let id = viewModel.currentSubtitleTrackId else { return nil }
-        return viewModel.subtitleTracks.first { $0.id == id }
+    private var audioInfoString: String? {
+        guard let media = viewModel.metadata.Media?.first else { return nil }
+        var parts: [String] = []
+
+        // Codec
+        if let codec = media.audioCodec?.uppercased() {
+            if codec.contains("TRUEHD") {
+                parts.append("TrueHD")
+            } else if codec.contains("DTS") {
+                if codec.contains("HD") {
+                    parts.append("DTS-HD")
+                } else {
+                    parts.append("DTS")
+                }
+            } else if codec.contains("EAC3") || codec.contains("E-AC-3") {
+                parts.append("Dolby Digital+")
+            } else if codec.contains("AC3") {
+                parts.append("Dolby Digital")
+            } else if codec.contains("AAC") {
+                parts.append("AAC")
+            } else if codec.contains("FLAC") {
+                parts.append("FLAC")
+            } else {
+                parts.append(codec)
+            }
+        }
+
+        // Channels
+        if let channels = media.audioChannels {
+            if channels >= 8 {
+                parts.append("7.1")
+            } else if channels >= 6 {
+                parts.append("5.1")
+            } else if channels == 2 {
+                parts.append("Stereo")
+            } else if channels == 1 {
+                parts.append("Mono")
+            }
+        }
+
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private var fileInfoString: String? {
+        guard let part = viewModel.metadata.Media?.first?.Part?.first else { return nil }
+        var parts: [String] = []
+
+        // Container
+        if let container = part.container?.uppercased() {
+            parts.append(container)
+        }
+
+        // File size
+        if let size = part.size {
+            let gb = Double(size) / 1_000_000_000
+            if gb >= 1 {
+                parts.append(String(format: "%.1f GB", gb))
+            } else {
+                let mb = Double(size) / 1_000_000
+                parts.append(String(format: "%.0f MB", mb))
+            }
+        }
+
+        // Bitrate
+        if let bitrate = viewModel.metadata.Media?.first?.bitrate {
+            let mbps = Double(bitrate) / 1000
+            parts.append(String(format: "%.1f Mbps", mbps))
+        }
+
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func formatAudioTrackInfo(_ track: MediaTrack) -> String {
+        var parts: [String] = []
+        if let codec = track.codec?.uppercased() {
+            parts.append(codec)
+        }
+        if let lang = track.language {
+            parts.append(lang)
+        }
+        return parts.isEmpty ? "Audio" : parts.joined(separator: " · ")
+    }
+
+    private func formatSubtitleTrackInfo(_ track: MediaTrack) -> String {
+        var parts: [String] = []
+        if let codec = track.codec?.uppercased() {
+            parts.append(codec)
+        }
+        if track.isForced {
+            parts.append("Forced")
+        }
+        return parts.isEmpty ? "Subtitle" : parts.joined(separator: " · ")
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
@@ -277,41 +441,25 @@ struct PlayerControlsOverlay: View {
         }
         return "\(minutes) min"
     }
+}
 
-    #if os(tvOS)
-    private func handleMoveCommand(_ direction: MoveCommandDirection) {
-        switch direction {
-        case .down:
-            if !showInfoPanel {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    showInfoPanel = true
-                }
-            }
-        case .up:
-            if showInfoPanel {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    showInfoPanel = false
-                }
-            }
-        case .left:
-            // Always seek backward
-            Task { await viewModel.seekRelative(by: -10) }
-        case .right:
-            // Always seek forward
-            Task { await viewModel.seekRelative(by: 10) }
-        @unknown default:
-            break
-        }
-    }
+// MARK: - Info Badge
 
-    private func handleExitCommand() {
-        if showInfoPanel {
-            withAnimation(.easeOut(duration: 0.3)) {
-                showInfoPanel = false
-            }
+private struct InfoBadge: View {
+    let icon: String
+    let text: String
+    var highlight: Bool = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.caption)
+            Text(text)
+                .font(.caption)
+                .fontWeight(.medium)
         }
+        .foregroundStyle(highlight ? .yellow : .white.opacity(0.7))
     }
-    #endif
 }
 
 // MARK: - Transport Progress Bar
@@ -319,16 +467,91 @@ struct PlayerControlsOverlay: View {
 private struct TransportProgressBar: View {
     let currentTime: TimeInterval
     let duration: TimeInterval
-    let isFocused: Bool
-    let onSeek: (TimeInterval) -> Void  // Kept for future use
+    var isScrubbing: Bool = false
+    var scrubTime: TimeInterval = 0
+    var scrubSpeed: Int = 0
+    var scrubThumbnail: UIImage?
+
+    private var displayTime: TimeInterval {
+        isScrubbing ? scrubTime : currentTime
+    }
 
     private var progress: Double {
         guard duration > 0 else { return 0 }
-        return currentTime / duration
+        return min(1, max(0, displayTime / duration))
+    }
+
+    private var speedLabel: String? {
+        guard scrubSpeed != 0 else { return nil }
+        let magnitude = abs(scrubSpeed)
+        let arrow = scrubSpeed > 0 ? "▶▶" : "◀◀"
+        return "\(arrow) \(magnitude)×"
     }
 
     var body: some View {
         VStack(spacing: 8) {
+            // Thumbnail preview when scrubbing
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    // Thumbnail positioned above progress bar
+                    if isScrubbing {
+                        let thumbnailX = max(80, min(geometry.size.width - 80, geometry.size.width * progress))
+
+                        VStack(spacing: 8) {
+                            // Thumbnail image (only show if available)
+                            if let thumbnail = scrubThumbnail {
+                                Image(uiImage: thumbnail)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 240, height: 135)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .strokeBorder(.white.opacity(0.3), lineWidth: 1)
+                                    )
+                                    .shadow(color: .black.opacity(0.5), radius: 10, y: 5)
+                            }
+                            // No placeholder - just skip thumbnail if not available
+
+                            // Speed indicator
+                            if let speed = speedLabel {
+                                Text(speed)
+                                    .font(.title3)
+                                    .fontWeight(.bold)
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        Capsule()
+                                            .fill(.blue)
+                                    )
+                            }
+
+                            // Time label
+                            Text(formatTime(scrubTime))
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .monospacedDigit()
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(
+                                    Capsule()
+                                        .fill(.black.opacity(0.8))
+                                )
+
+                            // Arrow pointing to playhead
+                            Triangle()
+                                .fill(.white)
+                                .frame(width: 12, height: 8)
+                        }
+                        .position(x: thumbnailX, y: scrubThumbnail != nil ? -120 : -60)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    }
+                }
+            }
+            .frame(height: isScrubbing ? 0 : 0)  // Reserve no height, positioned above
+
             // Progress track
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
@@ -336,32 +559,43 @@ private struct TransportProgressBar: View {
                     Capsule()
                         .fill(.white.opacity(0.3))
 
-                    // Progress fill
+                    // Progress fill (current position in blue when scrubbing)
+                    if isScrubbing {
+                        // Show current position as dimmer
+                        let currentProgress = duration > 0 ? min(1, max(0, currentTime / duration)) : 0
+                        Capsule()
+                            .fill(.white.opacity(0.5))
+                            .frame(width: max(0, geometry.size.width * currentProgress))
+                    }
+
+                    // Scrub/current position fill
                     Capsule()
-                        .fill(.white)
+                        .fill(isScrubbing ? .blue : .white)
                         .frame(width: max(0, geometry.size.width * progress))
 
                     // Playhead
                     Circle()
-                        .fill(.white)
-                        .frame(width: 16, height: 16)
+                        .fill(isScrubbing ? .blue : .white)
+                        .frame(width: isScrubbing ? 24 : 16, height: isScrubbing ? 24 : 16)
                         .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
-                        .offset(x: max(0, min(geometry.size.width - 16, geometry.size.width * progress - 8)))
+                        .offset(x: max(0, min(geometry.size.width - (isScrubbing ? 24 : 16), geometry.size.width * progress - (isScrubbing ? 12 : 8))))
+                        .animation(.easeOut(duration: 0.15), value: isScrubbing)
                 }
             }
-            .frame(height: 6)
+            .frame(height: isScrubbing ? 10 : 6)
+            .animation(.easeOut(duration: 0.15), value: isScrubbing)
 
             // Time labels
             HStack {
-                Text(formatTime(currentTime))
+                Text(formatTime(displayTime))
                     .font(.caption)
-                    .fontWeight(.medium)
+                    .fontWeight(isScrubbing ? .bold : .medium)
                     .monospacedDigit()
-                    .foregroundStyle(.white)
+                    .foregroundStyle(isScrubbing ? .blue : .white)
 
                 Spacer()
 
-                Text("-\(formatTime(max(0, duration - currentTime)))")
+                Text("-\(formatTime(max(0, duration - displayTime)))")
                     .font(.caption)
                     .monospacedDigit()
                     .foregroundStyle(.white.opacity(0.7))
@@ -382,88 +616,105 @@ private struct TransportProgressBar: View {
     }
 }
 
-// MARK: - Info Tab Button
+// MARK: - Track Button
 
-private struct InfoTabButton: View {
+private struct TrackButton: View {
     let title: String
+    let subtitle: String
     let isSelected: Bool
-    let isEnabled: Bool
     let action: () -> Void
 
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.headline)
-                .fontWeight(isSelected ? .bold : .medium)
-                .foregroundStyle(isEnabled ? (isSelected ? .white : .white.opacity(0.6)) : .white.opacity(0.3))
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
-                .background(
-                    Capsule()
-                        .fill(isSelected ? .white.opacity(0.2) : .clear)
-                )
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+
+                Spacer()
+
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.blue)
+                }
+            }
+
+            Text(subtitle)
+                .font(.system(size: 14))
+                .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1)
         }
-        .buttonStyle(.plain)
-        .focusable(isEnabled)
-        .focused($isFocused)
-        .scaleEffect(isFocused ? 1.1 : 1.0)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .frame(minWidth: 180)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(isSelected ? .white.opacity(0.25) : .white.opacity(0.1))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(isFocused ? 0.8 : 0), lineWidth: 3)
+        )
+        .scaleEffect(isFocused ? 1.05 : 1.0)
+        .brightness(isFocused ? 0.1 : 0)
         .animation(.easeOut(duration: 0.15), value: isFocused)
+        .focusable()
+        .focused($isFocused)
+        .onTapGesture {
+            action()
+        }
+        #if os(tvOS)
+        .onPlayPauseCommand {
+            action()
+        }
+        #endif
     }
 }
 
-// MARK: - Track Card
+// MARK: - Focusable Button
 
-private struct TrackCard: View {
-    let title: String
-    let subtitle: String?
+private struct FocusableButton<Content: View>: View {
     let isSelected: Bool
     let action: () -> Void
+    @ViewBuilder let content: () -> Content
 
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(title)
-                        .font(.body)
-                        .fontWeight(.medium)
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-
-                    Spacer()
-
-                    if isSelected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.blue)
-                    }
-                }
-
-                if let subtitle = subtitle {
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-            }
-            .padding(16)
-            .frame(minWidth: 180)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isSelected ? .white.opacity(0.15) : .white.opacity(0.08))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(isFocused ? .white : .clear, lineWidth: 3)
-                    )
+        content()
+            .scaleEffect(isFocused ? 1.08 : 1.0)
+            .brightness(isFocused ? 0.15 : 0)
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(.white.opacity(isFocused ? 0.8 : 0), lineWidth: 3)
             )
-        }
-        .buttonStyle(.plain)
-        .focusable()
-        .focused($isFocused)
-        .scaleEffect(isFocused ? 1.05 : 1.0)
-        .animation(.easeOut(duration: 0.15), value: isFocused)
+            .animation(.easeOut(duration: 0.15), value: isFocused)
+            .focusable()
+            .focused($isFocused)
+            .onTapGesture {
+                action()
+            }
+            #if os(tvOS)
+            .onPlayPauseCommand {
+                action()
+            }
+            #endif
+    }
+}
+
+// MARK: - Triangle Shape (for thumbnail arrow)
+
+private struct Triangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.closeSubpath()
+        return path
     }
 }
 

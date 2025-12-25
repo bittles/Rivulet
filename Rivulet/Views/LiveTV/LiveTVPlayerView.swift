@@ -2,336 +2,282 @@
 //  LiveTVPlayerView.swift
 //  Rivulet
 //
-//  Live TV channel player using MPV
+//  Unified Live TV player supporting 1-4 simultaneous streams
 //
 
 import SwiftUI
 import Combine
 
 struct LiveTVPlayerView: View {
-    let channel: UnifiedChannel
-    @StateObject private var viewModel: LiveTVPlayerViewModel
+    @StateObject private var viewModel: MultiStreamViewModel
     @Environment(\.dismiss) private var dismiss
 
-    @State private var hasStartedPlayback = false
-    @State private var playerController: MPVMetalViewController?
-    @State private var showMultiView = false
+    // Focus management
+    @FocusState private var focusArea: FocusArea?
+
+    enum FocusArea: Hashable {
+        case streamGrid
+        case controlButton(Int)
+    }
 
     init(channel: UnifiedChannel) {
-        self.channel = channel
-        _viewModel = StateObject(wrappedValue: LiveTVPlayerViewModel(channel: channel))
+        _viewModel = StateObject(wrappedValue: MultiStreamViewModel(initialChannel: channel))
     }
 
     var body: some View {
         ZStack {
             // Background
-            Color.black
-                .ignoresSafeArea()
+            Color.black.ignoresSafeArea()
 
-            // Player Layer
-            if let url = viewModel.streamURL {
-                MPVPlayerView(
-                    url: url,
-                    headers: [:],
-                    startTime: nil,
-                    delegate: viewModel.mpvPlayerWrapper,
-                    playerController: $playerController
-                )
-                .ignoresSafeArea()
+            // Stream grid (or single stream fullscreen)
+            streamContent
+
+            // Controls overlay
+            if viewModel.showControls {
+                controlsOverlay
+                    .transition(.opacity.animation(.easeInOut(duration: 0.25)))
             }
 
-            // Loading State
-            if viewModel.playbackState == .loading || viewModel.playbackState == .idle {
-                loadingView
-            }
-
-            // Buffering Indicator
-            if viewModel.isBuffering && viewModel.playbackState != .loading {
-                bufferingIndicator
-            }
-
-            // Error State
-            if case .failed(let error) = viewModel.playbackState {
-                errorView(message: error.localizedDescription)
-            }
-
-            // Controls Overlay
-            if viewModel.showControls && viewModel.playbackState.isActive {
-                LiveTVControlsOverlay(
-                    channel: channel,
-                    currentProgram: viewModel.currentProgram,
-                    isPlaying: viewModel.isPlaying,
-                    onPlayPause: { viewModel.togglePlayPause() },
-                    onMultiView: {
-                        viewModel.stopPlayback()
-                        showMultiView = true
+            // Channel picker
+            if viewModel.showChannelPicker {
+                ChannelPickerSheet(
+                    excludedChannelIds: viewModel.activeChannelIds,
+                    onSelect: { channel in
+                        Task {
+                            await viewModel.addChannel(channel)
+                        }
                     },
-                    onDismiss: { dismiss() }
+                    onDismiss: {
+                        viewModel.showChannelPicker = false
+                    }
                 )
-                .transition(.opacity.animation(.easeInOut(duration: 0.25)))
+                .transition(.opacity.animation(.easeInOut(duration: 0.2)))
             }
-        }
-        .fullScreenCover(isPresented: $showMultiView, onDismiss: {
-            // When multi-view is dismissed, also dismiss the single player
-            dismiss()
-        }) {
-            MultiStreamPlayerView(initialChannel: channel)
         }
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(.easeInOut(duration: 0.25)) {
-                if viewModel.showControls {
-                    viewModel.showControls = false
-                } else {
-                    viewModel.showControlsTemporarily()
-                }
-            }
-        }
+        .animation(.easeInOut(duration: 0.3), value: viewModel.streamCount)
         #if os(tvOS)
         .onPlayPauseCommand {
-            viewModel.togglePlayPause()
-            viewModel.showControlsTemporarily()
+            // Physical play/pause button on remote - direct toggle
+            viewModel.togglePlayPauseOnFocused()
         }
         .onExitCommand {
-            if viewModel.showControls {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    viewModel.showControls = false
-                }
-            } else {
-                dismiss()
-            }
+            handleExitCommand()
         }
         #endif
-        .onChange(of: playerController) { _, controller in
-            if let controller = controller {
-                viewModel.setPlayerController(controller)
+        .onChange(of: viewModel.showControls) { _, showControls in
+            if showControls {
+                // When controls appear, focus the play/pause button (index 0 if no remove, 1 if remove exists)
+                let playButtonIndex = viewModel.streamCount > 1 ? 1 : 0
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    focusArea = .controlButton(playButtonIndex)
+                }
+            } else {
+                // When controls hide, focus the stream grid
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    focusArea = .streamGrid
+                }
             }
         }
-        .task {
-            guard !hasStartedPlayback else { return }
-            hasStartedPlayback = true
-            await viewModel.startPlayback()
+        .onAppear {
+            // Start with controls hidden, focus on stream grid
+            viewModel.showControls = false
+            focusArea = .streamGrid
         }
         .onDisappear {
-            viewModel.stopPlayback()
+            viewModel.stopAllStreams()
         }
     }
 
-    // MARK: - Loading View
+    // MARK: - Stream Content
 
-    private var loadingView: some View {
-        VStack(spacing: 24) {
-            ProgressView()
-                .scaleEffect(2)
-                .tint(.white)
-
-            Text("Loading...")
-                .font(.title2)
-                .foregroundStyle(.white.opacity(0.7))
-
-            Text(channel.name)
-                .font(.headline)
-                .foregroundStyle(.white)
-        }
-    }
-
-    // MARK: - Buffering Indicator
-
-    private var bufferingIndicator: some View {
-        ProgressView()
-            .scaleEffect(1.5)
-            .tint(.white)
-            .padding(20)
-            .background(
-                Circle()
-                    .fill(.black.opacity(0.5))
-            )
-    }
-
-    // MARK: - Error View
-
-    private func errorView(message: String) -> some View {
-        VStack(spacing: 24) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 60))
-                .foregroundStyle(.yellow)
-
-            Text("Playback Error")
-                .font(.title)
-                .foregroundStyle(.white)
-
-            Text(message)
-                .font(.body)
-                .foregroundStyle(.white.opacity(0.7))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 60)
-
-            Button("Dismiss") {
-                dismiss()
-            }
-            .buttonStyle(.bordered)
-            .padding(.top, 20)
-        }
-    }
-}
-
-// MARK: - Live TV Player ViewModel
-
-@MainActor
-final class LiveTVPlayerViewModel: ObservableObject {
-
-    // MARK: - Published State
-
-    @Published private(set) var playbackState: UniversalPlaybackState = .idle
-    @Published private(set) var isBuffering = false
-    @Published private(set) var errorMessage: String?
-    @Published var showControls = true
-
-    // MARK: - Player
-
-    private(set) var mpvPlayerWrapper: MPVPlayerWrapper
-    private(set) var streamURL: URL?
-
-    // MARK: - Channel Info
-
-    let channel: UnifiedChannel
-    @Published private(set) var currentProgram: UnifiedProgram?
-
-    // MARK: - Private
-
-    private var cancellables = Set<AnyCancellable>()
-    private var controlsTimer: Timer?
-    private let controlsHideDelay: TimeInterval = 5
-
-    // MARK: - Initialization
-
-    init(channel: UnifiedChannel) {
-        self.channel = channel
-        self.mpvPlayerWrapper = MPVPlayerWrapper()
-
-        // Get stream URL from data store
-        self.streamURL = LiveTVDataStore.shared.buildStreamURL(for: channel)
-
-        setupPlayer()
-        loadCurrentProgram()
-    }
-
-    private func setupPlayer() {
-        mpvPlayerWrapper.playbackStatePublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
-                self?.playbackState = state
-                self?.isBuffering = state == .buffering
-
-                if state == .playing {
-                    self?.startControlsHideTimer()
-                } else {
-                    self?.controlsTimer?.invalidate()
-                }
-            }
-            .store(in: &cancellables)
-
-        mpvPlayerWrapper.errorPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] error in
-                self?.errorMessage = error.localizedDescription
-            }
-            .store(in: &cancellables)
-    }
-
-    private func loadCurrentProgram() {
-        currentProgram = LiveTVDataStore.shared.getCurrentProgram(for: channel)
-    }
-
-    // MARK: - Computed Properties
-
-    var isPlaying: Bool {
-        mpvPlayerWrapper.isPlaying
-    }
-
-    // MARK: - Playback Controls
-
-    func startPlayback() async {
-        guard let url = streamURL else {
-            errorMessage = "No stream URL available"
-            playbackState = .failed(.invalidURL)
-            return
-        }
-
-        print("📺 LiveTV: Starting playback of \(channel.name)")
-        print("📺 LiveTV: Stream URL: \(url.absoluteString)")
-
-        do {
-            // For live streams, no headers needed (M3U URLs are self-contained)
-            try await mpvPlayerWrapper.load(url: url, headers: [:], startTime: nil)
-            mpvPlayerWrapper.play()
-            startControlsHideTimer()
-        } catch {
-            errorMessage = error.localizedDescription
-            playbackState = .failed(.loadFailed(error.localizedDescription))
-        }
-    }
-
-    func setPlayerController(_ controller: MPVMetalViewController) {
-        mpvPlayerWrapper.setPlayerController(controller)
-    }
-
-    func stopPlayback() {
-        mpvPlayerWrapper.stop()
-        controlsTimer?.invalidate()
-    }
-
-    func togglePlayPause() {
-        if mpvPlayerWrapper.isPlaying {
-            mpvPlayerWrapper.pause()
+    @ViewBuilder
+    private var streamContent: some View {
+        if viewModel.streamCount == 1, let slot = viewModel.streams.first {
+            // Single stream - fullscreen
+            singleStreamView(slot: slot)
         } else {
-            mpvPlayerWrapper.play()
+            // Multiple streams - grid
+            streamGrid
         }
-        showControlsTemporarily()
     }
 
-    // MARK: - Controls Visibility
+    private func singleStreamView(slot: MultiStreamViewModel.StreamSlot) -> some View {
+        ZStack {
+            StreamSlotView(
+                slot: slot,
+                index: 0,
+                isFocused: false,
+                showBorder: false,
+                onControllerReady: { controller in
+                    viewModel.setPlayerController(controller, for: slot.id)
+                }
+            )
+            .ignoresSafeArea()
 
-    func showControlsTemporarily() {
-        showControls = true
-        startControlsHideTimer()
+            // Invisible button to capture Select press and show controls
+            if !viewModel.showControls {
+                Button {
+                    showControlsWithFocus()
+                } label: {
+                    Color.clear
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable()
+                .focused($focusArea, equals: .streamGrid)
+                #if os(tvOS)
+                .onMoveCommand { direction in
+                    // Single stream: any d-pad press shows controls
+                    showControlsWithFocus()
+                }
+                #endif
+            }
+        }
     }
 
-    private func startControlsHideTimer() {
-        controlsTimer?.invalidate()
-        controlsTimer = Timer.scheduledTimer(withTimeInterval: controlsHideDelay, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                guard let self = self else { return }
-                if self.playbackState == .playing {
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        self.showControls = false
+    private var streamGrid: some View {
+        GeometryReader { geometry in
+            let spacing: CGFloat = 2  // Minimal spacing between videos
+            let layout = gridLayout(for: viewModel.streamCount)
+            let slotWidth = (geometry.size.width - CGFloat(layout.columns - 1) * spacing) / CGFloat(layout.columns)
+            let slotHeight = (geometry.size.height - CGFloat(layout.rows - 1) * spacing) / CGFloat(layout.rows)
+
+            ZStack {
+                VStack(spacing: spacing) {
+                    ForEach(0..<layout.rows, id: \.self) { row in
+                        HStack(spacing: spacing) {
+                            ForEach(0..<layout.columns, id: \.self) { col in
+                                let index = row * layout.columns + col
+
+                                if index < viewModel.streams.count {
+                                    let slot = viewModel.streams[index]
+
+                                    StreamSlotView(
+                                        slot: slot,
+                                        index: index,
+                                        isFocused: viewModel.focusedSlotIndex == index && !viewModel.showControls,
+                                        showBorder: viewModel.streamCount > 1,
+                                        onControllerReady: { controller in
+                                            viewModel.setPlayerController(controller, for: slot.id)
+                                        }
+                                    )
+                                    .frame(width: slotWidth, height: slotHeight)
+                                } else {
+                                    // Empty slot - same size as other slots, just black
+                                    Color.black
+                                        .frame(width: slotWidth, height: slotHeight)
+                                }
+                            }
+                        }
                     }
                 }
+
+                // Invisible button overlay for stream navigation
+                if !viewModel.showControls {
+                    Button {
+                        // Select pressed - show controls
+                        showControlsWithFocus()
+                    } label: {
+                        Color.clear
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusable()
+                    .focused($focusArea, equals: .streamGrid)
+                    #if os(tvOS)
+                    .onMoveCommand { direction in
+                        handleStreamNavigation(direction)
+                    }
+                    #endif
+                }
             }
         }
     }
 
-    deinit {
-        controlsTimer?.invalidate()
+    private func gridLayout(for count: Int) -> (rows: Int, columns: Int) {
+        switch count {
+        case 0, 1:
+            return (1, 1)
+        case 2:
+            return (1, 2)  // Side by side
+        case 3, 4:
+            return (2, 2)  // 2x2 grid (3 streams = 3 videos + 1 black space)
+        default:
+            return (2, 2)
+        }
     }
-}
 
-// MARK: - Live TV Controls Overlay
+    // MARK: - Stream Navigation (when controls hidden)
 
-struct LiveTVControlsOverlay: View {
-    let channel: UnifiedChannel
-    let currentProgram: UnifiedProgram?
-    let isPlaying: Bool
-    let onPlayPause: () -> Void
-    let onMultiView: () -> Void
-    let onDismiss: () -> Void
+    #if os(tvOS)
+    private func handleStreamNavigation(_ direction: MoveCommandDirection) {
+        guard !viewModel.showControls else { return }
 
-    var body: some View {
+        // Multi-stream: d-pad navigates between streams
+        if viewModel.streamCount > 1 {
+            let layout = gridLayout(for: viewModel.streamCount)
+            let currentIndex = viewModel.focusedSlotIndex
+            let row = currentIndex / layout.columns
+            let col = currentIndex % layout.columns
+
+            var newIndex = currentIndex
+
+            switch direction {
+            case .left:
+                if col > 0 {
+                    newIndex = currentIndex - 1
+                }
+                // At left edge - do nothing
+
+            case .right:
+                if col < layout.columns - 1 && currentIndex + 1 < viewModel.streamCount {
+                    newIndex = currentIndex + 1
+                }
+                // At right edge - do nothing
+
+            case .up:
+                if row > 0 {
+                    let upIndex = currentIndex - layout.columns
+                    if upIndex >= 0 {
+                        newIndex = upIndex
+                    }
+                }
+                // At top edge - do nothing (no controls popup from d-pad)
+
+            case .down:
+                if row < layout.rows - 1 {
+                    let downIndex = currentIndex + layout.columns
+                    if downIndex < viewModel.streamCount {
+                        newIndex = downIndex
+                    }
+                }
+                // At bottom edge - do nothing
+
+            @unknown default:
+                break
+            }
+
+            if newIndex != currentIndex {
+                viewModel.setFocus(to: newIndex)
+            }
+        }
+        // Single stream: Select shows controls (handled by Button action)
+    }
+    #endif
+
+    private func showControlsWithFocus() {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            viewModel.showControlsTemporarily()
+        }
+    }
+
+    // MARK: - Controls Overlay
+
+    private var controlsOverlay: some View {
         ZStack {
-            // Gradient background
+            // Gradient backgrounds
             VStack {
-                // Top gradient
                 LinearGradient(
                     colors: [.black.opacity(0.8), .clear],
                     startPoint: .top,
@@ -341,7 +287,6 @@ struct LiveTVControlsOverlay: View {
 
                 Spacer()
 
-                // Bottom gradient
                 LinearGradient(
                     colors: [.clear, .black.opacity(0.8)],
                     startPoint: .top,
@@ -352,97 +297,92 @@ struct LiveTVControlsOverlay: View {
             .ignoresSafeArea()
 
             VStack {
-                // Top bar - channel info
-                HStack(alignment: .top) {
-                    // Channel logo
-                    if let logoURL = channel.logoURL {
-                        AsyncImage(url: logoURL) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(height: 60)
-                            default:
-                                channelIcon
-                            }
-                        }
-                    } else {
-                        channelIcon
-                    }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 12) {
-                            if let number = channel.channelNumber {
-                                Text("\(number)")
-                                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                                    .foregroundStyle(.white.opacity(0.6))
-                            }
-
-                            Text(channel.name)
-                                .font(.system(size: 32, weight: .bold))
-                                .foregroundStyle(.white)
-
-                            if channel.isHD {
-                                Text("HD")
-                                    .font(.system(size: 14, weight: .bold))
-                                    .foregroundStyle(.black)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 4)
-                                            .fill(.white)
-                                    )
-                            }
-
-                            // Live indicator
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(.red)
-                                    .frame(width: 10, height: 10)
-                                Text("LIVE")
-                                    .font(.system(size: 14, weight: .bold))
-                                    .foregroundStyle(.red)
-                            }
-                        }
-
-                        if let program = currentProgram {
-                            Text(program.title)
-                                .font(.system(size: 22))
-                                .foregroundStyle(.white.opacity(0.8))
-
-                            Text(programTimeString(program))
-                                .font(.system(size: 18))
-                                .foregroundStyle(.white.opacity(0.5))
-                        }
-                    }
-
-                    Spacer()
-                }
-                .padding(.horizontal, 60)
-                .padding(.top, 50)
+                // Top bar - focused channel info
+                topBar
+                    .padding(.horizontal, 60)
+                    .padding(.top, 50)
 
                 Spacer()
 
                 // Bottom controls
-                HStack(spacing: 40) {
-                    // Play/Pause button
-                    ControlButton(
-                        icon: isPlaying ? "pause.fill" : "play.fill",
-                        label: isPlaying ? "Pause" : "Play",
-                        isLarge: true,
-                        action: onPlayPause
-                    )
+                bottomControls
+                    .padding(.bottom, 60)
+            }
+        }
+    }
 
-                    // Multi-view button
-                    ControlButton(
-                        icon: "rectangle.split.2x2",
-                        label: "Multi-View",
-                        isLarge: false,
-                        action: onMultiView
-                    )
+    private var topBar: some View {
+        HStack(alignment: .top) {
+            if let focusedStream = viewModel.focusedStream {
+                // Channel logo
+                if let logoURL = focusedStream.channel.logoURL {
+                    AsyncImage(url: logoURL) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(height: 60)
+                        default:
+                            channelIcon
+                        }
+                    }
+                } else {
+                    channelIcon
                 }
-                .padding(.bottom, 60)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 12) {
+                        if let number = focusedStream.channel.channelNumber {
+                            Text("\(number)")
+                                .font(.system(size: 24, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+
+                        Text(focusedStream.channel.name)
+                            .font(.system(size: 32, weight: .bold))
+                            .foregroundStyle(.white)
+
+                        if focusedStream.channel.isHD {
+                            Text("HD")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.black)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(.white)
+                                )
+                        }
+
+                        // Live indicator
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(.red)
+                                .frame(width: 10, height: 10)
+                            Text("LIVE")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.red)
+                        }
+                    }
+
+                    if let program = focusedStream.currentProgram {
+                        Text(program.title)
+                            .font(.system(size: 22))
+                            .foregroundStyle(.white.opacity(0.8))
+
+                        Text(programTimeString(program))
+                            .font(.system(size: 18))
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                }
+
+                Spacer()
+
+                // Stream count indicator (only show when multiple streams)
+                if viewModel.streamCount > 1 {
+                    streamCountBadge
+                }
             }
         }
     }
@@ -454,6 +394,96 @@ struct LiveTVControlsOverlay: View {
             .frame(width: 80, height: 60)
     }
 
+    private var streamCountBadge: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "rectangle.split.2x2")
+                .font(.system(size: 18))
+                .foregroundStyle(.white.opacity(0.7))
+
+            Text("\(viewModel.streamCount)/4")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(.white.opacity(0.7))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.white.opacity(0.15))
+        )
+    }
+
+    private var bottomControls: some View {
+        HStack(spacing: 32) {
+            let buttons = buildControlButtons()
+
+            ForEach(Array(buttons.enumerated()), id: \.offset) { index, button in
+                PlayerControlButton(
+                    icon: button.icon,
+                    label: button.label,
+                    isLarge: button.isLarge,
+                    isFocused: focusArea == .controlButton(index),
+                    action: button.action
+                )
+                .focused($focusArea, equals: .controlButton(index))
+            }
+        }
+    }
+
+    private struct ControlButtonConfig {
+        let icon: String
+        let label: String
+        var isLarge: Bool = false
+        let action: () -> Void
+    }
+
+    private func buildControlButtons() -> [ControlButtonConfig] {
+        var buttons: [ControlButtonConfig] = []
+
+        // Remove stream button (only when multiple streams)
+        if viewModel.streamCount > 1 {
+            buttons.append(ControlButtonConfig(
+                icon: "minus.circle.fill",
+                label: "Remove",
+                action: {
+                    viewModel.removeStream(at: viewModel.focusedSlotIndex)
+                    // If only 1 stream left, hide controls
+                    if viewModel.streamCount <= 1 {
+                        viewModel.showControls = false
+                    }
+                }
+            ))
+        }
+
+        // Play/Pause button
+        let isPlaying = viewModel.focusedStream?.playerWrapper.isPlaying ?? false
+        buttons.append(ControlButtonConfig(
+            icon: isPlaying ? "pause.fill" : "play.fill",
+            label: isPlaying ? "Pause" : "Play",
+            isLarge: true,
+            action: { viewModel.togglePlayPauseOnFocused() }
+        ))
+
+        // Add channel button
+        if viewModel.canAddStream {
+            buttons.append(ControlButtonConfig(
+                icon: "plus.circle.fill",
+                label: "Add Stream",
+                action: { viewModel.showChannelPicker = true }
+            ))
+        }
+
+        // Exit button
+        buttons.append(ControlButtonConfig(
+            icon: "xmark.circle.fill",
+            label: "Exit",
+            action: { dismissPlayer() }
+        ))
+
+        return buttons
+    }
+
+    // MARK: - Helpers
+
     private func programTimeString(_ program: UnifiedProgram) -> String {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
@@ -462,14 +492,38 @@ struct LiveTVControlsOverlay: View {
         let end = formatter.string(from: program.endTime)
         return "\(start) - \(end)"
     }
+
+    #if os(tvOS)
+    private func handleExitCommand() {
+        if viewModel.showChannelPicker {
+            viewModel.showChannelPicker = false
+        } else if viewModel.showControls {
+            // Hide controls and return focus to stream grid
+            withAnimation(.easeOut(duration: 0.2)) {
+                viewModel.showControls = false
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                focusArea = .streamGrid
+            }
+        } else {
+            dismissPlayer()
+        }
+    }
+    #endif
+
+    private func dismissPlayer() {
+        viewModel.stopAllStreams()
+        dismiss()
+    }
 }
 
-// MARK: - Control Button
+// MARK: - Player Control Button
 
-private struct ControlButton: View {
+private struct PlayerControlButton: View {
     let icon: String
     let label: String
     var isLarge: Bool = false
+    let isFocused: Bool
     let action: () -> Void
 
     var body: some View {
@@ -477,7 +531,7 @@ private struct ControlButton: View {
             VStack(spacing: 10) {
                 ZStack {
                     Circle()
-                        .fill(.white.opacity(0.2))
+                        .fill(isFocused ? .white.opacity(0.4) : .white.opacity(0.2))
                         .frame(width: isLarge ? 80 : 64, height: isLarge ? 80 : 64)
 
                     Image(systemName: icon)
@@ -487,14 +541,21 @@ private struct ControlButton: View {
 
                 Text(label)
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(isFocused ? .white : .white.opacity(0.7))
             }
+            .scaleEffect(isFocused ? 1.1 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: isFocused)
         }
-        #if os(tvOS)
-        .buttonStyle(.card)
-        #else
-        .buttonStyle(.plain)
-        #endif
+        .buttonStyle(PlayerButtonStyle())
+    }
+}
+
+// MARK: - Player Button Style
+
+private struct PlayerButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.8 : 1.0)
     }
 }
 

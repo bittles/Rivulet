@@ -11,7 +11,6 @@ struct ChannelListView: View {
     @StateObject private var dataStore = LiveTVDataStore.shared
     @State private var searchText = ""
     @State private var selectedChannel: UnifiedChannel?
-    @State private var multiViewChannel: UnifiedChannel?
 
     private var filteredChannels: [UnifiedChannel] {
         if searchText.isEmpty {
@@ -101,15 +100,9 @@ struct ChannelListView: View {
                 // Channel grid
                 LazyVGrid(columns: gridColumns, spacing: 24) {
                     ForEach(filteredChannels) { channel in
-                        ChannelCard(
-                            channel: channel,
-                            onTap: {
-                                selectedChannel = channel
-                            },
-                            onMultiView: {
-                                multiViewChannel = channel
-                            }
-                        )
+                        ChannelCard(channel: channel) {
+                            selectedChannel = channel
+                        }
                     }
                 }
                 .padding(.horizontal, 80)
@@ -118,9 +111,6 @@ struct ChannelListView: View {
         }
         .fullScreenCover(item: $selectedChannel) { channel in
             LiveTVPlayerView(channel: channel)
-        }
-        .fullScreenCover(item: $multiViewChannel) { channel in
-            MultiStreamPlayerView(initialChannel: channel)
         }
     }
 
@@ -135,8 +125,7 @@ struct ChannelListView: View {
 
 struct ChannelCard: View {
     let channel: UnifiedChannel
-    let onTap: () -> Void
-    let onMultiView: () -> Void
+    let action: () -> Void
 
     @FocusState private var isFocused: Bool
     @StateObject private var dataStore = LiveTVDataStore.shared
@@ -147,25 +136,12 @@ struct ChannelCard: View {
 
     var body: some View {
         Button {
-            onTap()
+            action()
         } label: {
             cardContent
         }
         .buttonStyle(ChannelCardButtonStyle(isFocused: isFocused))
         .focused($isFocused)
-        .contextMenu {
-            Button {
-                onTap()
-            } label: {
-                Label("Watch", systemImage: "play.fill")
-            }
-
-            Button {
-                onMultiView()
-            } label: {
-                Label("Open in Multi-View", systemImage: "rectangle.split.2x2")
-            }
-        }
     }
 
     private var cardContent: some View {

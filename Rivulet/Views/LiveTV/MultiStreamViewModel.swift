@@ -70,6 +70,25 @@ final class MultiStreamViewModel: ObservableObject {
         guard canAddStream else { return }
         guard !activeChannelIds.contains(channel.id) else { return }
 
+        // Close the picker immediately for responsiveness
+        showChannelPicker = false
+
+        // On simulator, we need to pause existing streams and wait before creating a new player
+        // to avoid MoltenVK Metal texture crashes when multiple contexts are active
+        #if targetEnvironment(simulator)
+        if !streams.isEmpty {
+            print("📺 MultiStream: Pausing existing streams before adding new one (simulator workaround)")
+
+            // Pause all existing streams to reduce GPU contention
+            for slot in streams {
+                slot.playerWrapper.pause()
+            }
+
+            // Wait for GPU commands to complete
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        #endif
+
         let wrapper = MPVPlayerWrapper()
         let isMuted = !streams.isEmpty  // First stream unmuted, others muted
 
@@ -95,12 +114,19 @@ final class MultiStreamViewModel: ObservableObject {
                 wrapper.setMuted(isMuted)
                 wrapper.play()
                 print("📺 MultiStream: Added channel '\(channel.name)' at slot \(slotIndex), muted: \(isMuted)")
+
+                #if targetEnvironment(simulator)
+                // Resume other streams after new one is loading
+                try? await Task.sleep(for: .milliseconds(300))
+                for (idx, slot) in streams.enumerated() where idx != slotIndex {
+                    slot.playerWrapper.play()
+                }
+                print("📺 MultiStream: Resumed existing streams")
+                #endif
             } catch {
                 print("📺 MultiStream: Failed to load '\(channel.name)': \(error)")
             }
         }
-
-        showChannelPicker = false
     }
 
     func removeStream(at index: Int) {

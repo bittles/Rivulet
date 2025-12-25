@@ -294,6 +294,8 @@ struct HeroView<FocusTarget: Hashable>: View {
     let authToken: String
     let onSelect: () -> Void
 
+    @Environment(\.openSidebar) private var openSidebar
+
     // Focus binding - supports both Bool and enum-based patterns
     private let focusBinding: FocusBinding<FocusTarget>
 
@@ -491,6 +493,11 @@ struct HeroView<FocusTarget: Hashable>: View {
             )
             .scaleEffect(isFocused ? 1.02 : 1.0)
             .animation(.easeInOut(duration: 0.2), value: isFocused)
+            .onMoveCommand { direction in
+                if direction == .left {
+                    openSidebar()
+                }
+            }
 
         case .enumTarget(let binding, let target):
             Button(action: onSelect) {
@@ -511,6 +518,11 @@ struct HeroView<FocusTarget: Hashable>: View {
             )
             .scaleEffect(isFocused ? 1.02 : 1.0)
             .animation(.easeInOut(duration: 0.2), value: isFocused)
+            .onMoveCommand { direction in
+                if direction == .left {
+                    openSidebar()
+                }
+            }
         }
     }
     #endif

@@ -85,6 +85,12 @@ final class MPVMetalViewController: UIViewController {
         // Stop playback first
         command("stop")
 
+        #if targetEnvironment(simulator)
+        // On simulator, we need to be extra careful about Metal resource cleanup
+        // Wait for any in-flight GPU commands before touching the metal layer
+        Thread.sleep(forTimeInterval: 0.1)
+        #endif
+
         // Remove metal layer from view to stop rendering
         metalLayer.removeFromSuperlayer()
 
@@ -95,7 +101,7 @@ final class MPVMetalViewController: UIViewController {
         // MoltenVK needs time to complete Vulkan->Metal translation
         // This is longer in simulator due to software rendering
         #if targetEnvironment(simulator)
-        Thread.sleep(forTimeInterval: 0.5)
+        Thread.sleep(forTimeInterval: 0.8)  // Increased for multi-stream stability
         #else
         Thread.sleep(forTimeInterval: 0.2)
         #endif

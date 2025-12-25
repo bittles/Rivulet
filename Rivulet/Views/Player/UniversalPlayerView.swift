@@ -60,7 +60,9 @@ struct UniversalPlayerView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
-        .focusable()
+        // Only capture focus/commands when info panel is NOT showing
+        // This allows the info panel buttons to receive focus
+        .focusable(!viewModel.showInfoPanel)
         .contentShape(Rectangle())
         .onTapGesture {
             // Tap anywhere to show/hide controls
@@ -74,12 +76,12 @@ struct UniversalPlayerView: View {
         }
         #if os(tvOS)
         .onMoveCommand { direction in
+            // Don't intercept when info panel is showing - let buttons handle focus
+            guard !viewModel.showInfoPanel else { return }
             handleMoveCommand(direction)
         }
         .onPlayPauseCommand {
-            // Toggle play/pause and show controls briefly
-            viewModel.togglePlayPause()
-            viewModel.showControlsTemporarily()
+            handleSelectCommand()
         }
         .onExitCommand {
             handleExitCommand()
@@ -183,25 +185,71 @@ struct UniversalPlayerView: View {
 
     #if os(tvOS)
     private func handleMoveCommand(_ direction: MoveCommandDirection) {
-        // Show controls on any movement
+        // Show controls on any input
         viewModel.showControlsTemporarily()
 
-        // Quick seek with left/right when controls hidden
-        if !viewModel.showControls {
-            switch direction {
-            case .left:
-                Task { await viewModel.seekRelative(by: -10) }
-            case .right:
-                Task { await viewModel.seekRelative(by: 10) }
-            default:
-                break
+        switch direction {
+        case .left:
+            if viewModel.showInfoPanel {
+                // When info panel is showing, let focus system handle it
+                return
             }
+            // Enter or continue scrubbing - increases speed with each press
+            viewModel.scrubInDirection(forward: false)
+        case .right:
+            if viewModel.showInfoPanel {
+                // When info panel is showing, let focus system handle it
+                return
+            }
+            // Enter or continue scrubbing - increases speed with each press
+            viewModel.scrubInDirection(forward: true)
+        case .down:
+            // Show info panel (cancels any active scrubbing)
+            if viewModel.isScrubbing {
+                viewModel.cancelScrub()
+            }
+            if !viewModel.showInfoPanel {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    viewModel.showInfoPanel = true
+                }
+            }
+        case .up:
+            // Hide info panel
+            if viewModel.showInfoPanel {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    viewModel.showInfoPanel = false
+                }
+            } else if viewModel.isScrubbing {
+                // Cancel scrubbing on up if not in info panel
+                viewModel.cancelScrub()
+            }
+        @unknown default:
+            break
         }
     }
 
+    private func handleSelectCommand() {
+        if viewModel.isScrubbing {
+            // Commit scrub position
+            Task { await viewModel.commitScrub() }
+        } else {
+            // Normal play/pause toggle
+            viewModel.togglePlayPause()
+        }
+        viewModel.showControlsTemporarily()
+    }
+
     private func handleExitCommand() {
-        if viewModel.showControls {
-            // Hide controls first
+        if viewModel.isScrubbing {
+            // Cancel scrubbing first
+            viewModel.cancelScrub()
+        } else if viewModel.showInfoPanel {
+            // Close info panel
+            withAnimation(.easeOut(duration: 0.3)) {
+                viewModel.showInfoPanel = false
+            }
+        } else if viewModel.showControls {
+            // Hide controls next
             withAnimation(.easeOut(duration: 0.2)) {
                 viewModel.showControls = false
             }
