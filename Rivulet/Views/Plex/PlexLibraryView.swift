@@ -14,6 +14,8 @@ struct PlexLibraryView: View {
 
     @Environment(\.openSidebar) private var openSidebar
     @Environment(\.nestedNavigationState) private var nestedNavState
+    @Environment(\.focusScopeManager) private var focusScopeManager
+    @Environment(\.isSidebarVisible) private var isSidebarVisible
 
     @StateObject private var authManager = PlexAuthManager.shared
     private let dataStore = PlexDataStore.shared
@@ -34,8 +36,13 @@ struct PlexLibraryView: View {
     @State private var loadingTask: Task<Void, Never>?  // Track current loading task for cancellation
 
     #if os(tvOS)
-    @FocusState private var isHeroFocused: Bool  // Hero button focus state
+    @FocusState private var focusedItemId: String?  // Track focused item by "context:itemId" format
     @State private var lastPrefetchIndex: Int = -18  // Track last prefetch position for throttling
+
+    /// Create a unique focus ID for a grid item
+    private func gridFocusId(for item: PlexMetadata) -> String {
+        "libraryGrid:\(item.ratingKey ?? "")"
+    }
     #endif
 
     private let networkManager = PlexNetworkManager.shared
@@ -232,6 +239,39 @@ struct PlexLibraryView: View {
                 nestedNavState.goBackAction = nil
             }
         }
+        #if os(tvOS)
+        // Save focus when it changes (only when content scope is active)
+        .onChange(of: focusedItemId) { _, newValue in
+            guard focusScopeManager.isScopeActive(.content) else { return }
+            if let newValue {
+                // Library grid items use "libraryGrid:itemId" format
+                let parts = newValue.split(separator: ":", maxSplits: 1)
+                if parts.count == 2 {
+                    focusScopeManager.setFocus(
+                        itemId: String(parts[1]),
+                        context: String(parts[0]),
+                        scope: .content
+                    )
+                } else {
+                    focusScopeManager.setFocus(itemId: newValue, scope: .content)
+                }
+            }
+        }
+        // Restore focus when scope becomes active
+        .onChange(of: focusScopeManager.restoreTrigger) { _, _ in
+            // Only restore focus if not in nested navigation (detail view)
+            if selectedItem == nil,
+               focusScopeManager.isScopeActive(.content),
+               let savedItem = focusScopeManager.focusedItem {
+                // Reconstruct the composite ID
+                if let context = savedItem.context {
+                    focusedItemId = "\(context):\(savedItem.itemId)"
+                } else {
+                    focusedItemId = savedItem.itemId
+                }
+            }
+        }
+        #endif
     }
 
     // MARK: - Content View
@@ -326,7 +366,8 @@ struct PlexLibraryView: View {
                 item: hero,
                 serverURL: authManager.selectedServerURL ?? "",
                 authToken: authManager.authToken ?? "",
-                isPlayButtonFocused: $isHeroFocused
+                focusTarget: $focusedItemId,
+                targetValue: "hero"
             ) {
                 selectedItem = hero
             }
@@ -467,6 +508,7 @@ struct PlexLibraryView: View {
         }
         #if os(tvOS)
         .buttonStyle(CardButtonStyle())
+        .focused($focusedItemId, equals: gridFocusId(for: item))
         .modifier(LeftEdgeSidebarTrigger(isFirstItem: index % 6 == 0, openSidebar: openSidebar))
         .onAppear {
             // Trigger loading more items when nearing the end

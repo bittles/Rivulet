@@ -25,6 +25,8 @@ final class MPVMetalViewController: UIViewController {
     private var timeObserverActive = false
     private var currentState: MPVPlayerState = .idle
     private var isShuttingDown = false
+    private var lastKnownSize: CGSize = .zero
+    private var resizeWorkItem: DispatchWorkItem?
 
     // MARK: - Simulator Detection
 
@@ -46,26 +48,90 @@ final class MPVMetalViewController: UIViewController {
 
     // MARK: - Lifecycle
 
+    private var hasSetupMpv = false
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        metalLayer.frame = view.frame
+        // Ensure the view clips its contents to bounds
+        view.clipsToBounds = true
+        view.layer.masksToBounds = true
+
         metalLayer.contentsScale = UIScreen.main.nativeScale
         metalLayer.framebufferOnly = true
         metalLayer.backgroundColor = UIColor.black.cgColor
 
         view.layer.addSublayer(metalLayer)
 
-        setupMpv()
-
-        if let url = playUrl {
-            loadFile(url)
-        }
+        // Don't setup MPV here - wait for viewDidLayoutSubviews when we have proper bounds
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        metalLayer.frame = view.frame
+
+        let newSize = view.bounds.size
+
+        // Update metal layer frame
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        metalLayer.frame = view.bounds
+        CATransaction.commit()
+
+        // Setup MPV after we have proper bounds (not .zero)
+        if !hasSetupMpv && newSize.width > 0 && newSize.height > 0 {
+            hasSetupMpv = true
+            lastKnownSize = newSize
+            setupMpv()
+
+            if let url = playUrl {
+                loadFile(url)
+            }
+        }
+        // If size changed significantly after MPV is setup, force a resize (debounced)
+        else if hasSetupMpv && mpv != nil && !isShuttingDown {
+            let sizeDelta = abs(newSize.width - lastKnownSize.width) + abs(newSize.height - lastKnownSize.height)
+            if sizeDelta > 10 {  // More than 10pt change
+                lastKnownSize = newSize
+
+                // Cancel any pending resize and schedule a new one
+                // This debounces rapid size changes during animations
+                resizeWorkItem?.cancel()
+                let workItem = DispatchWorkItem { [weak self] in
+                    self?.forceVideoResize()
+                }
+                resizeWorkItem = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: workItem)
+            }
+        }
+    }
+
+    /// Force MPV to re-evaluate its output size when container resizes
+    private func forceVideoResize() {
+        guard mpv != nil, !isShuttingDown else { return }
+
+        print("🎬 MPV: Forcing video resize to \(lastKnownSize)")
+
+        // Force the Metal layer to redraw at new size
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        metalLayer.setNeedsDisplay()
+        CATransaction.commit()
+
+        // Also tell MPV to reconfigure by toggling a harmless property
+        queue.async { [weak self] in
+            guard let self, self.mpv != nil, !self.isShuttingDown else { return }
+
+            // Toggle video-sync which forces vo reconfiguration without affecting playback
+            let currentSync = self.getString("video-sync") ?? "audio"
+            self.setString("video-sync", "display-resample")
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                guard let self, self.mpv != nil, !self.isShuttingDown else { return }
+                self.queue.async {
+                    self.setString("video-sync", currentSync)
+                }
+            }
+        }
     }
 
     deinit {

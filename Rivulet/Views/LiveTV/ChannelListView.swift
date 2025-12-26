@@ -41,6 +41,10 @@ struct ChannelListView: View {
             if dataStore.channels.isEmpty && !dataStore.isLoadingChannels {
                 await dataStore.loadChannels()
             }
+            // Load EPG data for current programs
+            if dataStore.epg.isEmpty && !dataStore.isLoadingEPG {
+                await dataStore.loadEPG(startDate: Date(), hours: 6)
+            }
         }
     }
 

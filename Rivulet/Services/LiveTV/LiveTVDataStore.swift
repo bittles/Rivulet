@@ -43,6 +43,10 @@ class LiveTVDataStore: ObservableObject {
     private var providers: [String: any LiveTVProvider] = [:]
     private var channelLoadTask: Task<Void, Never>?
     private var epgLoadTask: Task<Void, Never>?
+    private var backgroundPreloadTask: Task<Void, Never>?
+
+    /// Whether EPG has been preloaded in background
+    @Published private(set) var isEPGPreloaded = false
 
     private let userDefaults = UserDefaults.standard
     private let favoritesKey = "liveTVFavoriteChannelIds"
@@ -471,6 +475,75 @@ class LiveTVDataStore: ObservableObject {
         }
 
         await epgLoadTask?.value
+    }
+
+    // MARK: - Background Preloading
+
+    /// Start background preloading of channels and EPG data with low priority.
+    /// Call this at app startup to have data ready when user visits Live TV.
+    func startBackgroundPreload() {
+        // Cancel any existing preload
+        backgroundPreloadTask?.cancel()
+
+        backgroundPreloadTask = Task(priority: .background) {
+            print("📺 LiveTVDataStore: Starting background preload...")
+
+            // Wait a short delay to let critical startup tasks complete
+            try? await Task.sleep(nanoseconds: 2_000_000_000)  // 2 seconds
+
+            guard !Task.isCancelled else { return }
+
+            // Only preload if we have sources configured
+            guard hasConfiguredSources else {
+                print("📺 LiveTVDataStore: No sources configured, skipping preload")
+                return
+            }
+
+            // Load channels first (if not already loaded)
+            if channels.isEmpty && !isLoadingChannels {
+                print("📺 LiveTVDataStore: Background loading channels...")
+                await loadChannels()
+            }
+
+            guard !Task.isCancelled else { return }
+
+            // Then load EPG (if not already loaded)
+            if epg.isEmpty && !isLoadingEPG && !channels.isEmpty {
+                print("📺 LiveTVDataStore: Background loading EPG...")
+                await loadEPG(startDate: Date(), hours: 6)
+                await MainActor.run {
+                    self.isEPGPreloaded = true
+                }
+                print("📺 LiveTVDataStore: Background preload complete ✅")
+            }
+        }
+    }
+
+    /// Elevate preload priority when user is about to view Live TV.
+    /// If data is already loaded, this does nothing. Otherwise it cancels
+    /// background task and starts high priority load.
+    func elevatePreloadPriority() async {
+        // If already loaded, nothing to do
+        guard epg.isEmpty else {
+            print("📺 LiveTVDataStore: EPG already loaded, no priority elevation needed")
+            return
+        }
+
+        // Cancel background task
+        backgroundPreloadTask?.cancel()
+        backgroundPreloadTask = nil
+
+        print("📺 LiveTVDataStore: Elevating to high priority load")
+
+        // Load with default (high) priority
+        if channels.isEmpty && !isLoadingChannels {
+            await loadChannels()
+        }
+
+        if epg.isEmpty && !isLoadingEPG && !channels.isEmpty {
+            await loadEPG(startDate: Date(), hours: 6)
+            isEPGPreloaded = true
+        }
     }
 
     // MARK: - Program Helpers

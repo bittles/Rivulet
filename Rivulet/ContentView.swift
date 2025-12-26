@@ -48,15 +48,18 @@ extension EnvironmentValues {
     }
 }
 
-/// Environment key used to request content to claim focus after sidebar closes
-struct ContentFocusVersionKey: EnvironmentKey {
-    static let defaultValue: Int = 0
+// Note: Focus management is now handled by FocusScopeManager in Services/Focus/
+// The isSidebarVisible environment key is kept for backward compatibility during migration
+
+/// Environment key indicating sidebar is visible (derived from FocusScopeManager)
+struct IsSidebarVisibleKey: EnvironmentKey {
+    static let defaultValue: Bool = false
 }
 
 extension EnvironmentValues {
-    var contentFocusVersion: Int {
-        get { self[ContentFocusVersionKey.self] }
-        set { self[ContentFocusVersionKey.self] = newValue }
+    var isSidebarVisible: Bool {
+        get { self[IsSidebarVisibleKey.self] }
+        set { self[IsSidebarVisibleKey.self] = newValue }
     }
 }
 
@@ -98,12 +101,17 @@ struct TVSidebarView: View {
     @StateObject private var dataStore = PlexDataStore.shared
     @StateObject private var liveTVDataStore = LiveTVDataStore.shared
     @StateObject private var nestedNavState = NestedNavigationState()
+    @StateObject private var focusScopeManager = FocusScopeManager()
     @State private var selectedDestination: TVDestination = .home
     @State private var selectedLibraryKey: String?
-    @State private var isSidebarVisible = false
-    @State private var contentFocusVersion = 0
     @FocusState private var focusedItem: String?
     @State private var highlightedItem: String = "home"  // Tracks which item is currently highlighted
+    @State private var sidebarOpenTime: CFAbsoluteTime = 0  // Track when sidebar opened to ignore stale input
+
+    /// Computed property for sidebar visibility based on active scope
+    private var isSidebarVisible: Bool {
+        focusScopeManager.isScopeActive(.sidebar)
+    }
 
     private let sidebarWidth: CGFloat = 340
     
@@ -123,31 +131,34 @@ struct TVSidebarView: View {
         ZStack {
             // Full-screen content with left-edge trigger
             HStack(spacing: 0) {
-                // Only show left-edge trigger when not in nested navigation
-                if !isSidebarVisible && !nestedNavState.isNested {
-                    LeftEdgeTrigger {
-                        openSidebar()
-                    }
+                // Left-edge trigger - hidden via opacity instead of conditional to avoid layout recalc
+                LeftEdgeTrigger {
+                    openSidebar()
                 }
+                .opacity(isSidebarVisible || nestedNavState.isNested ? 0 : 1)
+                .allowsHitTesting(!isSidebarVisible && !nestedNavState.isNested)
 
                 mainContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .disabled(isSidebarVisible)  // Prevents focus/interaction when sidebar open
-                .environment(\.openSidebar, openSidebar)
-                .environment(\.contentFocusVersion, contentFocusVersion)
-                .environment(\.nestedNavigationState, nestedNavState)
+                    // Disable content when sidebar visible to prevent focus from escaping
+                    .disabled(isSidebarVisible)
+                    .environment(\.openSidebar, openSidebar)
+                    .environment(\.nestedNavigationState, nestedNavState)
+                    .environment(\.isSidebarVisible, isSidebarVisible)
+                    .environment(\.focusScopeManager, focusScopeManager)
             }
             .zIndex(0)
 
-            if isSidebarVisible {
-                Color.black
-                    .opacity(0.4)
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        closeSidebar()
-                    }
-                    .zIndex(1)
-            }
+            // Dim overlay - animated separately
+            Color.black
+                .opacity(isSidebarVisible ? 0.4 : 0)
+                .ignoresSafeArea()
+                .allowsHitTesting(isSidebarVisible)
+                .onTapGesture {
+                    closeSidebar()
+                }
+                .animation(.easeOut(duration: 0.15), value: isSidebarVisible)
+                .zIndex(1)
 
             HStack(spacing: 0) {
                 sidebarContent
@@ -159,22 +170,28 @@ struct TVSidebarView: View {
                         .regular,
                         in: RoundedRectangle(cornerRadius: 44, style: .continuous)
                     )
-                    .shadow(color: .black.opacity(0.5), radius: 40, x: 20, y: 0)
+                    // GPU-accelerated shadow using blur instead of CPU-rendered .shadow()
+                    .background(
+                        RoundedRectangle(cornerRadius: 44, style: .continuous)
+                            .fill(.black)
+                            .blur(radius: 30)
+                            .offset(x: 15)
+                            .opacity(0.5)
+                    )
                     .padding(.leading, 12)
                     .offset(x: isSidebarVisible ? 0 : -sidebarWidth - 60)
 
                 Spacer()
             }
             .zIndex(2)
+            .animation(.spring(response: 0.18, dampingFraction: 0.9), value: isSidebarVisible)
         }
         .ignoresSafeArea()
-        .animation(.easeOut(duration: 0.2), value: isSidebarVisible)
         // Handle exit command based on current state
         .onExitCommand {
             if isSidebarVisible {
                 closeSidebar()
             } else if nestedNavState.isNested {
-                // Go back from nested navigation
                 nestedNavState.goBack()
             } else {
                 openSidebar()
@@ -189,6 +206,10 @@ struct TVSidebarView: View {
                     _ = await (hubsLoad, librariesLoad)
                 }
             }
+        }
+        .task {
+            // Start background preloading of Live TV data (low priority)
+            liveTVDataStore.startBackgroundPreload()
         }
     }
 
@@ -297,22 +318,25 @@ struct TVSidebarView: View {
                 }
                 .buttonStyle(SidebarContainerButtonStyle())  // Custom style to prevent white focus
                 .focused($focusedItem, equals: "sidebar")
+                .focusSection()  // Contain focus within sidebar, prevent escape to content
                 .onMoveCommand { direction in
                     handleSidebarNavigation(direction: direction, proxy: proxy)
                 }
                 .onExitCommand {
-                    // Menu button closes sidebar when it's focused
                     closeSidebar()
                 }
                 .onChange(of: isSidebarVisible) { _, isVisible in
                     if isVisible {
-                        // When sidebar becomes visible, capture focus immediately
-                        DispatchQueue.main.async {
-                            focusedItem = "sidebar"
-                            withAnimation(.easeOut(duration: 0.15)) {
-                                proxy.scrollTo(highlightedItem, anchor: .center)
-                            }
-                        }
+                        focusedItem = "sidebar"
+                        proxy.scrollTo(highlightedItem, anchor: .center)
+                    }
+                }
+                // Monitor focus changes to ensure sidebar keeps focus when visible
+                .onChange(of: focusedItem) { _, newValue in
+                    print("🔷 [FOCUS] focusedItem changed to: \(String(describing: newValue)), isSidebarVisible=\(isSidebarVisible)")
+                    if isSidebarVisible && newValue != "sidebar" {
+                        print("🔷 [FOCUS] ⚠️ Focus escaped sidebar! Re-asserting...")
+                        focusedItem = "sidebar"
                     }
                 }
             }
@@ -353,7 +377,7 @@ struct TVSidebarView: View {
                         welcomeView
                     }
                 case .liveTV:
-                    ChannelListView()
+                    LiveTVContainerView()
                 case .settings:
                     SettingsView()
                 }
@@ -384,6 +408,7 @@ struct TVSidebarView: View {
     // MARK: - Navigation Actions
 
     private func openSidebar() {
+        // Set highlighted item to current selection
         if let libraryKey = selectedLibraryKey {
             highlightedItem = libraryKey
         } else if selectedDestination == .search {
@@ -396,18 +421,18 @@ struct TVSidebarView: View {
             highlightedItem = "home"
         }
 
-        isSidebarVisible = true
+        // Record open time to ignore stale input that triggered the open
+        sidebarOpenTime = CFAbsoluteTimeGetCurrent()
+
+        // Activate sidebar scope (saves content focus automatically)
+        focusScopeManager.activate(.sidebar)
     }
 
     private func closeSidebar() {
-        // First: tell content to prepare to claim focus
-        contentFocusVersion &+= 1
-
-        // Then: hide sidebar
-        isSidebarVisible = false
+        // Deactivate sidebar scope (restores content focus automatically)
+        focusScopeManager.deactivate()
 
         // Delay releasing sidebar focus so content can claim it first
-        // This prevents the system from picking a random focus target
         DispatchQueue.main.async {
             focusedItem = nil
         }
@@ -433,14 +458,31 @@ struct TVSidebarView: View {
     }
     
     // MARK: - Sidebar Navigation Handler
-    
+
     private func handleSidebarNavigation(direction: MoveCommandDirection, proxy: ScrollViewProxy) {
+        print("🔷 [SIDEBAR NAV] direction=\(direction), isSidebarVisible=\(isSidebarVisible), focusedItem=\(String(describing: focusedItem))")
+
         // Ignore move commands when sidebar isn't shown
-        guard isSidebarVisible else { return }
+        guard isSidebarVisible else {
+            print("🔷 [SIDEBAR NAV] ❌ Ignored - sidebar not visible")
+            return
+        }
+
+        // Ignore stale input from the gesture that opened the sidebar (within 200ms)
+        let timeSinceOpen = CFAbsoluteTimeGetCurrent() - sidebarOpenTime
+        if timeSinceOpen < 0.2 {
+            print("🔷 [SIDEBAR NAV] ❌ Ignored - stale input")
+            return
+        }
 
         let items = allSidebarItems
-        guard let currentIndex = items.firstIndex(of: highlightedItem) else { return }
-        
+        guard let currentIndex = items.firstIndex(of: highlightedItem) else {
+            print("🔷 [SIDEBAR NAV] ❌ Ignored - highlightedItem not found")
+            return
+        }
+
+        print("🔷 [SIDEBAR NAV] ✓ Processing: currentIndex=\(currentIndex), highlightedItem=\(highlightedItem)")
+
         switch direction {
         case .up:
             // Prevent going above first item
@@ -452,7 +494,9 @@ struct TVSidebarView: View {
                 }
             }
             // If already at top, do nothing (prevents going off sidebar)
-            
+            // Re-assert focus on sidebar to prevent SwiftUI from moving it
+            focusedItem = "sidebar"
+
         case .down:
             // Prevent going below last item
             if currentIndex < items.count - 1 {
@@ -463,15 +507,17 @@ struct TVSidebarView: View {
                 }
             }
             // If already at bottom, do nothing (prevents going off sidebar)
-            
+            // Re-assert focus on sidebar to prevent SwiftUI from moving it
+            focusedItem = "sidebar"
+
         case .right:
             // Navigate to the highlighted item (same as pressing Select)
             selectHighlightedItem()
-            
+
         case .left:
             // Just close sidebar without navigation
             closeSidebar()
-            
+
         @unknown default:
             break
         }
@@ -493,9 +539,6 @@ struct TVSidebarView: View {
         } else if highlightedItem == "settings" {
             navigateToSettings()
         }
-
-        // Ask content to reclaim focus after sidebar closes
-        contentFocusVersion &+= 1
     }
 
     // MARK: - Explicit Navigation (on button press or right arrow)
@@ -587,7 +630,7 @@ struct SidebarButton: View {
 struct LeftEdgeTrigger: View {
     let action: () -> Void
     @FocusState private var isFocused: Bool
-    
+
     var body: some View {
         Button {
             action()
@@ -698,7 +741,7 @@ struct NavigationSplitViewContent: View {
             case .liveTVChannels:
                 ChannelListView()
             case .liveTVGuide:
-                EPGGridView()
+                GuideLayoutView()
             case .settings:
                 SettingsView()
             case .none:

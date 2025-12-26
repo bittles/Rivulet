@@ -26,9 +26,24 @@ final class MultiStreamViewModel: ObservableObject {
     // MARK: - Published State
 
     @Published private(set) var streams: [StreamSlot] = []
-    @Published var focusedSlotIndex: Int = 0
+    @Published var focusedSlotIndex: Int = 0 {
+        didSet {
+            print("📺 focusedSlotIndex changed: \(oldValue) → \(focusedSlotIndex)")
+        }
+    }
     @Published var showControls = true
-    @Published var showChannelPicker = false
+    @Published var showChannelPicker = false {
+        didSet {
+            if showChannelPicker {
+                // Picker opened - cancel timer so controls don't hide while browsing
+                controlsTimer?.invalidate()
+                controlsTimer = nil
+            } else if oldValue && !showChannelPicker {
+                // Picker closed - restart timer to hide controls
+                startControlsHideTimer()
+            }
+        }
+    }
 
     // MARK: - Private State
 
@@ -185,7 +200,7 @@ final class MultiStreamViewModel: ObservableObject {
 
         print("📺 MultiStream: Focus changed to slot \(newIndex) ('\(streams[newIndex].channel.name)')")
 
-        showControlsTemporarily()
+        // Don't show controls when just switching focus - user uses Select to show controls
     }
 
     // MARK: - Playback Controls
@@ -232,17 +247,21 @@ final class MultiStreamViewModel: ObservableObject {
         startControlsHideTimer()
     }
 
+    /// Reset the controls hide timer (call when user navigates between buttons)
+    func resetControlsTimer() {
+        guard showControls && !showChannelPicker else { return }
+        startControlsHideTimer()
+    }
+
     private func startControlsHideTimer() {
         controlsTimer?.invalidate()
         controlsTimer = Timer.scheduledTimer(withTimeInterval: controlsHideDelay, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                // Only hide if all streams are playing
-                let allPlaying = self.streams.allSatisfy { $0.playbackState == .playing }
-                if allPlaying {
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        self.showControls = false
-                    }
+                // Hide controls after timeout - user can press Select to show again
+                // Note: Timer is cancelled when picker opens, so this won't fire during picker
+                withAnimation(.easeOut(duration: 0.3)) {
+                    self.showControls = false
                 }
             }
         }

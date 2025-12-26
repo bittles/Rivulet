@@ -31,6 +31,8 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: MPVMetalViewController, context: Context) {
-        // Updates handled through the controller reference
+        // Force layout update when SwiftUI re-renders with new size
+        uiViewController.view.setNeedsLayout()
+        uiViewController.view.layoutIfNeeded()
     }
 }

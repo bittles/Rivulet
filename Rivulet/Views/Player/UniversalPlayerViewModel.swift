@@ -31,6 +31,41 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var currentAudioTrackId: Int?
     @Published private(set) var currentSubtitleTrackId: Int?
 
+    // MARK: - Info Panel State
+
+    enum InfoTab: String, CaseIterable {
+        case info = "Info"
+        case audio = "Audio"
+        case subtitles = "Subtitles"
+    }
+
+    @Published var selectedInfoTab: InfoTab = .subtitles
+    @Published var focusedInfoTabIndex: Int = 0
+
+    /// Track if focus is on the tab bar (true) or in content area (false)
+    @Published var isInfoPanelFocusOnTabs: Bool = true
+
+    /// Track which content item (button) is focused when in content area
+    @Published var focusedContentIndex: Int = 0
+
+    /// Available tabs based on current state
+    /// Order: Subtitles (most used), Audio (if multiple tracks), Info
+    var availableInfoTabs: [InfoTab] {
+        var tabs: [InfoTab] = [.subtitles]
+        if audioTracks.count > 1 {
+            tabs.append(.audio)
+        }
+        tabs.append(.info)
+        return tabs
+    }
+
+    /// The currently focused tab
+    var focusedInfoTab: InfoTab? {
+        let tabs = availableInfoTabs
+        guard focusedInfoTabIndex >= 0 && focusedInfoTabIndex < tabs.count else { return nil }
+        return tabs[focusedInfoTabIndex]
+    }
+
     // MARK: - Player Instance
 
     private(set) var mpvPlayerWrapper: MPVPlayerWrapper
@@ -159,6 +194,14 @@ final class UniversalPlayerViewModel: ObservableObject {
                 self?.errorMessage = error.localizedDescription
             }
             .store(in: &cancellables)
+
+        // Auto-update tracks when MPV reports them
+        mpvPlayerWrapper.tracksPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
+                self?.updateTrackLists()
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Computed Properties
@@ -214,6 +257,97 @@ final class UniversalPlayerViewModel: ObservableObject {
             mpvPlayerWrapper.play()
         }
         showControlsTemporarily()
+    }
+
+    // MARK: - Info Panel Navigation
+
+    /// Navigate focus between info tabs (auto-selects the tab)
+    func navigateInfoTab(direction: Int) {
+        let tabs = availableInfoTabs
+        let newIndex = focusedInfoTabIndex + direction
+        if newIndex >= 0 && newIndex < tabs.count {
+            focusedInfoTabIndex = newIndex
+            selectedInfoTab = tabs[newIndex]
+            print("🎬 [INFO] Switched to tab \(focusedInfoTabIndex): \(tabs[newIndex].rawValue)")
+        }
+    }
+
+    /// Select the currently focused tab (for explicit selection if needed)
+    func selectFocusedInfoTab() {
+        if let tab = focusedInfoTab {
+            selectedInfoTab = tab
+            print("🎬 [INFO] Selected tab: \(tab.rawValue)")
+        }
+    }
+
+    /// Reset info panel state when opening
+    func resetInfoPanelFocus() {
+        // Refresh track lists when info panel opens
+        updateTrackLists()
+        print("🎬 [INFO] Tracks: \(subtitleTracks.count) subtitles, \(audioTracks.count) audio")
+
+        let tabs = availableInfoTabs
+        focusedInfoTabIndex = 0
+        selectedInfoTab = tabs.first ?? .subtitles
+        isInfoPanelFocusOnTabs = true
+        print("🎬 [INFO] Reset to first tab: \(tabs.first?.rawValue ?? "subtitles"), focus on tabs")
+    }
+
+    /// Number of focusable items in current tab's content
+    var contentItemCount: Int {
+        switch selectedInfoTab {
+        case .subtitles:
+            return subtitleTracks.count + 1  // +1 for "Off" option
+        case .audio:
+            return audioTracks.count
+        case .info:
+            return 0  // Info tab has no focusable content
+        }
+    }
+
+    /// Move focus from tabs to content area
+    func focusInfoPanelContent() {
+        isInfoPanelFocusOnTabs = false
+        focusedContentIndex = 0  // Start at first item
+        print("🎬 [INFO] Focus moved to content area, \(contentItemCount) items")
+    }
+
+    /// Move focus back to tabs from content area
+    func focusInfoPanelTabs() {
+        isInfoPanelFocusOnTabs = true
+        print("🎬 [INFO] Focus returned to tabs")
+    }
+
+    /// Navigate focus between content items (left/right)
+    func navigateContent(direction: Int) {
+        let newIndex = focusedContentIndex + direction
+        if newIndex >= 0 && newIndex < contentItemCount {
+            focusedContentIndex = newIndex
+            print("🎬 [INFO] Content focus: \(focusedContentIndex)")
+        }
+    }
+
+    /// Select the currently focused content item
+    func selectFocusedContent() {
+        switch selectedInfoTab {
+        case .subtitles:
+            if focusedContentIndex == 0 {
+                // "Off" option
+                selectSubtitleTrack(id: nil)
+            } else {
+                let trackIndex = focusedContentIndex - 1
+                if trackIndex < subtitleTracks.count {
+                    selectSubtitleTrack(id: subtitleTracks[trackIndex].id)
+                }
+            }
+        case .audio:
+            if focusedContentIndex < audioTracks.count {
+                selectAudioTrack(id: audioTracks[focusedContentIndex].id)
+            }
+        case .info:
+            break
+        }
+        print("🎬 [INFO] Selected content at index \(focusedContentIndex)")
     }
 
     func seek(to time: TimeInterval) async {

@@ -207,6 +207,70 @@ struct SettingsActionRow: View {
     }
 }
 
+// MARK: - Settings Picker Row
+
+struct SettingsPickerRow<T: Hashable & CustomStringConvertible>: View {
+    let icon: String
+    let iconColor: Color
+    let title: String
+    let subtitle: String
+    @Binding var selection: T
+    let options: [T]
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 20) {
+            // Icon
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(iconColor.gradient)
+                    .frame(width: 64, height: 64)
+
+                Image(systemName: icon)
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+
+            // Text
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 29, weight: .medium))
+                    .foregroundStyle(.white)
+
+                Text(subtitle)
+                    .font(.system(size: 23))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+
+            Spacer()
+
+            // Current selection
+            Text(selection.description)
+                .font(.system(size: 26, weight: .medium))
+                .foregroundStyle(.white.opacity(0.7))
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(isFocused ? .white.opacity(0.15) : .clear)
+        )
+        .focusable()
+        .focused($isFocused)
+        .onTapGesture {
+            cycleToNextOption()
+        }
+        .animation(.easeOut(duration: 0.15), value: isFocused)
+    }
+
+    private func cycleToNextOption() {
+        guard let currentIndex = options.firstIndex(of: selection) else { return }
+        let nextIndex = (currentIndex + 1) % options.count
+        selection = options[nextIndex]
+    }
+}
+
 // MARK: - Connect Button
 
 struct ConnectButton: View {

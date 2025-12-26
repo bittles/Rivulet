@@ -55,7 +55,7 @@ struct LiveTVPlayerView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
-        .animation(.easeInOut(duration: 0.3), value: viewModel.streamCount)
+        // Don't animate stream count changes - causes issues with MPV player resizing
         #if os(tvOS)
         .onPlayPauseCommand {
             // Physical play/pause button on remote - direct toggle
@@ -67,16 +67,21 @@ struct LiveTVPlayerView: View {
         #endif
         .onChange(of: viewModel.showControls) { _, showControls in
             if showControls {
-                // When controls appear, focus the play/pause button (index 0 if no remove, 1 if remove exists)
-                let playButtonIndex = viewModel.streamCount > 1 ? 1 : 0
+                // When controls appear, focus the play/pause button (always index 0)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    focusArea = .controlButton(playButtonIndex)
+                    focusArea = .controlButton(0)
                 }
             } else {
                 // When controls hide, focus the stream grid
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     focusArea = .streamGrid
                 }
+            }
+        }
+        .onChange(of: focusArea) { _, newFocus in
+            // Reset hide timer when navigating between control buttons
+            if case .controlButton = newFocus {
+                viewModel.resetControlsTimer()
             }
         }
         .onAppear {
@@ -115,23 +120,22 @@ struct LiveTVPlayerView: View {
             )
             .ignoresSafeArea()
 
-            // Invisible button to capture Select press and show controls
+            // Invisible focusable area to capture Select press and show controls
             if !viewModel.showControls {
-                Button {
-                    showControlsWithFocus()
-                } label: {
-                    Color.clear
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .focusable()
-                .focused($focusArea, equals: .streamGrid)
-                #if os(tvOS)
-                .onMoveCommand { direction in
-                    // Single stream: any d-pad press shows controls
-                    showControlsWithFocus()
-                }
-                #endif
+                Color.clear
+                    .contentShape(Rectangle())
+                    .focusable()
+                    .focused($focusArea, equals: .streamGrid)
+                    .onLongPressGesture(minimumDuration: 0) {
+                        // Select pressed - show controls
+                        showControlsWithFocus()
+                    }
+                    #if os(tvOS)
+                    .onMoveCommand { direction in
+                        // Single stream: any d-pad press shows controls
+                        showControlsWithFocus()
+                    }
+                    #endif
             }
         }
     }
@@ -163,6 +167,7 @@ struct LiveTVPlayerView: View {
                                         }
                                     )
                                     .frame(width: slotWidth, height: slotHeight)
+                                    .clipped()
                                 } else {
                                     // Empty slot - same size as other slots, just black
                                     Color.black
@@ -173,23 +178,21 @@ struct LiveTVPlayerView: View {
                     }
                 }
 
-                // Invisible button overlay for stream navigation
+                // Invisible focusable overlay for stream navigation
                 if !viewModel.showControls {
-                    Button {
-                        // Select pressed - show controls
-                        showControlsWithFocus()
-                    } label: {
-                        Color.clear
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .focusable()
-                    .focused($focusArea, equals: .streamGrid)
-                    #if os(tvOS)
-                    .onMoveCommand { direction in
-                        handleStreamNavigation(direction)
-                    }
-                    #endif
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .focusable()
+                        .focused($focusArea, equals: .streamGrid)
+                        .onLongPressGesture(minimumDuration: 0) {
+                            // Select pressed - show controls
+                            showControlsWithFocus()
+                        }
+                        #if os(tvOS)
+                        .onMoveCommand { direction in
+                            handleStreamNavigation(direction)
+                        }
+                        #endif
                 }
             }
         }
@@ -439,12 +442,25 @@ struct LiveTVPlayerView: View {
     private func buildControlButtons() -> [ControlButtonConfig] {
         var buttons: [ControlButtonConfig] = []
 
+        // Play/Pause button (always first on left)
+        let isPlaying = viewModel.focusedStream?.playerWrapper.isPlaying ?? false
+        buttons.append(ControlButtonConfig(
+            icon: isPlaying ? "pause.fill" : "play.fill",
+            label: isPlaying ? "Pause" : "Play",
+            isLarge: true,
+            action: { viewModel.togglePlayPauseOnFocused() }
+        ))
+
         // Remove stream button (only when multiple streams)
         if viewModel.streamCount > 1 {
             buttons.append(ControlButtonConfig(
                 icon: "minus.circle.fill",
                 label: "Remove",
                 action: {
+                    print("📺 Remove pressed: focusedSlotIndex=\(viewModel.focusedSlotIndex), streamCount=\(viewModel.streamCount)")
+                    for (idx, stream) in viewModel.streams.enumerated() {
+                        print("  - Stream \(idx): \(stream.channel.name) (focused: \(idx == viewModel.focusedSlotIndex))")
+                    }
                     viewModel.removeStream(at: viewModel.focusedSlotIndex)
                     // If only 1 stream left, hide controls
                     if viewModel.streamCount <= 1 {
@@ -454,16 +470,7 @@ struct LiveTVPlayerView: View {
             ))
         }
 
-        // Play/Pause button
-        let isPlaying = viewModel.focusedStream?.playerWrapper.isPlaying ?? false
-        buttons.append(ControlButtonConfig(
-            icon: isPlaying ? "pause.fill" : "play.fill",
-            label: isPlaying ? "Pause" : "Play",
-            isLarge: true,
-            action: { viewModel.togglePlayPauseOnFocused() }
-        ))
-
-        // Add channel button
+        // Add channel button (next to Remove)
         if viewModel.canAddStream {
             buttons.append(ControlButtonConfig(
                 icon: "plus.circle.fill",
@@ -472,7 +479,7 @@ struct LiveTVPlayerView: View {
             ))
         }
 
-        // Exit button
+        // Exit button (always last on right)
         buttons.append(ControlButtonConfig(
             icon: "xmark.circle.fill",
             label: "Exit",

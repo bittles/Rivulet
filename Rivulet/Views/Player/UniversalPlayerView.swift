@@ -10,10 +10,12 @@ import SwiftUI
 struct UniversalPlayerView: View {
     @StateObject private var viewModel: UniversalPlayerViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.focusScopeManager) private var focusScopeManager
 
     @State private var hasStartedPlayback = false
     @State private var playerController: MPVMetalViewController?
 
+    /// Initialize with metadata (creates viewModel internally)
     init(
         metadata: PlexMetadata,
         serverURL: String,
@@ -26,6 +28,11 @@ struct UniversalPlayerView: View {
             authToken: authToken,
             startOffset: startOffset
         ))
+    }
+
+    /// Initialize with an externally-created viewModel (for UIViewController presentation)
+    init(viewModel: UniversalPlayerViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
     }
 
     var body: some View {
@@ -53,18 +60,27 @@ struct UniversalPlayerView: View {
                 errorView(message: error.localizedDescription)
             }
 
-            // Controls Overlay
+            // Controls Overlay (transport bar at bottom)
             if viewModel.showControls && viewModel.playbackState.isActive {
-                PlayerControlsOverlay(viewModel: viewModel)
+                PlayerControlsOverlay(viewModel: viewModel, showInfoPanel: false)
                     .transition(.opacity.animation(.easeInOut(duration: 0.25)))
+            }
+
+            // Info Panel (independent of controls visibility)
+            if viewModel.showInfoPanel {
+                PlayerControlsOverlay(viewModel: viewModel, showInfoPanel: true)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
-        // Only capture focus/commands when info panel is NOT showing
-        // This allows the info panel buttons to receive focus
-        .focusable(!viewModel.showInfoPanel)
+        .animation(.easeOut(duration: 0.3), value: viewModel.showInfoPanel)
+        // Focusable when we're handling input manually (not when SwiftUI should handle content focus)
+        .focusable(!viewModel.showInfoPanel || viewModel.isInfoPanelFocusOnTabs)
         .contentShape(Rectangle())
         .onTapGesture {
+            // Don't toggle controls if info panel is showing
+            guard !viewModel.showInfoPanel else { return }
+
             // Tap anywhere to show/hide controls
             withAnimation(.easeInOut(duration: 0.25)) {
                 if viewModel.showControls {
@@ -76,15 +92,42 @@ struct UniversalPlayerView: View {
         }
         #if os(tvOS)
         .onMoveCommand { direction in
-            // Don't intercept when info panel is showing - let buttons handle focus
-            guard !viewModel.showInfoPanel else { return }
-            handleMoveCommand(direction)
+            if viewModel.showInfoPanel {
+                // Route to info panel navigation
+                // Only intercept when focus is on tabs, let SwiftUI handle content
+                if viewModel.isInfoPanelFocusOnTabs {
+                    handleInfoPanelNavigation(direction)
+                } else {
+                    // In content area - handle navigation manually
+                    switch direction {
+                    case .up:
+                        viewModel.focusInfoPanelTabs()
+                    case .left:
+                        viewModel.navigateContent(direction: -1)
+                    case .right:
+                        viewModel.navigateContent(direction: 1)
+                    case .down:
+                        break  // Already at bottom
+                    @unknown default:
+                        break
+                    }
+                }
+            } else {
+                handleMoveCommand(direction)
+            }
         }
         .onPlayPauseCommand {
-            handleSelectCommand()
-        }
-        .onExitCommand {
-            handleExitCommand()
+            if viewModel.showInfoPanel {
+                if viewModel.isInfoPanelFocusOnTabs {
+                    // Select the focused tab in info panel
+                    selectFocusedInfoTab()
+                } else {
+                    // Select the focused content item
+                    viewModel.selectFocusedContent()
+                }
+            } else {
+                handleSelectCommand()
+            }
         }
         #endif
         .onChange(of: playerController) { _, controller in
@@ -95,15 +138,29 @@ struct UniversalPlayerView: View {
         .task {
             guard !hasStartedPlayback else { return }
             hasStartedPlayback = true
+            // Activate player scope when player starts
+            focusScopeManager.activate(.player)
             await viewModel.startPlayback()
         }
         .onDisappear {
             viewModel.stopPlayback()
             reportFinalProgress()
+            // Deactivate player scope when leaving
+            focusScopeManager.deactivate()
         }
         .onChange(of: viewModel.currentTime) { _, newTime in
             // Report progress periodically
             reportProgress(time: newTime)
+        }
+        // Manage focus scope when info panel opens/closes
+        .onChange(of: viewModel.showInfoPanel) { _, showPanel in
+            if showPanel {
+                // Activate info bar scope to contain focus
+                focusScopeManager.activate(.playerInfoBar)
+            } else {
+                // Return to player scope
+                focusScopeManager.deactivate()
+            }
         }
     }
 
@@ -190,17 +247,9 @@ struct UniversalPlayerView: View {
 
         switch direction {
         case .left:
-            if viewModel.showInfoPanel {
-                // When info panel is showing, let focus system handle it
-                return
-            }
             // Enter or continue scrubbing - increases speed with each press
             viewModel.scrubInDirection(forward: false)
         case .right:
-            if viewModel.showInfoPanel {
-                // When info panel is showing, let focus system handle it
-                return
-            }
             // Enter or continue scrubbing - increases speed with each press
             viewModel.scrubInDirection(forward: true)
         case .down:
@@ -209,23 +258,51 @@ struct UniversalPlayerView: View {
                 viewModel.cancelScrub()
             }
             if !viewModel.showInfoPanel {
+                viewModel.resetInfoPanelFocus()
                 withAnimation(.easeOut(duration: 0.3)) {
                     viewModel.showInfoPanel = true
                 }
             }
         case .up:
-            // Hide info panel
-            if viewModel.showInfoPanel {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    viewModel.showInfoPanel = false
-                }
-            } else if viewModel.isScrubbing {
-                // Cancel scrubbing on up if not in info panel
+            // Cancel scrubbing on up
+            if viewModel.isScrubbing {
                 viewModel.cancelScrub()
             }
         @unknown default:
             break
         }
+    }
+
+    private func handleInfoPanelNavigation(_ direction: MoveCommandDirection) {
+        switch direction {
+        case .left:
+            viewModel.navigateInfoTab(direction: -1)
+        case .right:
+            viewModel.navigateInfoTab(direction: 1)
+        case .up:
+            // Close info panel on up
+            withAnimation(.easeOut(duration: 0.3)) {
+                viewModel.showInfoPanel = false
+            }
+        case .down:
+            // Move focus to content area (subtitle/audio buttons)
+            if viewModel.selectedInfoTab == .info {
+                // Info tab has no selectable content - switch to Subtitles first
+                let tabs = viewModel.availableInfoTabs
+                if let subtitlesIndex = tabs.firstIndex(of: .subtitles) {
+                    viewModel.focusedInfoTabIndex = subtitlesIndex
+                    viewModel.selectedInfoTab = .subtitles
+                }
+            }
+            // Now focus on content
+            viewModel.focusInfoPanelContent()
+        @unknown default:
+            break
+        }
+    }
+
+    private func selectFocusedInfoTab() {
+        viewModel.selectFocusedInfoTab()
     }
 
     private func handleSelectCommand() {
@@ -237,26 +314,6 @@ struct UniversalPlayerView: View {
             viewModel.togglePlayPause()
         }
         viewModel.showControlsTemporarily()
-    }
-
-    private func handleExitCommand() {
-        if viewModel.isScrubbing {
-            // Cancel scrubbing first
-            viewModel.cancelScrub()
-        } else if viewModel.showInfoPanel {
-            // Close info panel
-            withAnimation(.easeOut(duration: 0.3)) {
-                viewModel.showInfoPanel = false
-            }
-        } else if viewModel.showControls {
-            // Hide controls next
-            withAnimation(.easeOut(duration: 0.2)) {
-                viewModel.showControls = false
-            }
-        } else {
-            // Then dismiss player
-            dismiss()
-        }
     }
     #endif
 

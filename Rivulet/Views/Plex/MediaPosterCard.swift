@@ -22,6 +22,7 @@ struct CardButtonStyle: ButtonStyle {
 // MARK: - Watched Corner Tag
 
 /// A triangular corner tag indicating the item has been watched
+/// Uses Path instead of Canvas for simpler GPU-backed rendering
 struct WatchedCornerTag: View {
     #if os(tvOS)
     private let size: CGFloat = 48
@@ -31,25 +32,28 @@ struct WatchedCornerTag: View {
     private let checkSize: CGFloat = 15
     #endif
 
-    var body: some View {
-        Canvas { context, _ in
-            // Draw triangle
-            let path = Path { p in
+    /// Triangle shape for the corner tag
+    private struct CornerTriangle: Shape {
+        func path(in rect: CGRect) -> Path {
+            Path { p in
                 p.move(to: CGPoint(x: 0, y: 0))
-                p.addLine(to: CGPoint(x: size, y: 0))
-                p.addLine(to: CGPoint(x: size, y: size))
+                p.addLine(to: CGPoint(x: rect.width, y: 0))
+                p.addLine(to: CGPoint(x: rect.width, y: rect.height))
                 p.closeSubpath()
             }
-            context.fill(path, with: .color(.green))
         }
-        .frame(width: size, height: size)
-        .overlay(alignment: .topTrailing) {
-            Image(systemName: "checkmark")
-                .font(.system(size: checkSize, weight: .bold))
-                .foregroundStyle(.white)
-                .padding(6)
-        }
-        .shadow(color: .black.opacity(0.4), radius: 3, y: 1)
+    }
+
+    var body: some View {
+        CornerTriangle()
+            .fill(.green)
+            .frame(width: size, height: size)
+            .overlay(alignment: .topTrailing) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: checkSize, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(6)
+            }
     }
 }
 
@@ -94,7 +98,14 @@ struct MediaPosterCard: View, Equatable {
                 }
                 #if os(tvOS)
                 .hoverEffect(.highlight)  // Native tvOS focus effect on poster only
-                .shadow(color: .black.opacity(0.4), radius: 12, y: 6)
+                // GPU-accelerated shadow: blur is hardware-accelerated, unlike .shadow() with large radius
+                .background(
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .fill(.black)
+                        .blur(radius: 12)
+                        .offset(y: 6)
+                        .opacity(0.4)
+                )
                 .padding(.bottom, 10)  // Space for hover scale effect
                 #endif
 

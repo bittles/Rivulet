@@ -11,7 +11,6 @@ struct PlexSearchView: View {
     @StateObject private var authManager = PlexAuthManager.shared
     @StateObject private var dataStore = PlexDataStore.shared
     @Environment(\.nestedNavigationState) private var nestedNavState
-    @Environment(\.contentFocusVersion) private var contentFocusVersion
 
     @State private var query = ""
     @State private var results: [PlexMetadata] = []

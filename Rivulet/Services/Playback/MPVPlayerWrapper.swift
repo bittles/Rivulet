@@ -21,6 +21,7 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
     private let playbackStateSubject = CurrentValueSubject<UniversalPlaybackState, Never>(.idle)
     private let timeSubject = CurrentValueSubject<TimeInterval, Never>(0)
     private let errorSubject = PassthroughSubject<PlayerError, Never>()
+    private let tracksSubject = PassthroughSubject<Void, Never>()
 
     private var _duration: TimeInterval = 0
     private var _audioTracks: [MediaTrack] = []
@@ -46,6 +47,11 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
 
     var errorPublisher: AnyPublisher<PlayerError, Never> {
         errorSubject.eraseToAnyPublisher()
+    }
+
+    /// Fires when track lists are updated (audio/subtitle tracks available)
+    var tracksPublisher: AnyPublisher<Void, Never> {
+        tracksSubject.eraseToAnyPublisher()
     }
 
     // MARK: - Playback State
@@ -243,6 +249,10 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
         // Update selected track IDs
         _currentAudioTrackId = audio.first(where: { $0.isSelected })?.id
         _currentSubtitleTrackId = subtitles.first(where: { $0.isSelected })?.id
+
+        // Notify subscribers that tracks are available
+        print("🎬 [MPV] Tracks updated: \(audio.count) audio, \(subtitles.count) subtitles")
+        tracksSubject.send()
     }
 
     func mpvPlayerDidEncounterError(_ message: String) {

@@ -13,9 +13,11 @@ struct PlexHomeView: View {
     @StateObject private var authManager = PlexAuthManager.shared
     @AppStorage("showHomeHero") private var showHomeHero = true
     @Environment(\.nestedNavigationState) private var nestedNavState
+    @Environment(\.focusScopeManager) private var focusScopeManager
+    @Environment(\.isSidebarVisible) private var isSidebarVisible
     @State private var selectedItem: PlexMetadata?
     @State private var heroItem: PlexMetadata?
-    @FocusState private var isHeroPlayButtonFocused: Bool
+    @FocusState private var focusedItemId: String?  // Tracks focused item by "context:itemId" format
 
     // MARK: - Computed Hubs (merged Continue Watching + On Deck)
 
@@ -113,6 +115,40 @@ struct PlexHomeView: View {
                 nestedNavState.goBackAction = nil
             }
         }
+        // Save focus when it changes (only when content scope is active)
+        .onChange(of: focusedItemId) { _, newValue in
+            guard focusScopeManager.isScopeActive(.content) else {
+                // Scope not active, don't track focus changes
+                return
+            }
+            if let newValue {
+                // Parse context:itemId format and save to focus manager
+                let parts = newValue.split(separator: ":", maxSplits: 1)
+                if parts.count == 2 {
+                    focusScopeManager.setFocus(
+                        itemId: String(parts[1]),
+                        context: String(parts[0]),
+                        scope: .content
+                    )
+                } else {
+                    focusScopeManager.setFocus(itemId: newValue, scope: .content)
+                }
+            }
+        }
+        // Restore focus when scope becomes active
+        .onChange(of: focusScopeManager.restoreTrigger) { _, _ in
+            // Only restore focus if not in nested navigation (detail view)
+            if selectedItem == nil,
+               focusScopeManager.isScopeActive(.content),
+               let savedItem = focusScopeManager.focusedItem {
+                // Reconstruct the composite ID
+                if let context = savedItem.context {
+                    focusedItemId = "\(context):\(savedItem.itemId)"
+                } else {
+                    focusedItemId = savedItem.itemId
+                }
+            }
+        }
     }
 
     // MARK: - Hero Selection
@@ -154,7 +190,8 @@ struct PlexHomeView: View {
                         item: hero,
                         serverURL: authManager.selectedServerURL ?? "",
                         authToken: authManager.authToken ?? "",
-                        isPlayButtonFocused: $isHeroPlayButtonFocused
+                        focusTarget: $focusedItemId,
+                        targetValue: "hero"
                     ) {
                         selectedItem = hero
                     }
@@ -190,7 +227,7 @@ struct PlexHomeView: View {
         .scrollClipDisabled()  // Allow shadow overflow
         #if os(tvOS)
         .ignoresSafeArea(edges: .top)
-        .defaultFocus($isHeroPlayButtonFocused, true)  // Set initial focus to hero play button
+        .defaultFocus($focusedItemId, "hero")  // Set initial focus to hero
         #endif
     }
 
@@ -295,6 +332,7 @@ struct HeroView<FocusTarget: Hashable>: View {
     let onSelect: () -> Void
 
     @Environment(\.openSidebar) private var openSidebar
+    @Environment(\.isSidebarVisible) private var isSidebarVisible
 
     // Focus binding - supports both Bool and enum-based patterns
     private let focusBinding: FocusBinding<FocusTarget>
@@ -389,15 +427,10 @@ struct HeroView<FocusTarget: Hashable>: View {
                     }
                 }
 
-                // Gradient overlay for text legibility
+                // Gradient overlay for text legibility (simplified 2-stop gradient)
                 LinearGradient(
-                    colors: [
-                        .clear,
-                        .clear,
-                        .black.opacity(0.4),
-                        .black.opacity(0.9)
-                    ],
-                    startPoint: .top,
+                    colors: [.clear, .black.opacity(0.85)],
+                    startPoint: .init(x: 0.5, y: 0.4),  // Start fade at 40% from top
                     endPoint: .bottom
                 )
 
@@ -484,7 +517,8 @@ struct HeroView<FocusTarget: Hashable>: View {
             .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
             .padding(.horizontal, 48)
             .padding(.top, 20)
-            .brightness(isFocused ? 0.05 : 0)
+            // Simplified focus effect: removed brightness (CPU-intensive color matrix)
+            // Scale + stroke provides sufficient visual feedback
             .overlay(
                 RoundedRectangle(cornerRadius: 32, style: .continuous)
                     .stroke(.white.opacity(isFocused ? 0.4 : 0), lineWidth: 4)
@@ -492,8 +526,10 @@ struct HeroView<FocusTarget: Hashable>: View {
                     .padding(.top, 20)
             )
             .scaleEffect(isFocused ? 1.02 : 1.0)
-            .animation(.easeInOut(duration: 0.2), value: isFocused)
+            .animation(.easeOut(duration: 0.1), value: isFocused)  // Faster de-focus
             .onMoveCommand { direction in
+                // Ignore input when sidebar is visible
+                guard !isSidebarVisible else { return }
                 if direction == .left {
                     openSidebar()
                 }
@@ -509,7 +545,7 @@ struct HeroView<FocusTarget: Hashable>: View {
             .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
             .padding(.horizontal, 48)
             .padding(.top, 20)
-            .brightness(isFocused ? 0.05 : 0)
+            // Simplified focus effect: removed brightness (CPU-intensive color matrix)
             .overlay(
                 RoundedRectangle(cornerRadius: 32, style: .continuous)
                     .stroke(.white.opacity(isFocused ? 0.4 : 0), lineWidth: 4)
@@ -517,8 +553,10 @@ struct HeroView<FocusTarget: Hashable>: View {
                     .padding(.top, 20)
             )
             .scaleEffect(isFocused ? 1.02 : 1.0)
-            .animation(.easeInOut(duration: 0.2), value: isFocused)
+            .animation(.easeOut(duration: 0.1), value: isFocused)  // Faster de-focus
             .onMoveCommand { direction in
+                // Ignore input when sidebar is visible
+                guard !isSidebarVisible else { return }
                 if direction == .left {
                     openSidebar()
                 }
@@ -598,11 +636,19 @@ struct InfiniteContentRow: View {
     var onRefreshNeeded: MediaItemRefreshCallback?
 
     @Environment(\.openSidebar) private var openSidebar
+    @Environment(\.focusScopeManager) private var focusScopeManager
+    @Environment(\.isSidebarVisible) private var isSidebarVisible
 
     @State private var items: [PlexMetadata] = []
     @State private var isLoadingMore = false
     @State private var hasReachedEnd = false
     @State private var totalSize: Int?
+    @FocusState private var focusedItemId: String?  // Track which item is focused (format: "context:itemId")
+
+    /// Create a unique focus ID for an item in this row
+    private func focusId(for item: PlexMetadata) -> String {
+        "\(title):\(item.ratingKey ?? "")"
+    }
 
     private let networkManager = PlexNetworkManager.shared
     private let pageSize = 24
@@ -654,6 +700,7 @@ struct InfiniteContentRow: View {
                         }
                         #if os(tvOS)
                         .buttonStyle(CardButtonStyle())
+                        .focused($focusedItemId, equals: focusId(for: item))
                         .modifier(LeftEdgeSidebarTrigger(isFirstItem: index == 0, openSidebar: openSidebar))
                         #else
                         .buttonStyle(.plain)
@@ -702,6 +749,33 @@ struct InfiniteContentRow: View {
             hasReachedEnd = false
         }
         .focusSection()
+        #if os(tvOS)
+        // Save focus when it changes (only when content scope is active)
+        .onChange(of: focusedItemId) { _, newValue in
+            guard focusScopeManager.isScopeActive(.content) else { return }
+            if let newValue {
+                // Parse context:itemId format
+                let parts = newValue.split(separator: ":", maxSplits: 1)
+                if parts.count == 2 {
+                    focusScopeManager.setFocus(
+                        itemId: String(parts[1]),
+                        context: String(parts[0]),
+                        scope: .content
+                    )
+                }
+            }
+        }
+        // Restore focus when scope becomes active
+        .onChange(of: focusScopeManager.restoreTrigger) { _, _ in
+            guard focusScopeManager.isScopeActive(.content),
+                  let savedItem = focusScopeManager.focusedItem,
+                  savedItem.context == title else { return }
+            // Check if this row contains the saved item
+            if items.contains(where: { $0.ratingKey == savedItem.itemId }) {
+                focusedItemId = "\(title):\(savedItem.itemId)"
+            }
+        }
+        #endif
     }
 
     private var loadingIndicator: some View {
@@ -779,10 +853,7 @@ struct InfiniteContentRow: View {
                     }
                 }
             }
-
-            print("InfiniteContentRow: Loaded \(result.items.count) more items for '\(title)', total: \(items.count), hasMore: \(!hasReachedEnd)")
         } catch {
-            print("InfiniteContentRow: Failed to load more items: \(error)")
             // Don't mark as reached end on error - user can retry by scrolling
         }
 
@@ -797,9 +868,13 @@ struct LeftEdgeSidebarTrigger: ViewModifier {
     let isFirstItem: Bool
     let openSidebar: () -> Void
 
+    @Environment(\.isSidebarVisible) private var isSidebarVisible
+
     func body(content: Content) -> some View {
         if isFirstItem {
             content.onMoveCommand { direction in
+                // Ignore input when sidebar is visible
+                guard !isSidebarVisible else { return }
                 if direction == .left {
                     openSidebar()
                 }

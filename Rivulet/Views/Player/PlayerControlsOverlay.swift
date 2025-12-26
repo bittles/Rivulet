@@ -10,36 +10,23 @@ import SwiftUI
 struct PlayerControlsOverlay: View {
     @ObservedObject var viewModel: UniversalPlayerViewModel
 
-    @State private var selectedInfoTab: InfoTab = .info
-    @FocusState private var focusedTab: InfoTab?
-    @Namespace private var infoPanelNamespace
+    /// When true, shows only the info panel. When false, shows only the transport bar.
+    var showInfoPanel: Bool = false
 
-    enum InfoTab: String, CaseIterable {
-        case info = "Info"
-        case audio = "Audio"
-        case subtitles = "Subtitles"
-    }
+    // Use InfoTab from viewModel
+    private typealias InfoTab = UniversalPlayerViewModel.InfoTab
 
     var body: some View {
         ZStack {
-            // Transport bar at bottom
-            VStack {
-                Spacer()
-                transportBar
-            }
-
-            // Info panel overlay (controlled by viewModel)
-            if viewModel.showInfoPanel {
+            if showInfoPanel {
+                // Info panel only
                 infoPanel
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
-        .onChange(of: viewModel.showInfoPanel) { _, showPanel in
-            if showPanel {
-                // Set focus state - prefersDefaultFocus will handle initial focus
-                focusedTab = .info
             } else {
-                focusedTab = nil
+                // Transport bar at bottom only
+                VStack {
+                    Spacer()
+                    transportBar
+                }
             }
         }
     }
@@ -102,22 +89,19 @@ struct PlayerControlsOverlay: View {
 
     private var infoPanel: some View {
         VStack(spacing: 0) {
-            // Tab bar
+            // Tab bar - focus managed by viewModel
             HStack(spacing: 16) {
-                ForEach(availableTabs, id: \.self) { tab in
-                    Button {
-                        selectedInfoTab = tab
-                    } label: {
-                        Text(tab.rawValue)
-                            .font(.body)
-                            .fontWeight(selectedInfoTab == tab ? .semibold : .medium)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 12)
+                ForEach(Array(viewModel.availableInfoTabs.enumerated()), id: \.element) { index, tab in
+                    InfoPanelTab(
+                        title: tab.rawValue,
+                        isSelected: viewModel.selectedInfoTab == tab,
+                        // Only show focus ring when focus is on tabs, not content
+                        isFocused: viewModel.isInfoPanelFocusOnTabs && viewModel.focusedInfoTabIndex == index
+                    )
+                    .onTapGesture {
+                        viewModel.focusedInfoTabIndex = index
+                        viewModel.selectFocusedInfoTab()
                     }
-                    .buttonStyle(.card)
-                    .focusable()
-                    .focused($focusedTab, equals: tab)
-                    .prefersDefaultFocus(tab == .info, in: infoPanelNamespace)
                 }
             }
             .padding(.top, 24)
@@ -125,7 +109,7 @@ struct PlayerControlsOverlay: View {
 
             // Tab content
             Group {
-                switch selectedInfoTab {
+                switch viewModel.selectedInfoTab {
                 case .info:
                     infoTabContent
                 case .audio:
@@ -137,9 +121,8 @@ struct PlayerControlsOverlay: View {
             .padding(.horizontal, 32)
             .padding(.bottom, 24)
         }
-        .focusScope(infoPanelNamespace)
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 80)  // 80pt on each side ≈ 90% width on 1920px screen
+        .padding(.horizontal, 80)
         .background {
             RoundedRectangle(cornerRadius: 32, style: .continuous)
                 .fill(.ultraThinMaterial)
@@ -147,25 +130,7 @@ struct PlayerControlsOverlay: View {
         }
         .padding(.top, 48)  // Same margin as sidebar from left
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        #if os(tvOS)
-        .onExitCommand {
-            // Close info panel when pressing back/menu
-            withAnimation(.easeOut(duration: 0.3)) {
-                viewModel.showInfoPanel = false
-            }
-        }
-        #endif
-    }
-
-    private var availableTabs: [InfoTab] {
-        var tabs: [InfoTab] = [.info]
-        // Show audio tab if there are multiple audio tracks to choose from
-        if viewModel.audioTracks.count > 1 {
-            tabs.append(.audio)
-        }
-        // Always show subtitles tab - user can turn them on/off
-        tabs.append(.subtitles)
-        return tabs
+        // Note: Input is handled by UniversalPlayerView, not here
     }
 
     // MARK: - Info Tab Content
@@ -232,11 +197,12 @@ struct PlayerControlsOverlay: View {
     private var audioTabContent: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
-                ForEach(viewModel.audioTracks) { track in
+                ForEach(Array(viewModel.audioTracks.enumerated()), id: \.element.id) { index, track in
                     TrackButton(
                         title: track.name,
                         subtitle: formatAudioTrackInfo(track),
-                        isSelected: track.id == viewModel.currentAudioTrackId
+                        isSelected: track.id == viewModel.currentAudioTrackId,
+                        isFocused: !viewModel.isInfoPanelFocusOnTabs && viewModel.focusedContentIndex == index
                     ) {
                         viewModel.selectAudioTrack(id: track.id)
                     }
@@ -251,20 +217,22 @@ struct PlayerControlsOverlay: View {
     private var subtitlesTabContent: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
-                // Off option
+                // Off option (index 0)
                 TrackButton(
                     title: "Off",
                     subtitle: "Disabled",
-                    isSelected: viewModel.currentSubtitleTrackId == nil
+                    isSelected: viewModel.currentSubtitleTrackId == nil,
+                    isFocused: !viewModel.isInfoPanelFocusOnTabs && viewModel.focusedContentIndex == 0
                 ) {
                     viewModel.selectSubtitleTrack(id: nil)
                 }
 
-                ForEach(viewModel.subtitleTracks) { track in
+                ForEach(Array(viewModel.subtitleTracks.enumerated()), id: \.element.id) { index, track in
                     TrackButton(
                         title: track.name,
                         subtitle: formatSubtitleTrackInfo(track),
-                        isSelected: track.id == viewModel.currentSubtitleTrackId
+                        isSelected: track.id == viewModel.currentSubtitleTrackId,
+                        isFocused: !viewModel.isInfoPanelFocusOnTabs && viewModel.focusedContentIndex == index + 1
                     ) {
                         viewModel.selectSubtitleTrack(id: track.id)
                     }
@@ -280,8 +248,23 @@ struct PlayerControlsOverlay: View {
         guard let media = viewModel.metadata.Media?.first else { return nil }
         var parts: [String] = []
 
-        // Resolution
-        if let width = media.width, let height = media.height {
+        // Resolution - prefer videoResolution field (handles ultrawide correctly)
+        if let res = media.videoResolution {
+            // Plex provides resolution like "1080p", "4k", "720p"
+            let formatted = res.lowercased()
+            if formatted.contains("4k") || formatted.contains("2160") {
+                parts.append("4K")
+            } else if formatted.contains("1080") {
+                parts.append("1080p")
+            } else if formatted.contains("720") {
+                parts.append("720p")
+            } else if formatted.contains("480") {
+                parts.append("480p")
+            } else {
+                parts.append(res.uppercased())
+            }
+        } else if let height = media.height {
+            // Fallback to height-based calculation
             if height >= 2160 {
                 parts.append("4K")
             } else if height >= 1080 {
@@ -291,8 +274,6 @@ struct PlayerControlsOverlay: View {
             } else {
                 parts.append("\(height)p")
             }
-        } else if let res = media.videoResolution {
-            parts.append(res.uppercased())
         }
 
         // Codec
@@ -391,14 +372,14 @@ struct PlayerControlsOverlay: View {
             parts.append(container)
         }
 
-        // File size
+        // File size (use binary GiB to match Plex display)
         if let size = part.size {
-            let gb = Double(size) / 1_000_000_000
-            if gb >= 1 {
-                parts.append(String(format: "%.1f GB", gb))
+            let gib = Double(size) / 1_073_741_824  // 2^30 bytes
+            if gib >= 1 {
+                parts.append(String(format: "%.2f GB", gib))
             } else {
-                let mb = Double(size) / 1_000_000
-                parts.append(String(format: "%.0f MB", mb))
+                let mib = Double(size) / 1_048_576  // 2^20 bytes
+                parts.append(String(format: "%.0f MB", mib))
             }
         }
 
@@ -616,15 +597,42 @@ private struct TransportProgressBar: View {
     }
 }
 
+// MARK: - Info Panel Tab (Manual Focus)
+
+/// Simple tab view that displays focus state from our FocusScopeManager
+private struct InfoPanelTab: View {
+    let title: String
+    let isSelected: Bool
+    let isFocused: Bool
+
+    var body: some View {
+        Text(title)
+            .font(.body)
+            .fontWeight(isSelected ? .semibold : .medium)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isSelected ? .white.opacity(0.2) : .white.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(.white.opacity(isFocused ? 0.8 : 0), lineWidth: 3)
+            )
+            .scaleEffect(isFocused ? 1.05 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: isFocused)
+    }
+}
+
 // MARK: - Track Button
 
 private struct TrackButton: View {
     let title: String
     let subtitle: String
     let isSelected: Bool
+    var isFocused: Bool = false  // Manual focus from viewModel
     let action: () -> Void
-
-    @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -659,18 +667,10 @@ private struct TrackButton: View {
                 .strokeBorder(.white.opacity(isFocused ? 0.8 : 0), lineWidth: 3)
         )
         .scaleEffect(isFocused ? 1.05 : 1.0)
-        .brightness(isFocused ? 0.1 : 0)
         .animation(.easeOut(duration: 0.15), value: isFocused)
-        .focusable()
-        .focused($isFocused)
         .onTapGesture {
             action()
         }
-        #if os(tvOS)
-        .onPlayPauseCommand {
-            action()
-        }
-        #endif
     }
 }
 
@@ -685,8 +685,8 @@ private struct FocusableButton<Content: View>: View {
 
     var body: some View {
         content()
+            // Simplified focus effect: removed brightness (CPU-intensive color matrix)
             .scaleEffect(isFocused ? 1.08 : 1.0)
-            .brightness(isFocused ? 0.15 : 0)
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .strokeBorder(.white.opacity(isFocused ? 0.8 : 0), lineWidth: 3)

@@ -21,19 +21,27 @@ struct StreamSlotView: View {
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             // Background
             Color.black
 
-            // MPV Player
+            // MPV Player - use GeometryReader to ensure it fills and updates with container size
             if let url = streamURL {
-                MPVPlayerView(
-                    url: url,
-                    headers: [:],
-                    startTime: nil,
-                    delegate: slot.playerWrapper,
-                    playerController: $playerController
-                )
+                GeometryReader { geo in
+                    MPVPlayerView(
+                        url: url,
+                        headers: [:],
+                        startTime: nil,
+                        delegate: slot.playerWrapper,
+                        playerController: $playerController
+                    )
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+                }
+                .transaction { transaction in
+                    // Disable animations for the player to prevent layout issues during resize
+                    transaction.animation = nil
+                }
             }
 
             // Focus border (only in grid mode)
@@ -77,6 +85,7 @@ struct StreamSlotView: View {
                 errorOverlay
             }
         }
+        .clipped()
         .clipShape(RoundedRectangle(cornerRadius: showBorder ? 8 : 0, style: .continuous))
         .onChange(of: playerController) { _, controller in
             if let controller = controller {

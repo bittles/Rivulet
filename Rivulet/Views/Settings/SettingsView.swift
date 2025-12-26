@@ -23,9 +23,17 @@ struct SettingsView: View {
     @AppStorage("showHomeHero") private var showHomeHero = true
     @AppStorage("showLibraryHero") private var showLibraryHero = true
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
-    @Environment(\.contentFocusVersion) private var contentFocusVersion
+    @AppStorage("liveTVLayout") private var liveTVLayoutRaw = LiveTVLayout.channels.rawValue
+    @Environment(\.focusScopeManager) private var focusScopeManager
     @Environment(\.nestedNavigationState) private var nestedNavState
     @State private var focusTrigger = 0  // Increment to trigger first row focus
+
+    private var liveTVLayout: Binding<LiveTVLayout> {
+        Binding(
+            get: { LiveTVLayout(rawValue: liveTVLayoutRaw) ?? .channels },
+            set: { liveTVLayoutRaw = $0.rawValue }
+        )
+    }
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -61,6 +69,18 @@ struct SettingsView: View {
                             ) {
                                 navigationPath.append(SettingsDestination.iptv)
                             }
+                        }
+
+                        // Live TV section
+                        SettingsSection(title: "Live TV") {
+                            SettingsPickerRow(
+                                icon: "tv",
+                                iconColor: .green,
+                                title: "Default Layout",
+                                subtitle: "Choose channel grid or TV guide view",
+                                selection: liveTVLayout,
+                                options: LiveTVLayout.allCases
+                            )
                         }
 
                         // Appearance section
@@ -149,7 +169,7 @@ struct SettingsView: View {
                     focusTrigger += 1
                 }
             }
-            .onChange(of: contentFocusVersion) { _, _ in
+            .onChange(of: focusScopeManager.restoreTrigger) { _, _ in
                 // Trigger first row to claim focus when sidebar closes
                 focusTrigger += 1
             }

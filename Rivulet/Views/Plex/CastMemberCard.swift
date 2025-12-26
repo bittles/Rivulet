@@ -43,7 +43,14 @@ struct PersonCard: View {
                     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                     #if os(tvOS)
                     .hoverEffect(.highlight)
-                    .shadow(color: .black.opacity(0.4), radius: 12, y: 6)
+                    // GPU-accelerated shadow: blur is hardware-accelerated, unlike .shadow() with large radius
+                    .background(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(.black)
+                            .blur(radius: 12)
+                            .offset(y: 6)
+                            .opacity(0.4)
+                    )
                     #endif
 
                 // Director badge

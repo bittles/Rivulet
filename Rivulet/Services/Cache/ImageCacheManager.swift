@@ -269,6 +269,7 @@ actor ImageCacheManager: NSObject {
     // MARK: - Disk Operations
 
     /// Load image from disk - runs outside actor isolation for parallel access
+    /// Uses downsampling for faster decode and lower memory usage
     nonisolated private func loadFromDiskSync(cacheDir: URL, key: String) -> UIImage? {
         let fileURL = cacheDir.appendingPathComponent(key)
         guard let data = try? Data(contentsOf: fileURL) else {
@@ -285,6 +286,13 @@ actor ImageCacheManager: NSObject {
             return nil
         }
 
+        // Use GPU-efficient downsampling (400px max covers 220x330 poster cards at 2x scale)
+        // This decodes directly at target size without allocating full-resolution buffers
+        if let downsampled = downsampledImage(from: data, maxPixelSize: 400) {
+            return downsampled
+        }
+
+        // Fallback to standard decoding if downsampling fails
         guard let image = UIImage(data: data) else {
             try? FileManager.default.removeItem(at: fileURL)
             return nil
@@ -400,6 +408,55 @@ actor ImageCacheManager: NSObject {
             return image.preparingForDisplay() ?? image
         }
         return image
+    }
+
+    // MARK: - GPU-Efficient Downsampling
+
+    /// Downsample image data to a target size using CGImageSource.
+    /// This is significantly faster than decoding full resolution then scaling,
+    /// as it decodes directly at the target size without allocating full-resolution buffers.
+    nonisolated private func downsampledImage(from data: Data, maxPixelSize: CGFloat) -> UIImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceShouldCache: false  // Don't cache the full-size version
+        ]
+
+        guard let imageSource = CGImageSourceCreateWithData(data as CFData, options as CFDictionary) else {
+            return nil
+        }
+
+        let downsampleOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,  // Decode now (in background)
+            kCGImageSourceCreateThumbnailWithTransform: true,  // Apply EXIF orientation
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize * UIScreen.main.scale
+        ]
+
+        guard let downsampledImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, downsampleOptions as CFDictionary) else {
+            return nil
+        }
+
+        return UIImage(cgImage: downsampledImage)
+    }
+
+    /// Load and downsample image from disk for display
+    /// For poster cards (220x330), we downsample to 330px max (the larger dimension)
+    nonisolated private func loadFromDiskDownsampled(cacheDir: URL, key: String, maxPixelSize: CGFloat = 400) -> UIImage? {
+        let fileURL = cacheDir.appendingPathComponent(key)
+        guard let data = try? Data(contentsOf: fileURL) else {
+            return nil
+        }
+
+        // Try downsampled version first (much faster for large images)
+        if let downsampled = downsampledImage(from: data, maxPixelSize: maxPixelSize) {
+            return downsampled
+        }
+
+        // Fallback to standard decoding if downsampling fails
+        guard let image = UIImage(data: data) else {
+            try? FileManager.default.removeItem(at: fileURL)
+            return nil
+        }
+        return decodedImage(image)
     }
 }
 

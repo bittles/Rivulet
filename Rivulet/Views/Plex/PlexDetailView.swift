@@ -97,6 +97,13 @@ struct PlexDetailView: View {
                 await loadSeasons()
             }
         }
+        #if os(tvOS)
+        .onChange(of: showPlayer) { _, shouldShow in
+            if shouldShow {
+                presentPlayer()
+            }
+        }
+        #else
         .fullScreenCover(isPresented: $showPlayer) {
             // Play the selected episode if available, otherwise play the main item (movie)
             let playItem = selectedEpisode ?? item
@@ -106,6 +113,7 @@ struct PlexDetailView: View {
                 startOffset: resumeOffset > 0 ? resumeOffset : nil
             )
         }
+        #endif
         .fullScreenCover(isPresented: $showTrailerPlayer) {
             // Play trailer if available
             if let trailer = fullMetadata?.trailer {
@@ -158,7 +166,14 @@ struct PlexDetailView: View {
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
             }
-            .shadow(color: .black.opacity(0.5), radius: 20, y: 10)
+            // GPU-accelerated shadow: blur is hardware-accelerated, unlike .shadow() with large radius
+            .background(
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .fill(.black)
+                    .blur(radius: 20)
+                    .offset(y: 10)
+                    .opacity(0.5)
+            )
             .padding(.horizontal, 48)
 
             // Poster overlay - larger with squircle corners
@@ -191,7 +206,14 @@ struct PlexDetailView: View {
                 }
                 .frame(width: 200, height: 300)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .shadow(color: .black.opacity(0.5), radius: 16, y: 8)
+                // GPU-accelerated shadow
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(.black)
+                        .blur(radius: 16)
+                        .offset(y: 8)
+                        .opacity(0.5)
+                )
 
                 Spacer()
             }
@@ -413,6 +435,48 @@ struct PlexDetailView: View {
             }
         }
     }
+
+    // MARK: - Player Presentation (tvOS)
+
+    #if os(tvOS)
+    /// Present player using UIViewController to intercept Menu button
+    private func presentPlayer() {
+        let playItem = selectedEpisode ?? item
+        let resumeOffset = Double(playItem.viewOffset ?? 0) / 1000.0
+
+        // Create viewModel first so we can pass the same instance to both view and container
+        let viewModel = UniversalPlayerViewModel(
+            metadata: playItem,
+            serverURL: authManager.selectedServerURL ?? "",
+            authToken: authManager.authToken ?? "",
+            startOffset: resumeOffset > 0 ? resumeOffset : nil
+        )
+
+        // Create view with the external viewModel
+        let playerView = UniversalPlayerView(viewModel: viewModel)
+
+        // Create container that intercepts Menu button, passing the same viewModel
+        let container = PlayerContainerViewController(
+            rootView: playerView,
+            viewModel: viewModel
+        )
+
+        // Update SwiftUI state when player is dismissed
+        container.onDismiss = {
+            showPlayer = false
+        }
+
+        // Present from top-most view controller
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            var topVC = rootVC
+            while let presented = topVC.presentedViewController {
+                topVC = presented
+            }
+            topVC.present(container, animated: true)
+        }
+    }
+    #endif
 
     // MARK: - Data Loading
 
