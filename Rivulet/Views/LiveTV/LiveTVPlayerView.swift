@@ -101,6 +101,8 @@ struct LiveTVPlayerView: View {
         if viewModel.streamCount == 1, let slot = viewModel.streams.first {
             // Single stream - fullscreen
             singleStreamView(slot: slot)
+        } else if case .focus(let mainId) = viewModel.layoutMode {
+            focusedStreamLayout(mainId: mainId)
         } else {
             // Multiple streams - grid
             streamGrid
@@ -118,6 +120,7 @@ struct LiveTVPlayerView: View {
                     viewModel.setPlayerController(controller, for: slot.id)
                 }
             )
+            .id(slot.id)
             .ignoresSafeArea()
 
             // Invisible focusable area to capture Select press and show controls
@@ -126,7 +129,7 @@ struct LiveTVPlayerView: View {
                     .contentShape(Rectangle())
                     .focusable()
                     .focused($focusArea, equals: .streamGrid)
-                    .onLongPressGesture(minimumDuration: 0) {
+                    .onTapGesture {
                         // Select pressed - show controls
                         showControlsWithFocus()
                     }
@@ -144,38 +147,46 @@ struct LiveTVPlayerView: View {
         GeometryReader { geometry in
             let spacing: CGFloat = 2  // Minimal spacing between videos
             let layout = gridLayout(for: viewModel.streamCount)
-            let slotWidth = (geometry.size.width - CGFloat(layout.columns - 1) * spacing) / CGFloat(layout.columns)
-            let slotHeight = (geometry.size.height - CGFloat(layout.rows - 1) * spacing) / CGFloat(layout.rows)
+            let availableWidth = geometry.size.width - CGFloat(layout.columns - 1) * spacing
+            let availableHeight = geometry.size.height - CGFloat(layout.rows - 1) * spacing
+            let slotWidth = availableWidth / CGFloat(layout.columns)
+            let maxRowHeight = availableHeight / CGFloat(layout.rows)
+            let aspect: CGFloat = 16.0 / 9.0
+            let slotHeight = min(slotWidth / aspect, maxRowHeight)
+            let columns = Array(repeating: GridItem(.flexible(), spacing: spacing), count: layout.columns)
+            let slotSize = CGSize(width: slotWidth, height: slotHeight)
+            let verticalPadding = max(0, (geometry.size.height - (slotHeight * CGFloat(layout.rows) + spacing * CGFloat(layout.rows - 1))) / 2)
 
             ZStack {
-                VStack(spacing: spacing) {
-                    ForEach(0..<layout.rows, id: \.self) { row in
-                        HStack(spacing: spacing) {
-                            ForEach(0..<layout.columns, id: \.self) { col in
-                                let index = row * layout.columns + col
-
-                                if index < viewModel.streams.count {
-                                    let slot = viewModel.streams[index]
-
-                                    StreamSlotView(
-                                        slot: slot,
-                                        index: index,
-                                        isFocused: viewModel.focusedSlotIndex == index && !viewModel.showControls,
-                                        showBorder: viewModel.streamCount > 1,
-                                        onControllerReady: { controller in
-                                            viewModel.setPlayerController(controller, for: slot.id)
-                                        }
-                                    )
-                                    .frame(width: slotWidth, height: slotHeight)
-                                    .clipped()
-                                } else {
-                                    // Empty slot - same size as other slots, just black
-                                    Color.black
-                                        .frame(width: slotWidth, height: slotHeight)
-                                }
+                LazyVGrid(columns: columns, spacing: spacing) {
+                    ForEach(Array(viewModel.streams.enumerated()), id: \.element.id) { index, slot in
+                        StreamSlotView(
+                            slot: slot,
+                            index: index,
+                            isFocused: viewModel.focusedSlotIndex == index && !viewModel.showControls,
+                            showBorder: viewModel.streamCount > 1,
+                            onControllerReady: { controller in
+                                viewModel.setPlayerController(controller, for: slot.id)
                             }
-                        }
+                        )
+                        .id(slot.id)
+                        .frame(width: slotWidth, height: slotHeight)
+                        .clipped()
+                        // Long-press options removed in favor of bottom button
                     }
+
+                    // Keep grid balanced when showing 3 streams (leave one black slot)
+                    if viewModel.streamCount == 3 {
+                        Color.black
+                            .frame(width: slotWidth, height: slotHeight)
+                    }
+                }
+                .padding(.vertical, verticalPadding)
+                .onAppear {
+                    print("🧩 Grid: geometry=\(geometry.size), layout=\(layout), slot=\(slotSize), streams=\(viewModel.streamCount)")
+                }
+                .onChange(of: viewModel.streamCount) { _, newCount in
+                    print("🧩 Grid: geometry=\(geometry.size), layout=\(layout), slot=\(slotSize), streams=\(newCount)")
                 }
 
                 // Invisible focusable overlay for stream navigation
@@ -184,7 +195,7 @@ struct LiveTVPlayerView: View {
                         .contentShape(Rectangle())
                         .focusable()
                         .focused($focusArea, equals: .streamGrid)
-                        .onLongPressGesture(minimumDuration: 0) {
+                        .onTapGesture {
                             // Select pressed - show controls
                             showControlsWithFocus()
                         }
@@ -194,6 +205,56 @@ struct LiveTVPlayerView: View {
                         }
                         #endif
                 }
+            }
+        }
+    }
+
+    private func focusedStreamLayout(mainId: UUID) -> some View {
+        GeometryReader { geometry in
+            let spacing: CGFloat = 4
+            let mainSlot = viewModel.streams.first(where: { $0.id == mainId }) ?? viewModel.streams.first
+
+            let sideStreams = viewModel.streams.filter { $0.id != mainSlot?.id }
+            let mainWidth = geometry.size.width * 0.72
+            let sideWidth = geometry.size.width - mainWidth - spacing
+            let sideCount = max(sideStreams.count, 1)
+            let sideSlotHeight = (geometry.size.height - spacing * CGFloat(sideCount - 1)) / CGFloat(sideCount)
+
+            HStack(spacing: spacing) {
+                if let mainSlot {
+                    StreamSlotView(
+                        slot: mainSlot,
+                        index: viewModel.streams.firstIndex(where: { $0.id == mainSlot.id }) ?? 0,
+                        isFocused: viewModel.focusedStream?.id == mainSlot.id && !viewModel.showControls,
+                        showBorder: true,
+                        onControllerReady: { controller in
+                            viewModel.setPlayerController(controller, for: mainSlot.id)
+                        }
+                    )
+                    .id(mainSlot.id)
+                    .frame(width: mainWidth, height: geometry.size.height)
+                    .clipped()
+                    // Long-press options removed in favor of bottom button
+                }
+
+                VStack(spacing: spacing) {
+                    ForEach(Array(sideStreams.enumerated()), id: \.element.id) { _, slot in
+                        StreamSlotView(
+                            slot: slot,
+                            index: viewModel.streams.firstIndex(where: { $0.id == slot.id }) ?? 0,
+                            isFocused: viewModel.focusedStream?.id == slot.id && !viewModel.showControls,
+                            showBorder: true,
+                            onControllerReady: { controller in
+                                viewModel.setPlayerController(controller, for: slot.id)
+                            }
+                        )
+                        .id(slot.id)
+                        .frame(width: sideWidth, height: sideSlotHeight)
+                        .clipped()
+                        // Long-press options removed in favor of bottom button
+                    }
+                }
+                .frame(width: sideWidth, height: geometry.size.height, alignment: .top)
             }
         }
     }
@@ -450,6 +511,25 @@ struct LiveTVPlayerView: View {
             isLarge: true,
             action: { viewModel.togglePlayPauseOnFocused() }
         ))
+
+        // Focus/enlarge current stream (only when multiple streams)
+        if viewModel.streamCount > 1 {
+            let isFocusedLayout = {
+                if case .focus = viewModel.layoutMode { return true }
+                return false
+            }()
+            buttons.append(ControlButtonConfig(
+                icon: isFocusedLayout ? "rectangle.stack.fill" : "rectangle.expand.vertical",
+                label: isFocusedLayout ? "Reset View" : "Enlarge",
+                action: {
+                    if isFocusedLayout {
+                        viewModel.resetLayout()
+                    } else if let slotId = viewModel.focusedStream?.id {
+                        viewModel.setFocusedLayout(on: slotId)
+                    }
+                }
+            ))
+        }
 
         // Remove stream button (only when multiple streams)
         if viewModel.streamCount > 1 {

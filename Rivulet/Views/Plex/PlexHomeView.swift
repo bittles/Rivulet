@@ -17,17 +17,18 @@ struct PlexHomeView: View {
     @Environment(\.isSidebarVisible) private var isSidebarVisible
     @State private var selectedItem: PlexMetadata?
     @State private var heroItem: PlexMetadata?
+    @State private var cachedProcessedHubs: [PlexHub] = []  // Memoized to avoid recalculation on every render
     @FocusState private var focusedItemId: String?  // Tracks focused item by "context:itemId" format
 
-    // MARK: - Computed Hubs (merged Continue Watching + On Deck)
+    // MARK: - Processed Hubs (merged Continue Watching + On Deck)
 
-    /// Processes hubs to combine Continue Watching and On Deck into a single row
-    private var processedHubs: [PlexHub] {
+    /// Computes processed hubs - called only when dataStore.hubs changes
+    private func computeProcessedHubs(from hubsToProcess: [PlexHub]) -> [PlexHub] {
         var result: [PlexHub] = []
         var continueWatchingItems: [PlexMetadata] = []
         var seenRatingKeys: Set<String> = []
 
-        for hub in dataStore.hubs {
+        for hub in hubsToProcess {
             let identifier = hub.hubIdentifier?.lowercased() ?? ""
             let title = hub.title?.lowercased() ?? ""
 
@@ -92,10 +93,22 @@ struct PlexHomeView: View {
                 await dataStore.refreshHubs()
             }
             .onAppear {
-                selectHeroItem()
+                // Initial computation of processed hubs
+                if cachedProcessedHubs.isEmpty && !dataStore.hubs.isEmpty {
+                    cachedProcessedHubs = computeProcessedHubs(from: dataStore.hubs)
+                }
+                // Only select hero if we don't have one yet
+                if heroItem == nil {
+                    selectHeroItem()
+                }
             }
             .onChange(of: dataStore.hubs.count) { _, _ in
-                selectHeroItem()
+                // Recompute cached hubs when source data changes
+                cachedProcessedHubs = computeProcessedHubs(from: dataStore.hubs)
+                // Only reselect hero if we don't have one yet (avoid redundant selection)
+                if heroItem == nil {
+                    selectHeroItem()
+                }
             }
             .navigationDestination(item: $selectedItem) { item in
                 PlexDetailView(item: item)
@@ -197,9 +210,9 @@ struct PlexHomeView: View {
                     }
                 }
 
-                // Content rows (uses processedHubs which merges Continue Watching + On Deck)
+                // Content rows (uses cached processedHubs which merges Continue Watching + On Deck)
                 VStack(alignment: .leading, spacing: 48) {
-                    ForEach(processedHubs, id: \.id) { hub in
+                    ForEach(cachedProcessedHubs, id: \.id) { hub in
                         if let items = hub.Metadata, !items.isEmpty {
                             let isContinueWatching = hub.hubIdentifier?.lowercased().contains("continuewatching") == true ||
                                                      hub.title?.lowercased().contains("continue watching") == true
@@ -654,13 +667,14 @@ struct InfiniteContentRow: View {
     private let pageSize = 24
 
     /// Hash that changes when items or their watch status changes
+    /// Note: Excludes viewOffset as it changes during playback and would cause unnecessary resets
     private var initialItemsHash: Int {
         var hasher = Hasher()
         hasher.combine(initialItems.count)
         for item in initialItems.prefix(20) {
             hasher.combine(item.ratingKey)
             hasher.combine(item.viewCount)
-            hasher.combine(item.viewOffset)
+            // viewOffset excluded - it changes during playback and triggers unwanted list resets
         }
         return hasher.finalize()
     }

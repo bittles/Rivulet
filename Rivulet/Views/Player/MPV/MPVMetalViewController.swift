@@ -134,6 +134,51 @@ final class MPVMetalViewController: UIViewController {
         }
     }
 
+    /// Explicitly handle container size changes initiated by SwiftUI layout updates
+    func updateForContainerSize(_ newSize: CGSize) {
+        guard !isShuttingDown, newSize != .zero else { return }
+
+        // Keep view/frame and Metal layer in sync with the new container size
+        if view.bounds.size != newSize {
+            view.bounds = CGRect(origin: .zero, size: newSize)
+            view.frame = CGRect(origin: view.frame.origin, size: newSize)
+        }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        metalLayer.frame = CGRect(origin: .zero, size: newSize)
+        // Pick a drawable size that matches the view aspect, is large enough for MPV blits,
+        // and never exceeds the screen's native size. We don't downscale below the view size
+        // to avoid triggering Metal validation on large copies.
+        let screenSize = UIScreen.main.nativeBounds.size
+        let baseWidth = max(newSize.width * metalLayer.contentsScale, 1)
+        let baseHeight = max(newSize.height * metalLayer.contentsScale, 1)
+        let widthToHeight = baseWidth / baseHeight
+
+        // Scale up proportionally so height approaches screen height but doesn't exceed width.
+        let scaleToHeight = screenSize.height / baseHeight
+        let scaleToWidth = screenSize.width / baseWidth
+        let scale = min(max(1, scaleToHeight), scaleToWidth)
+
+        let targetSize = CGSize(width: baseWidth * scale, height: baseHeight * scale)
+
+        if metalLayer.drawableSize != targetSize {
+            metalLayer.drawableSize = targetSize
+        }
+        CATransaction.commit()
+
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+
+        print("🎬 MPV: updateForContainerSize new=\(newSize), bounds=\(view.bounds.size), frame=\(view.frame.size), layer=\(metalLayer.frame.size), drawable=\(metalLayer.drawableSize), scale=\(metalLayer.contentsScale), screen=\(UIScreen.main.nativeBounds.size)")
+
+        lastKnownSize = newSize
+
+        if hasSetupMpv && mpv != nil {
+            forceVideoResize()
+        }
+    }
+
     deinit {
         shutdownMpv()
     }
@@ -204,12 +249,12 @@ final class MPVMetalViewController: UIViewController {
             checkError(mpv_set_option_string(mpv, "vulkan-swap-mode", "fifo"))  // Sync mode for stability
             print("🎬 MPV: Using simulator-safe settings (gpu + software decode)")
         } else {
-            // Real device: Use gpu-next with HDR passthrough
+            // Real device: Use gpu-next with native Metal backend (avoid MoltenVK on device)
             checkError(mpv_set_option_string(mpv, "vo", "gpu-next"))
-            checkError(mpv_set_option_string(mpv, "gpu-api", "vulkan"))
+            checkError(mpv_set_option_string(mpv, "gpu-api", "metal"))
             checkError(mpv_set_option_string(mpv, "hwdec", "videotoolbox"))
             checkError(mpv_set_option_string(mpv, "target-colorspace-hint", "yes"))  // HDR passthrough
-            print("🎬 MPV: Using device settings (gpu-next + VideoToolbox + HDR)")
+            print("🎬 MPV: Using device settings (gpu-next + Metal + VideoToolbox + HDR)")
         }
 
         // Subtitles

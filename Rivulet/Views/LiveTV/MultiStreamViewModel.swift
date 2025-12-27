@@ -11,6 +11,11 @@ import Combine
 @MainActor
 final class MultiStreamViewModel: ObservableObject {
 
+    enum LayoutMode: Equatable {
+        case grid
+        case focus(mainId: UUID)
+    }
+
     // MARK: - Stream Slot Model
 
     struct StreamSlot: Identifiable {
@@ -44,6 +49,7 @@ final class MultiStreamViewModel: ObservableObject {
             }
         }
     }
+    @Published var layoutMode: LayoutMode = .grid
 
     // MARK: - Private State
 
@@ -122,6 +128,11 @@ final class MultiStreamViewModel: ObservableObject {
         // Subscribe to playback state changes
         subscribeToSlot(at: slotIndex)
 
+        // Reset custom layout if only one stream
+        if streams.count <= 1 {
+            layoutMode = .grid
+        }
+
         // Start playback
         if let url = LiveTVDataStore.shared.buildStreamURL(for: channel) {
             do {
@@ -160,6 +171,13 @@ final class MultiStreamViewModel: ObservableObject {
 
         print("📺 MultiStream: Removed stream at slot \(index)")
 
+        // Reset layout if no streams or main stream removed
+        if streams.count <= 1 {
+            layoutMode = .grid
+        } else if case .focus(let mainId) = layoutMode, !streams.contains(where: { $0.id == mainId }) {
+            layoutMode = .grid
+        }
+
         // Adjust focus if needed
         if streams.isEmpty {
             focusedSlotIndex = 0
@@ -177,6 +195,7 @@ final class MultiStreamViewModel: ObservableObject {
         }
         cancellables.removeAll()
         streams.removeAll()
+        layoutMode = .grid
         print("📺 MultiStream: Stopped all streams")
     }
 
@@ -201,6 +220,20 @@ final class MultiStreamViewModel: ObservableObject {
         print("📺 MultiStream: Focus changed to slot \(newIndex) ('\(streams[newIndex].channel.name)')")
 
         // Don't show controls when just switching focus - user uses Select to show controls
+    }
+
+    // MARK: - Layout
+
+    func setFocusedLayout(on slotId: UUID) {
+        guard streams.count > 1 else { return }
+        layoutMode = .focus(mainId: slotId)
+        if let index = streams.firstIndex(where: { $0.id == slotId }) {
+            setFocus(to: index)
+        }
+    }
+
+    func resetLayout() {
+        layoutMode = .grid
     }
 
     // MARK: - Playback Controls

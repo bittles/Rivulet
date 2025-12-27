@@ -182,16 +182,7 @@ class PlayerContainerViewController: UIViewController {
     /// Handle Select button press when info panel is open
     private func handleSelectButton() {
         guard let vm = viewModel else { return }
-
-        if vm.isInfoPanelFocusOnTabs {
-            // Select the focused tab (switch to it)
-            vm.selectFocusedInfoTab()
-            print("🎮 [SELECT] Selected tab")
-        } else {
-            // Select the focused content item (subtitle/audio track)
-            vm.selectFocusedContent()
-            print("🎮 [SELECT] Selected content item")
-        }
+        vm.selectFocusedSetting()
     }
 
     private func dismissPlayer() {

@@ -15,6 +15,7 @@ struct StreamSlotView: View {
     let onControllerReady: (MPVMetalViewController) -> Void
 
     @State private var playerController: MPVMetalViewController?
+    @State private var lastContainerSize: CGSize = .zero
 
     private var streamURL: URL? {
         LiveTVDataStore.shared.buildStreamURL(for: slot.channel)
@@ -37,6 +38,12 @@ struct StreamSlotView: View {
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
+                    .onAppear {
+                        updatePlayerSize(geo.size)
+                    }
+                    .onChange(of: geo.size) { _, newSize in
+                        updatePlayerSize(newSize)
+                    }
                 }
                 .transaction { transaction in
                     // Disable animations for the player to prevent layout issues during resize
@@ -90,8 +97,18 @@ struct StreamSlotView: View {
         .onChange(of: playerController) { _, controller in
             if let controller = controller {
                 onControllerReady(controller)
+                if lastContainerSize != .zero {
+                    controller.updateForContainerSize(lastContainerSize)
+                }
             }
         }
+    }
+
+    private func updatePlayerSize(_ newSize: CGSize) {
+        guard newSize != .zero, newSize != lastContainerSize else { return }
+        lastContainerSize = newSize
+        print("🧩 StreamSlot \(index): container size -> \(newSize)")
+        playerController?.updateForContainerSize(newSize)
     }
 
     // MARK: - Mini Channel Badge

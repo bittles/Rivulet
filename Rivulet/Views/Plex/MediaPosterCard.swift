@@ -66,10 +66,10 @@ struct MediaPosterCard: View, Equatable {
     let authToken: String
 
     // Equatable: only re-render if the item's key data changes
+    // Note: viewOffset excluded - it changes during playback and would cause excessive re-renders
     static func == (lhs: MediaPosterCard, rhs: MediaPosterCard) -> Bool {
         lhs.item.ratingKey == rhs.item.ratingKey &&
         lhs.item.thumb == rhs.item.thumb &&
-        lhs.item.viewOffset == rhs.item.viewOffset &&
         lhs.item.viewCount == rhs.item.viewCount &&
         lhs.serverURL == rhs.serverURL
     }
@@ -98,14 +98,8 @@ struct MediaPosterCard: View, Equatable {
                 }
                 #if os(tvOS)
                 .hoverEffect(.highlight)  // Native tvOS focus effect on poster only
-                // GPU-accelerated shadow: blur is hardware-accelerated, unlike .shadow() with large radius
-                .background(
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .fill(.black)
-                        .blur(radius: 12)
-                        .offset(y: 6)
-                        .opacity(0.4)
-                )
+                // Simple shadow using .shadow() - more efficient than blur during animations
+                .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 6)
                 .padding(.bottom, 10)  // Space for hover scale effect
                 #endif
 

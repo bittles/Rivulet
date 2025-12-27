@@ -315,9 +315,12 @@ struct PlexLibraryView: View {
             handleItemsCountChange(oldCount: oldCount, newCount: newCount)
         }
         .onChange(of: hubs.count) { _, _ in
-            // Recompute cached hubs (memoization) and reselect hero
+            // Recompute cached hubs (memoization)
             cachedProcessedHubs = computeProcessedHubs(from: hubs)
-            selectHeroItem()
+            // Only reselect hero if we don't have one yet (avoid redundant selection)
+            if heroItem == nil {
+                selectHeroItem()
+            }
         }
     }
 

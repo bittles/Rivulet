@@ -130,6 +130,10 @@ class FocusScopeManager: ObservableObject {
     /// Maximum history size per scope
     private let maxHistorySize = 10
 
+    /// Throttle history updates during rapid scrolling
+    private var lastHistoryUpdate: Date = .distantPast
+    private let historyThrottleInterval: TimeInterval = 0.3  // Only update history every 300ms
+
     // MARK: - Scope Activation
 
     /// Activate a new scope, optionally saving the current focus position.
@@ -138,12 +142,13 @@ class FocusScopeManager: ObservableObject {
     ///   - savingCurrent: Whether to save the current focus position for restoration
     ///   - pushToStack: Whether to push this scope onto the stack (for nested navigation)
     func activate(_ scope: FocusScope, savingCurrent: Bool = true, pushToStack: Bool = true) {
+        #if DEBUG
         print("🎯 [FOCUS] Activating scope: \(scope), from: \(activeScope)")
+        #endif
 
         // Save current focus if requested
         if savingCurrent, let currentFocus = focusedItem {
             savedFocus[activeScope] = currentFocus
-            print("🎯 [FOCUS] Saved focus for \(activeScope): \(currentFocus)")
         }
 
         // Push to stack if this is nested navigation
@@ -158,7 +163,6 @@ class FocusScopeManager: ObservableObject {
         if let saved = savedFocus[scope] {
             focusedItem = saved
             restoreTrigger += 1
-            print("🎯 [FOCUS] Restored focus for \(scope): \(saved)")
         } else {
             focusedItem = nil
         }
@@ -168,7 +172,6 @@ class FocusScopeManager: ObservableObject {
     /// Restores focus to the saved position in the previous scope.
     func deactivate() {
         guard scopeStack.count > 1 else {
-            print("🎯 [FOCUS] Cannot deactivate - already at root scope")
             return
         }
 
@@ -182,15 +185,12 @@ class FocusScopeManager: ObservableObject {
 
         // Activate previous scope
         let previousScope = scopeStack.last ?? .content
-        print("🎯 [FOCUS] Deactivating \(activeScope), returning to \(previousScope)")
-
         activeScope = previousScope
 
         // Restore focus for previous scope
         if let saved = savedFocus[previousScope] {
             focusedItem = saved
             restoreTrigger += 1
-            print("🎯 [FOCUS] Restored focus: \(saved)")
         }
     }
 
@@ -204,19 +204,27 @@ class FocusScopeManager: ObservableObject {
 
     /// Set the currently focused item.
     /// Called by views when they receive focus.
+    /// Optimized for rapid focus changes during scrolling - skips expensive operations.
     func setFocus(_ item: FocusItemId) {
         guard item.scope == activeScope else {
+            #if DEBUG
             print("🎯 [FOCUS] ⚠️ Rejecting focus for \(item) - scope \(item.scope) is not active (active: \(activeScope))")
+            #endif
             return
         }
 
-        // Add to history if different from current
-        if let current = focusedItem, current != item {
+        // Skip if already focused on this item (avoid unnecessary work)
+        guard focusedItem != item else { return }
+
+        // Add to history if different from current, but throttled during rapid scrolling
+        // History is for back-navigation, not needed for every intermediate focus during fast scrolling
+        let now = Date()
+        if let current = focusedItem, now.timeIntervalSince(lastHistoryUpdate) >= historyThrottleInterval {
             addToHistory(current)
+            lastHistoryUpdate = now
         }
 
         focusedItem = item
-        print("🎯 [FOCUS] Set focus: \(item)")
     }
 
     /// Set focus using individual components.
@@ -254,7 +262,6 @@ class FocusScopeManager: ObservableObject {
 
         focusedItem = previous
         restoreTrigger += 1
-        print("🎯 [FOCUS] Focus back to: \(previous)")
         return true
     }
 

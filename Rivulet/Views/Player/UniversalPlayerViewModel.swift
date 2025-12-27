@@ -9,6 +9,92 @@ import SwiftUI
 import Combine
 import UIKit
 
+// MARK: - Subtitle Preference
+
+/// Stores user's subtitle preference for auto-selection
+struct SubtitlePreference: Codable, Equatable {
+    /// Whether subtitles are enabled
+    var enabled: Bool
+    /// Preferred language code (e.g., "en", "es")
+    var languageCode: String?
+    /// Preferred codec (e.g., "srt", "ass", "pgs")
+    var codec: String?
+    /// Whether to prefer hearing impaired tracks
+    var preferHearingImpaired: Bool
+
+    static let off = SubtitlePreference(enabled: false, languageCode: nil, codec: nil, preferHearingImpaired: false)
+
+    init(enabled: Bool, languageCode: String?, codec: String?, preferHearingImpaired: Bool) {
+        self.enabled = enabled
+        self.languageCode = languageCode
+        self.codec = codec
+        self.preferHearingImpaired = preferHearingImpaired
+    }
+
+    /// Create preference from a selected track
+    init(from track: MediaTrack) {
+        self.enabled = true
+        self.languageCode = track.languageCode
+        self.codec = track.codec
+        self.preferHearingImpaired = track.isHearingImpaired
+    }
+}
+
+/// Manages subtitle preference persistence
+enum SubtitlePreferenceManager {
+    private static let key = "subtitlePreference"
+
+    static var current: SubtitlePreference {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: key),
+                  let pref = try? JSONDecoder().decode(SubtitlePreference.self, from: data) else {
+                return .off
+            }
+            return pref
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: key)
+            }
+        }
+    }
+
+    /// Find best matching subtitle track based on preference
+    static func findBestMatch(in tracks: [MediaTrack], preference: SubtitlePreference) -> MediaTrack? {
+        guard preference.enabled, let preferredLang = preference.languageCode else {
+            return nil
+        }
+
+        // Filter tracks by language
+        let langMatches = tracks.filter { $0.languageCode == preferredLang }
+        guard !langMatches.isEmpty else {
+            // No tracks match preferred language - keep subtitles off
+            return nil
+        }
+
+        // Try to find exact codec match
+        if let preferredCodec = preference.codec {
+            if let exactMatch = langMatches.first(where: {
+                $0.codec == preferredCodec && $0.isHearingImpaired == preference.preferHearingImpaired
+            }) {
+                return exactMatch
+            }
+            // Try codec match without hearing impaired preference
+            if let codecMatch = langMatches.first(where: { $0.codec == preferredCodec }) {
+                return codecMatch
+            }
+        }
+
+        // Fall back to first track of preferred language with matching HI preference
+        if let hiMatch = langMatches.first(where: { $0.isHearingImpaired == preference.preferHearingImpaired }) {
+            return hiMatch
+        }
+
+        // Fall back to first track of preferred language
+        return langMatches.first
+    }
+}
+
 @MainActor
 final class UniversalPlayerViewModel: ObservableObject {
 
@@ -31,39 +117,79 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var currentAudioTrackId: Int?
     @Published private(set) var currentSubtitleTrackId: Int?
 
-    // MARK: - Info Panel State
+    // MARK: - Playback Settings Panel State (Column-based layout)
 
-    enum InfoTab: String, CaseIterable {
-        case info = "Info"
-        case audio = "Audio"
-        case subtitles = "Subtitles"
-    }
+    /// Which column is focused: 0 = Subtitles, 1 = Audio (Media Info is not focusable)
+    @Published var focusedColumn: Int = 0
 
-    @Published var selectedInfoTab: InfoTab = .subtitles
-    @Published var focusedInfoTabIndex: Int = 0
+    /// Which row within the focused column
+    @Published var focusedRowIndex: Int = 0
 
-    /// Track if focus is on the tab bar (true) or in content area (false)
-    @Published var isInfoPanelFocusOnTabs: Bool = true
-
-    /// Track which content item (button) is focused when in content area
-    @Published var focusedContentIndex: Int = 0
-
-    /// Available tabs based on current state
-    /// Order: Subtitles (most used), Audio (if multiple tracks), Info
-    var availableInfoTabs: [InfoTab] {
-        var tabs: [InfoTab] = [.subtitles]
-        if audioTracks.count > 1 {
-            tabs.append(.audio)
+    /// Number of rows in a given column
+    func rowCount(forColumn column: Int) -> Int {
+        switch column {
+        case 0: return 1 + subtitleTracks.count  // "Off" + subtitle tracks
+        case 1: return max(1, audioTracks.count)  // Audio tracks (at least 1)
+        default: return 0
         }
-        tabs.append(.info)
-        return tabs
     }
 
-    /// The currently focused tab
-    var focusedInfoTab: InfoTab? {
-        let tabs = availableInfoTabs
-        guard focusedInfoTabIndex >= 0 && focusedInfoTabIndex < tabs.count else { return nil }
-        return tabs[focusedInfoTabIndex]
+    /// Check if a specific setting is focused
+    func isSettingFocused(column: Int, index: Int) -> Bool {
+        return focusedColumn == column && focusedRowIndex == index
+    }
+
+    /// Navigate within settings panel
+    func navigateSettings(direction: MoveCommandDirection) {
+        switch direction {
+        case .up:
+            if focusedRowIndex > 0 {
+                focusedRowIndex -= 1
+            }
+        case .down:
+            let maxIndex = rowCount(forColumn: focusedColumn) - 1
+            if focusedRowIndex < maxIndex {
+                focusedRowIndex += 1
+            }
+        case .left:
+            if focusedColumn > 0 {
+                focusedColumn -= 1
+                // Clamp row index to new column's range
+                focusedRowIndex = min(focusedRowIndex, rowCount(forColumn: focusedColumn) - 1)
+            }
+        case .right:
+            if focusedColumn < 1 {  // Only 2 focusable columns (0 and 1)
+                focusedColumn += 1
+                // Clamp row index to new column's range
+                focusedRowIndex = min(focusedRowIndex, rowCount(forColumn: focusedColumn) - 1)
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    /// Select the currently focused setting
+    func selectFocusedSetting() {
+        switch focusedColumn {
+        case 0:  // Subtitles
+            if focusedRowIndex == 0 {
+                selectSubtitleTrack(id: nil)
+                print("🎬 [SETTINGS] Selected subtitles: Off")
+            } else {
+                let trackIndex = focusedRowIndex - 1
+                if trackIndex < subtitleTracks.count {
+                    selectSubtitleTrack(id: subtitleTracks[trackIndex].id)
+                    print("🎬 [SETTINGS] Selected subtitle: \(subtitleTracks[trackIndex].name)")
+                }
+            }
+        case 1:  // Audio
+            if focusedRowIndex < audioTracks.count {
+                selectAudioTrack(id: audioTracks[focusedRowIndex].id)
+                print("🎬 [SETTINGS] Selected audio: \(audioTracks[focusedRowIndex].name)")
+            }
+        default:
+            break
+        }
     }
 
     // MARK: - Player Instance
@@ -261,93 +387,13 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - Info Panel Navigation
 
-    /// Navigate focus between info tabs (auto-selects the tab)
-    func navigateInfoTab(direction: Int) {
-        let tabs = availableInfoTabs
-        let newIndex = focusedInfoTabIndex + direction
-        if newIndex >= 0 && newIndex < tabs.count {
-            focusedInfoTabIndex = newIndex
-            selectedInfoTab = tabs[newIndex]
-            print("🎬 [INFO] Switched to tab \(focusedInfoTabIndex): \(tabs[newIndex].rawValue)")
-        }
-    }
-
-    /// Select the currently focused tab (for explicit selection if needed)
-    func selectFocusedInfoTab() {
-        if let tab = focusedInfoTab {
-            selectedInfoTab = tab
-            print("🎬 [INFO] Selected tab: \(tab.rawValue)")
-        }
-    }
-
-    /// Reset info panel state when opening
-    func resetInfoPanelFocus() {
-        // Refresh track lists when info panel opens
+    /// Reset settings panel state when opening
+    func resetSettingsPanel() {
+        // Refresh track lists when panel opens
         updateTrackLists()
-        print("🎬 [INFO] Tracks: \(subtitleTracks.count) subtitles, \(audioTracks.count) audio")
-
-        let tabs = availableInfoTabs
-        focusedInfoTabIndex = 0
-        selectedInfoTab = tabs.first ?? .subtitles
-        isInfoPanelFocusOnTabs = true
-        print("🎬 [INFO] Reset to first tab: \(tabs.first?.rawValue ?? "subtitles"), focus on tabs")
-    }
-
-    /// Number of focusable items in current tab's content
-    var contentItemCount: Int {
-        switch selectedInfoTab {
-        case .subtitles:
-            return subtitleTracks.count + 1  // +1 for "Off" option
-        case .audio:
-            return audioTracks.count
-        case .info:
-            return 0  // Info tab has no focusable content
-        }
-    }
-
-    /// Move focus from tabs to content area
-    func focusInfoPanelContent() {
-        isInfoPanelFocusOnTabs = false
-        focusedContentIndex = 0  // Start at first item
-        print("🎬 [INFO] Focus moved to content area, \(contentItemCount) items")
-    }
-
-    /// Move focus back to tabs from content area
-    func focusInfoPanelTabs() {
-        isInfoPanelFocusOnTabs = true
-        print("🎬 [INFO] Focus returned to tabs")
-    }
-
-    /// Navigate focus between content items (left/right)
-    func navigateContent(direction: Int) {
-        let newIndex = focusedContentIndex + direction
-        if newIndex >= 0 && newIndex < contentItemCount {
-            focusedContentIndex = newIndex
-            print("🎬 [INFO] Content focus: \(focusedContentIndex)")
-        }
-    }
-
-    /// Select the currently focused content item
-    func selectFocusedContent() {
-        switch selectedInfoTab {
-        case .subtitles:
-            if focusedContentIndex == 0 {
-                // "Off" option
-                selectSubtitleTrack(id: nil)
-            } else {
-                let trackIndex = focusedContentIndex - 1
-                if trackIndex < subtitleTracks.count {
-                    selectSubtitleTrack(id: subtitleTracks[trackIndex].id)
-                }
-            }
-        case .audio:
-            if focusedContentIndex < audioTracks.count {
-                selectAudioTrack(id: audioTracks[focusedContentIndex].id)
-            }
-        case .info:
-            break
-        }
-        print("🎬 [INFO] Selected content at index \(focusedContentIndex)")
+        focusedColumn = 0
+        focusedRowIndex = 0
+        print("🎬 [SETTINGS] Opened with \(audioTracks.count) audio, \(subtitleTracks.count) subtitles")
     }
 
     func seek(to time: TimeInterval) async {
@@ -530,13 +576,61 @@ final class UniversalPlayerViewModel: ObservableObject {
     func selectSubtitleTrack(id: Int?) {
         mpvPlayerWrapper.selectSubtitleTrack(id: id)
         currentSubtitleTrackId = id
+
+        // Save preference
+        if let id = id, let track = subtitleTracks.first(where: { $0.id == id }) {
+            SubtitlePreferenceManager.current = SubtitlePreference(from: track)
+            print("🎬 [SUBTITLE PREF] Saved: \(track.languageCode ?? "?") / \(track.codec ?? "?")")
+        } else {
+            SubtitlePreferenceManager.current = .off
+            print("🎬 [SUBTITLE PREF] Saved: Off")
+        }
     }
 
+    /// Whether we've already applied subtitle preference for this playback session
+    private var hasAppliedSubtitlePreference = false
+
     private func updateTrackLists() {
+        let previousSubtitleCount = subtitleTracks.count
+
         audioTracks = mpvPlayerWrapper.audioTracks
         subtitleTracks = mpvPlayerWrapper.subtitleTracks
         currentAudioTrackId = mpvPlayerWrapper.currentAudioTrackId
         currentSubtitleTrackId = mpvPlayerWrapper.currentSubtitleTrackId
+
+        // Apply saved subtitle preference when tracks are first available
+        if !hasAppliedSubtitlePreference && !subtitleTracks.isEmpty && previousSubtitleCount == 0 {
+            hasAppliedSubtitlePreference = true
+            applySubtitlePreference()
+        }
+    }
+
+    /// Apply saved subtitle preference
+    private func applySubtitlePreference() {
+        let preference = SubtitlePreferenceManager.current
+
+        if !preference.enabled {
+            // User prefers subtitles off
+            selectSubtitleTrackWithoutSaving(id: nil)
+            print("🎬 [SUBTITLE PREF] Applied: Off (user preference)")
+            return
+        }
+
+        // Find best matching track
+        if let match = SubtitlePreferenceManager.findBestMatch(in: subtitleTracks, preference: preference) {
+            selectSubtitleTrackWithoutSaving(id: match.id)
+            print("🎬 [SUBTITLE PREF] Applied: \(match.name) (matched \(preference.languageCode ?? "?"))")
+        } else {
+            // No matching language found - keep subtitles off
+            selectSubtitleTrackWithoutSaving(id: nil)
+            print("🎬 [SUBTITLE PREF] Applied: Off (no \(preference.languageCode ?? "?") tracks found)")
+        }
+    }
+
+    /// Select subtitle track without saving preference (for auto-selection)
+    private func selectSubtitleTrackWithoutSaving(id: Int?) {
+        mpvPlayerWrapper.selectSubtitleTrack(id: id)
+        currentSubtitleTrackId = id
     }
 
     // MARK: - Controls Visibility

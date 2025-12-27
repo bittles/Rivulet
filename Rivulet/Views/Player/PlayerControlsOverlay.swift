@@ -13,9 +13,6 @@ struct PlayerControlsOverlay: View {
     /// When true, shows only the info panel. When false, shows only the transport bar.
     var showInfoPanel: Bool = false
 
-    // Use InfoTab from viewModel
-    private typealias InfoTab = UniversalPlayerViewModel.InfoTab
-
     var body: some View {
         ZStack {
             if showInfoPanel {
@@ -85,161 +82,204 @@ struct PlayerControlsOverlay: View {
         )
     }
 
-    // MARK: - Info Panel (Swipe Down)
+    // MARK: - Playback Settings Panel (Horizontal Bar at Top)
+
+    private let settingsPanelHeight: CGFloat = 340
 
     private var infoPanel: some View {
         VStack(spacing: 0) {
-            // Tab bar - focus managed by viewModel
-            HStack(spacing: 16) {
-                ForEach(Array(viewModel.availableInfoTabs.enumerated()), id: \.element) { index, tab in
-                    InfoPanelTab(
-                        title: tab.rawValue,
-                        isSelected: viewModel.selectedInfoTab == tab,
-                        // Only show focus ring when focus is on tabs, not content
-                        isFocused: viewModel.isInfoPanelFocusOnTabs && viewModel.focusedInfoTabIndex == index
-                    )
-                    .onTapGesture {
-                        viewModel.focusedInfoTabIndex = index
-                        viewModel.selectFocusedInfoTab()
+            // Main panel content
+            HStack(alignment: .top, spacing: 0) {
+                // Left Column: Subtitles
+                settingsColumn(title: "SUBTITLES", columnIndex: 0) {
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical, showsIndicators: false) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                // Off option
+                                PlaybackSettingsRow(
+                                    title: "Off",
+                                    subtitle: "No subtitles",
+                                    isSelected: viewModel.currentSubtitleTrackId == nil,
+                                    isFocused: viewModel.isSettingFocused(column: 0, index: 0)
+                                )
+                                .id("sub_0")
+
+                                ForEach(Array(viewModel.subtitleTracks.enumerated()), id: \.element.id) { index, track in
+                                    PlaybackSettingsRow(
+                                        title: track.name,
+                                        subtitle: formatSubtitleTrackInfo(track),
+                                        isSelected: track.id == viewModel.currentSubtitleTrackId,
+                                        isFocused: viewModel.isSettingFocused(column: 0, index: index + 1)
+                                    )
+                                    .id("sub_\(index + 1)")
+                                }
+                            }
+                            .padding(.vertical, 8)
+                        }
+                        .onChange(of: viewModel.focusedRowIndex) { _, newIndex in
+                            if viewModel.focusedColumn == 0 {
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    proxy.scrollTo("sub_\(newIndex)", anchor: .center)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Divider
+                Rectangle()
+                    .fill(.white.opacity(0.15))
+                    .frame(width: 1)
+                    .padding(.vertical, 20)
+
+                // Middle Column: Audio
+                settingsColumn(title: "AUDIO", columnIndex: 1) {
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical, showsIndicators: false) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(Array(viewModel.audioTracks.enumerated()), id: \.element.id) { index, track in
+                                    PlaybackSettingsRow(
+                                        title: track.name,
+                                        subtitle: formatAudioTrackInfo(track),
+                                        isSelected: track.id == viewModel.currentAudioTrackId,
+                                        isFocused: viewModel.isSettingFocused(column: 1, index: index)
+                                    )
+                                    .id("audio_\(index)")
+                                }
+                            }
+                            .padding(.vertical, 8)
+                        }
+                        .onChange(of: viewModel.focusedRowIndex) { _, newIndex in
+                            if viewModel.focusedColumn == 1 {
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    proxy.scrollTo("audio_\(newIndex)", anchor: .center)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Divider
+                Rectangle()
+                    .fill(.white.opacity(0.15))
+                    .frame(width: 1)
+                    .padding(.vertical, 20)
+
+                // Right Column: Media Info
+                settingsColumn(title: "MEDIA INFO", columnIndex: 2) {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            // Title
+                            Text(viewModel.title)
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(2)
+
+                            if let subtitle = viewModel.subtitle {
+                                Text(subtitle)
+                                    .font(.system(size: 15))
+                                    .foregroundStyle(.white.opacity(0.6))
+                            }
+
+                            Divider()
+                                .background(.white.opacity(0.2))
+                                .padding(.vertical, 8)
+
+                            // Video info
+                            if let videoInfo = videoInfoString {
+                                mediaInfoText(label: "Video", value: videoInfo)
+                            }
+
+                            if let hdrInfo = hdrInfoString {
+                                mediaInfoText(label: "HDR", value: hdrInfo, highlight: true)
+                            }
+
+                            if let audioInfo = audioInfoString {
+                                mediaInfoText(label: "Audio", value: audioInfo)
+                            }
+
+                            if let fileInfo = fileInfoString {
+                                mediaInfoText(label: "File", value: fileInfo)
+                            }
+
+                            if viewModel.duration > 0 {
+                                mediaInfoText(label: "Duration", value: formatDuration(viewModel.duration))
+                            }
+                        }
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 16)
                     }
                 }
             }
             .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.bottom, 20)
+            .padding(.horizontal, 24)
+            .frame(height: settingsPanelHeight)
+            .frame(maxWidth: .infinity)
+            .contentShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+            .clipped()
+            .glassEffect(
+                .regular,
+                in: RoundedRectangle(cornerRadius: 32, style: .continuous)
+            )
+            // GPU-accelerated shadow
+            .background(
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .fill(.black)
+                    .blur(radius: 30)
+                    .offset(y: 15)
+                    .opacity(0.5)
+            )
+            .padding(.horizontal, 60)
+            .padding(.top, 40)
 
-            // Tab content
-            Group {
-                switch viewModel.selectedInfoTab {
-                case .info:
-                    infoTabContent
-                case .audio:
-                    audioTabContent
-                case .subtitles:
-                    subtitlesTabContent
-                }
-            }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 24)
+            Spacer()
         }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 80)
-        .background {
-            RoundedRectangle(cornerRadius: 32, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .padding(.horizontal, 80)
-        }
-        .padding(.top, 48)  // Same margin as sidebar from left
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // Note: Input is handled by UniversalPlayerView, not here
     }
 
-    // MARK: - Info Tab Content
+    /// Column container with header
+    private func settingsColumn<Content: View>(
+        title: String,
+        columnIndex: Int,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Column header
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .tracking(1.5)
+                .foregroundStyle(viewModel.focusedColumn == columnIndex ? .white : .white.opacity(0.5))
+                .padding(.horizontal, 16)
 
-    private var infoTabContent: some View {
-        HStack(alignment: .top, spacing: 40) {
-            // Left side: Title and description
-            VStack(alignment: .leading, spacing: 12) {
-                Text(viewModel.title)
-                    .font(.title2)
-                    .fontWeight(.bold)
-                    .foregroundStyle(.white)
-
-                if let subtitle = viewModel.subtitle {
-                    Text(subtitle)
-                        .font(.body)
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-
-                // Summary/description if available
-                if let summary = viewModel.metadata.summary, !summary.isEmpty {
-                    Text(summary)
-                        .font(.callout)
-                        .foregroundStyle(.white.opacity(0.6))
-                        .lineLimit(3)
-                        .padding(.top, 4)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            // Right side: Technical info
-            VStack(alignment: .trailing, spacing: 8) {
-                // Video info
-                if let videoInfo = videoInfoString {
-                    InfoBadge(icon: "film", text: videoInfo)
-                }
-
-                // HDR badge
-                if let hdrInfo = hdrInfoString {
-                    InfoBadge(icon: "sparkles", text: hdrInfo, highlight: true)
-                }
-
-                // Audio info
-                if let audioInfo = audioInfoString {
-                    InfoBadge(icon: "speaker.wave.2", text: audioInfo)
-                }
-
-                // File info
-                if let fileInfo = fileInfoString {
-                    InfoBadge(icon: "doc", text: fileInfo)
-                }
-
-                // Duration/Runtime
-                if viewModel.duration > 0 {
-                    InfoBadge(icon: "clock", text: formatDuration(viewModel.duration))
-                }
-            }
+            // Column content
+            content()
         }
-        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: - Audio Tab Content
+    /// Simple text row for media info
+    private func mediaInfoText(label: String, value: String, highlight: Bool = false) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label)
+                .font(.system(size: 14))
+                .foregroundStyle(.white.opacity(0.5))
+                .frame(width: 60, alignment: .leading)
 
-    private var audioTabContent: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                ForEach(Array(viewModel.audioTracks.enumerated()), id: \.element.id) { index, track in
-                    TrackButton(
-                        title: track.name,
-                        subtitle: formatAudioTrackInfo(track),
-                        isSelected: track.id == viewModel.currentAudioTrackId,
-                        isFocused: !viewModel.isInfoPanelFocusOnTabs && viewModel.focusedContentIndex == index
-                    ) {
-                        viewModel.selectAudioTrack(id: track.id)
-                    }
-                }
-            }
-            .padding(.vertical, 8)
+            Text(value)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(highlight ? .yellow : .white.opacity(0.8))
         }
     }
 
-    // MARK: - Subtitles Tab Content
-
-    private var subtitlesTabContent: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                // Off option (index 0)
-                TrackButton(
-                    title: "Off",
-                    subtitle: "Disabled",
-                    isSelected: viewModel.currentSubtitleTrackId == nil,
-                    isFocused: !viewModel.isInfoPanelFocusOnTabs && viewModel.focusedContentIndex == 0
-                ) {
-                    viewModel.selectSubtitleTrack(id: nil)
-                }
-
-                ForEach(Array(viewModel.subtitleTracks.enumerated()), id: \.element.id) { index, track in
-                    TrackButton(
-                        title: track.name,
-                        subtitle: formatSubtitleTrackInfo(track),
-                        isSelected: track.id == viewModel.currentSubtitleTrackId,
-                        isFocused: !viewModel.isInfoPanelFocusOnTabs && viewModel.focusedContentIndex == index + 1
-                    ) {
-                        viewModel.selectSubtitleTrack(id: track.id)
-                    }
-                }
-            }
-            .padding(.vertical, 8)
-        }
+    private func settingsSectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .bold))
+            .tracking(1.5)
+            .foregroundStyle(.white.opacity(0.5))
+            .padding(.horizontal, 36)
+            .padding(.top, 24)
+            .padding(.bottom, 8)
     }
 
     // MARK: - Media Info Helpers
@@ -597,111 +637,55 @@ private struct TransportProgressBar: View {
     }
 }
 
-// MARK: - Info Panel Tab (Manual Focus)
+// MARK: - Playback Settings Row (matches SidebarRow style)
 
-/// Simple tab view that displays focus state from our FocusScopeManager
-private struct InfoPanelTab: View {
-    let title: String
-    let isSelected: Bool
-    let isFocused: Bool
-
-    var body: some View {
-        Text(title)
-            .font(.body)
-            .fontWeight(isSelected ? .semibold : .medium)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isSelected ? .white.opacity(0.2) : .white.opacity(0.08))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(.white.opacity(isFocused ? 0.8 : 0), lineWidth: 3)
-            )
-            .scaleEffect(isFocused ? 1.05 : 1.0)
-            .animation(.easeOut(duration: 0.15), value: isFocused)
-    }
-}
-
-// MARK: - Track Button
-
-private struct TrackButton: View {
+/// Row item for the playback settings list (matches sidebar row styling)
+private struct PlaybackSettingsRow: View {
     let title: String
     let subtitle: String
     let isSelected: Bool
-    var isFocused: Bool = false  // Manual focus from viewModel
-    let action: () -> Void
+    var isFocused: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
+        HStack(spacing: 14) {
+            // Selection indicator (checkmark for selected items)
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 22, weight: .medium))
+                .frame(width: 26)
+
+            // Text content
+            VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 21, weight: isSelected ? .semibold : .regular))
                     .lineLimit(1)
 
-                Spacer()
-
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.blue)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .lineLimit(1)
                 }
             }
 
-            Text(subtitle)
-                .font(.system(size: 14))
-                .foregroundStyle(.white.opacity(0.5))
-                .lineLimit(1)
+            Spacer(minLength: 4)
+
+            // Selected indicator dot (like sidebar)
+            if isSelected {
+                Circle()
+                    .fill(.white)
+                    .frame(width: 6, height: 6)
+            }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .frame(minWidth: 180)
+        .foregroundStyle(.white.opacity(isFocused || isSelected ? 1.0 : 0.6))
+        .padding(.leading, 16)
+        .padding(.trailing, 12)
+        .padding(.vertical, 13)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(isSelected ? .white.opacity(0.25) : .white.opacity(0.1))
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(isFocused ? .white.opacity(0.15) : .clear)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(.white.opacity(isFocused ? 0.8 : 0), lineWidth: 3)
-        )
-        .scaleEffect(isFocused ? 1.05 : 1.0)
+        .padding(.horizontal, 16)
         .animation(.easeOut(duration: 0.15), value: isFocused)
-        .onTapGesture {
-            action()
-        }
-    }
-}
-
-// MARK: - Focusable Button
-
-private struct FocusableButton<Content: View>: View {
-    let isSelected: Bool
-    let action: () -> Void
-    @ViewBuilder let content: () -> Content
-
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        content()
-            // Simplified focus effect: removed brightness (CPU-intensive color matrix)
-            .scaleEffect(isFocused ? 1.08 : 1.0)
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(.white.opacity(isFocused ? 0.8 : 0), lineWidth: 3)
-            )
-            .animation(.easeOut(duration: 0.15), value: isFocused)
-            .focusable()
-            .focused($isFocused)
-            .onTapGesture {
-                action()
-            }
-            #if os(tvOS)
-            .onPlayPauseCommand {
-                action()
-            }
-            #endif
     }
 }
 

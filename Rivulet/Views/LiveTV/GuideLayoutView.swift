@@ -7,6 +7,15 @@
 
 import SwiftUI
 
+// MARK: - Cached DateFormatter (avoids allocation per-cell)
+private enum GuideFormatters {
+    static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        return formatter
+    }()
+}
+
 #if os(tvOS)
 
 struct GuideLayoutView: View {
@@ -316,9 +325,7 @@ struct GuideLayoutView: View {
     // MARK: - Helpers
 
     private func formatTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        return formatter.string(from: date)
+        GuideFormatters.timeFormatter.string(from: date)
     }
 }
 
@@ -472,8 +479,7 @@ private struct GuideChannelRow: View {
     }
 
     private func formatTimeRange(_ program: UnifiedProgram) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
+        let formatter = GuideFormatters.timeFormatter
         return "\(formatter.string(from: program.startTime)) - \(formatter.string(from: program.endTime))"
     }
 
@@ -727,9 +733,7 @@ struct GuideLayoutView: View {
     }
 
     private func formatTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        return formatter.string(from: date)
+        GuideFormatters.timeFormatter.string(from: date)
     }
 }
 
