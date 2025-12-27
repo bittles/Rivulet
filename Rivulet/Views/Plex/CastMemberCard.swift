@@ -179,7 +179,7 @@ struct CastCrewRow: View {
                 .padding(.horizontal, 48)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 24) {
+                LazyHStack(spacing: 24) {
                     // Directors first
                     ForEach(directors) { director in
                         Button { } label: {

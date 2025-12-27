@@ -125,21 +125,19 @@ class PlexDataStore: ObservableObject {
         print("📦 PlexDataStore: Fetching hubs from \(serverURL)/hubs")
 
         do {
-            let fetchedHubs = try await networkManager.getHubs(serverURL: serverURL, authToken: token)
+            let fetchedHubs = try await fetchHubsOffMain(serverURL: serverURL, token: token)
             print("📦 PlexDataStore: ✅ Fetched \(fetchedHubs.count) hubs")
 
-            await MainActor.run {
-                // Only update if hubs actually changed (prevents unnecessary re-renders)
-                if !hubsAreEqual(self.hubs, fetchedHubs) {
-                    self.hubs = fetchedHubs
-                    print("📦 PlexDataStore: Hubs updated (changed)")
-                } else {
-                    print("📦 PlexDataStore: Hubs unchanged, skipping update")
-                }
-                self.hubsError = nil
-                if updateLoading {
-                    self.isLoadingHubs = false
-                }
+            // Only update if hubs actually changed (prevents unnecessary re-renders)
+            if !hubsAreEqual(self.hubs, fetchedHubs) {
+                self.hubs = fetchedHubs
+                print("📦 PlexDataStore: Hubs updated (changed)")
+            } else {
+                print("📦 PlexDataStore: Hubs unchanged, skipping update")
+            }
+            self.hubsError = nil
+            if updateLoading {
+                self.isLoadingHubs = false
             }
             await cacheManager.cacheHubs(fetchedHubs)
         } catch {
@@ -153,13 +151,11 @@ class PlexDataStore: ObservableObject {
                 return
             }
 
-            await MainActor.run {
-                if self.hubs.isEmpty {
-                    self.hubsError = error.localizedDescription
-                }
-                if updateLoading {
-                    self.isLoadingHubs = false
-                }
+            if self.hubs.isEmpty {
+                self.hubsError = error.localizedDescription
+            }
+            if updateLoading {
+                self.isLoadingHubs = false
             }
         }
     }
@@ -230,24 +226,22 @@ class PlexDataStore: ObservableObject {
         print("📦 PlexDataStore: Fetching libraries from \(serverURL)/library/sections")
 
         do {
-            let fetched = try await networkManager.getLibraries(serverURL: serverURL, authToken: token)
+            let fetched = try await fetchLibrariesOffMain(serverURL: serverURL, token: token)
             print("📦 PlexDataStore: ✅ Fetched \(fetched.count) libraries")
 
-            await MainActor.run {
-                // Only update if libraries actually changed (prevents unnecessary re-renders)
-                if !librariesAreEqual(self.libraries, fetched) {
-                    self.libraries = fetched
-                    print("📦 PlexDataStore: Libraries updated (changed)")
-                } else {
-                    print("📦 PlexDataStore: Libraries unchanged, skipping update")
-                }
-                self.librariesError = nil
-                if updateLoading {
-                    self.isLoadingLibraries = false
-                }
-                // Sync library order settings with current libraries
-                self.librarySettings.syncOrderWithLibraries(fetched)
+            // Only update if libraries actually changed (prevents unnecessary re-renders)
+            if !librariesAreEqual(self.libraries, fetched) {
+                self.libraries = fetched
+                print("📦 PlexDataStore: Libraries updated (changed)")
+            } else {
+                print("📦 PlexDataStore: Libraries unchanged, skipping update")
             }
+            self.librariesError = nil
+            if updateLoading {
+                self.isLoadingLibraries = false
+            }
+            // Sync library order settings with current libraries
+            self.librarySettings.syncOrderWithLibraries(fetched)
             await cacheManager.cacheLibraries(fetched)
         } catch {
             let nsError = error as NSError
@@ -260,15 +254,29 @@ class PlexDataStore: ObservableObject {
                 return
             }
 
-            await MainActor.run {
-                if self.libraries.isEmpty {
-                    self.librariesError = error.localizedDescription
-                }
-                if updateLoading {
-                    self.isLoadingLibraries = false
-                }
+            if self.libraries.isEmpty {
+                self.librariesError = error.localizedDescription
+            }
+            if updateLoading {
+                self.isLoadingLibraries = false
             }
         }
+    }
+
+    // MARK: - Off-main fetch helpers
+
+    private func fetchHubsOffMain(serverURL: String, token: String) async throws -> [PlexHub] {
+        try await Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            return try await PlexNetworkManager.shared.getHubs(serverURL: serverURL, authToken: token)
+        }.value
+    }
+
+    private func fetchLibrariesOffMain(serverURL: String, token: String) async throws -> [PlexLibrary] {
+        try await Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            return try await PlexNetworkManager.shared.getLibraries(serverURL: serverURL, authToken: token)
+        }.value
     }
 
     func refreshLibraries() async {

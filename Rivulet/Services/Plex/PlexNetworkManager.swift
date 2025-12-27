@@ -24,7 +24,6 @@ enum NetworkPriority {
 
 // MARK: - Plex Network Manager
 
-@MainActor
 class PlexNetworkManager: NSObject {
     static let shared = PlexNetworkManager()
 

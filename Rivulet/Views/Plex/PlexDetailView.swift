@@ -418,7 +418,7 @@ struct PlexDetailView: View {
                 .padding(.horizontal, 48)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 24) {
+                LazyHStack(spacing: 24) {
                     ForEach(relatedItems, id: \.ratingKey) { relatedItem in
                         NavigationLink(value: relatedItem) {
                             MediaPosterCard(

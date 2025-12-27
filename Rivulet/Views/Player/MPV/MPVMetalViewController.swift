@@ -153,14 +153,11 @@ final class MPVMetalViewController: UIViewController {
         let screenSize = UIScreen.main.nativeBounds.size
         let baseWidth = max(newSize.width * metalLayer.contentsScale, 1)
         let baseHeight = max(newSize.height * metalLayer.contentsScale, 1)
-        let widthToHeight = baseWidth / baseHeight
-
-        // Scale up proportionally so height approaches screen height but doesn't exceed width.
-        let scaleToHeight = screenSize.height / baseHeight
-        let scaleToWidth = screenSize.width / baseWidth
-        let scale = min(max(1, scaleToHeight), scaleToWidth)
-
-        let targetSize = CGSize(width: baseWidth * scale, height: baseHeight * scale)
+        // Clamp strictly to screen to avoid oversized blits; no expansion beyond needed
+        let targetSize = CGSize(
+            width: min(screenSize.width, baseWidth),
+            height: min(screenSize.height, baseHeight)
+        )
 
         if metalLayer.drawableSize != targetSize {
             metalLayer.drawableSize = targetSize

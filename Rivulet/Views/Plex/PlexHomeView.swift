@@ -701,7 +701,7 @@ struct InfiniteContentRow: View {
 
             // Horizontal scroll of posters with infinite loading
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 24) {
+                LazyHStack(spacing: 24) {  // Lazy to avoid laying out hundreds of offscreen posters
                     ForEach(Array(items.enumerated()), id: \.element.ratingKey) { index, item in
                         Button {
                             onItemSelected?(item)
