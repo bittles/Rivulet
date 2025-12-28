@@ -28,9 +28,28 @@ struct PlexHomeView: View {
         var continueWatchingItems: [PlexMetadata] = []
         var seenRatingKeys: Set<String> = []
 
+        // Check if music library is visible in sidebar
+        let showMusicHubs = dataStore.hasMusicLibraryVisible
+
         for hub in hubsToProcess {
             let identifier = hub.hubIdentifier?.lowercased() ?? ""
             let title = hub.title?.lowercased() ?? ""
+
+            // Filter out playlists - never show on home page
+            let isPlaylist = identifier.contains("playlist") || title.contains("playlist")
+            if isPlaylist {
+                continue
+            }
+
+            // Filter out music hubs unless music library is in sidebar
+            let isMusicHub = identifier.contains("music") ||
+                            identifier.contains("artist") ||
+                            identifier.contains("album") ||
+                            title.contains("music") ||
+                            title.contains("recently added in music")
+            if isMusicHub && !showMusicHubs {
+                continue
+            }
 
             // Check if this is a Continue Watching or On Deck hub
             let isContinueWatching = identifier.contains("continuewatching") ||
@@ -109,6 +128,11 @@ struct PlexHomeView: View {
                 if heroItem == nil {
                     selectHeroItem()
                 }
+            }
+            .onChange(of: dataStore.hasMusicLibraryVisible) { _, _ in
+                // Recompute hubs when music library visibility changes
+                // This ensures music hubs appear/disappear when library is pinned/unpinned
+                cachedProcessedHubs = computeProcessedHubs(from: dataStore.hubs)
             }
             .navigationDestination(item: $selectedItem) { item in
                 PlexDetailView(item: item)

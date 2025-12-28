@@ -244,21 +244,51 @@ final class UniversalPlayerViewModel: ObservableObject {
         self.mpvPlayerWrapper = MPVPlayerWrapper()
 
         setupPlayer()
-        prepareStreamURL()
+
+        // Prepare stream URL asynchronously (may need to fetch full metadata for audio)
+        Task { @MainActor in
+            await prepareStreamURL()
+        }
     }
 
     private func setupPlayer() {
         bindPlayerState()
     }
 
-    private func prepareStreamURL() {
+    private func prepareStreamURL() async {
         let networkManager = PlexNetworkManager.shared
 
         guard let ratingKey = metadata.ratingKey else { return }
 
+        // Check if this is audio content
+        let isAudio = metadata.type == "track" || metadata.type == "album" || metadata.type == "artist"
+
+        // Try to get partKey from existing metadata
+        var partKey = metadata.Media?.first?.Part?.first?.key
+
+        // For audio content, if partKey is missing, fetch full metadata to get it
+        if isAudio && partKey == nil {
+            print("🎵 Audio track missing partKey, fetching full metadata...")
+            do {
+                let fullMetadata = try await networkManager.getMetadata(
+                    serverURL: serverURL,
+                    authToken: authToken,
+                    ratingKey: ratingKey
+                )
+                partKey = fullMetadata.Media?.first?.Part?.first?.key
+                if let pk = partKey {
+                    print("🎵 Got partKey from full metadata: \(pk)")
+                } else {
+                    print("🎵 Full metadata still has no partKey")
+                }
+            } catch {
+                print("🎵 Failed to fetch full metadata: \(error)")
+            }
+        }
+
         // MPV: Use true direct play - stream raw file without any transcoding
         // MPV can handle MKV, HEVC, H264, DTS, TrueHD, ASS/SSA subs natively with HDR passthrough
-        if let partKey = metadata.Media?.first?.Part?.first?.key {
+        if let partKey = partKey {
             streamURL = networkManager.buildVLCDirectPlayURL(
                 serverURL: serverURL,
                 authToken: authToken,
@@ -266,11 +296,13 @@ final class UniversalPlayerViewModel: ObservableObject {
             )
         } else {
             // Fallback to direct stream if no part key available
+            // Use music endpoint for audio content
             streamURL = networkManager.buildDirectStreamURL(
                 serverURL: serverURL,
                 authToken: authToken,
                 ratingKey: ratingKey,
-                offsetMs: Int((startOffset ?? 0) * 1000)
+                offsetMs: Int((startOffset ?? 0) * 1000),
+                isAudio: isAudio
             )
         }
 

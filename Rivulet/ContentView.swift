@@ -118,7 +118,7 @@ struct TVSidebarView: View {
     /// All focusable sidebar item keys in order
     private var allSidebarItems: [String] {
         var items = ["search", "home"]
-        items.append(contentsOf: dataStore.visibleVideoLibraries.map { $0.key })
+        items.append(contentsOf: dataStore.visibleMediaLibraries.map { $0.key })
         // Only show Live TV in sidebar if sources are configured
         if liveTVDataStore.hasConfiguredSources {
             items.append("liveTV")
@@ -131,12 +131,16 @@ struct TVSidebarView: View {
         ZStack {
             // Full-screen content with left-edge trigger
             HStack(spacing: 0) {
-                // Left-edge trigger - hidden via opacity instead of conditional to avoid layout recalc
-                LeftEdgeTrigger {
-                    openSidebar()
+                // Left-edge trigger - completely removed when guide is active to prevent focus interference
+                // Also disabled as fallback in case conditional render has timing issues
+                if !focusScopeManager.isScopeActive(.guide) {
+                    LeftEdgeTrigger(
+                        action: openSidebar,
+                        isDisabled: isSidebarVisible || nestedNavState.isNested || focusScopeManager.isScopeActive(.guide)
+                    )
+                    .opacity(isSidebarVisible || nestedNavState.isNested ? 0 : 1)
+                    .allowsHitTesting(!isSidebarVisible && !nestedNavState.isNested && !focusScopeManager.isScopeActive(.guide))
                 }
-                .opacity(isSidebarVisible || nestedNavState.isNested ? 0 : 1)
-                .allowsHitTesting(!isSidebarVisible && !nestedNavState.isNested)
 
                 mainContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -257,10 +261,10 @@ struct TVSidebarView: View {
                                 .id("home")
 
                                 // Libraries section (filtered by visibility, sorted by user order)
-                                if authManager.isAuthenticated && !dataStore.visibleVideoLibraries.isEmpty {
+                                if authManager.isAuthenticated && !dataStore.visibleMediaLibraries.isEmpty {
                                     sectionHeader(authManager.savedServerName?.uppercased() ?? "LIBRARY")
 
-                                    ForEach(dataStore.visibleVideoLibraries, id: \.key) { library in
+                                    ForEach(dataStore.visibleMediaLibraries, id: \.key) { library in
                                         SidebarRow(
                                             icon: iconForLibrary(library),
                                             title: library.title,
@@ -318,6 +322,7 @@ struct TVSidebarView: View {
                 }
                 .buttonStyle(SidebarContainerButtonStyle())  // Custom style to prevent white focus
                 .focused($focusedItem, equals: "sidebar")
+                .disabled(!focusScopeManager.isScopeActive(.sidebar))  // Disable when not active (prevents focus escape)
                 .focusSection()  // Contain focus within sidebar, prevent escape to content
                 .onMoveCommand { direction in
                     handleSidebarNavigation(direction: direction, proxy: proxy)
@@ -528,7 +533,7 @@ struct TVSidebarView: View {
         // Close first so focus returns to content immediately
         closeSidebar()
 
-        if let library = dataStore.visibleVideoLibraries.first(where: { $0.key == highlightedItem }) {
+        if let library = dataStore.visibleMediaLibraries.first(where: { $0.key == highlightedItem }) {
             navigateToLibrary(library)
         } else if highlightedItem == "search" {
             navigateToSearch()
@@ -629,6 +634,7 @@ struct SidebarButton: View {
 
 struct LeftEdgeTrigger: View {
     let action: () -> Void
+    var isDisabled: Bool = false
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -641,9 +647,10 @@ struct LeftEdgeTrigger: View {
                 .frame(maxHeight: .infinity)
         }
         .buttonStyle(.plain)
+        .focusable(!isDisabled)  // Prevent focus when disabled
         .focused($isFocused)
         .onChange(of: isFocused) { _, newValue in
-            if newValue {
+            if newValue && !isDisabled {
                 action()
             }
         }

@@ -59,8 +59,8 @@ struct SidebarView: View {
                     Label("Home", systemImage: "house.fill")
                         .tag(SidebarSection.plexHome)
 
-                    // Dynamic library sections
-                    ForEach(dataStore.libraries.filter { $0.isVideoLibrary }, id: \.key) { library in
+                    // Dynamic library sections (video and music libraries)
+                    ForEach(dataStore.visibleMediaLibraries, id: \.key) { library in
                         Label(library.title, systemImage: iconForLibrary(library))
                             .tag(SidebarSection.plexLibrary(key: library.key, title: library.title))
                     }

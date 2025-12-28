@@ -76,13 +76,19 @@ struct MediaPosterCard: View, Equatable {
 
     #if os(tvOS)
     private let posterWidth: CGFloat = 220
-    private let posterHeight: CGFloat = 330
+    private let defaultPosterHeight: CGFloat = 330
     private let cornerRadius: CGFloat = 16
     #else
     private let posterWidth: CGFloat = 180
-    private let posterHeight: CGFloat = 270
+    private let defaultPosterHeight: CGFloat = 270
     private let cornerRadius: CGFloat = 12
     #endif
+
+    /// Music items (albums, artists) should display as square posters
+    private var posterHeight: CGFloat {
+        let isMusicItem = item.type == "album" || item.type == "artist" || item.type == "track"
+        return isMusicItem ? posterWidth : defaultPosterHeight
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -173,9 +179,15 @@ struct MediaPosterCard: View, Equatable {
 
     // MARK: - Progress Overlay
 
+    /// Check if this is an audio item (no played indicators for audio)
+    private var isAudioItem: Bool {
+        item.type == "album" || item.type == "artist" || item.type == "track"
+    }
+
     @ViewBuilder
     private var progressOverlay: some View {
-        if let progress = item.watchProgress, progress > 0 && progress < 1 {
+        // Don't show progress for audio items
+        if !isAudioItem, let progress = item.watchProgress, progress > 0 && progress < 1 {
             VStack {
                 Spacer()
                 GeometryReader { geo in
@@ -199,8 +211,12 @@ struct MediaPosterCard: View, Equatable {
 
     @ViewBuilder
     private var unwatchedBadge: some View {
+        // Don't show badges for audio items
+        if isAudioItem {
+            EmptyView()
+        }
         // For TV shows: show unwatched episode count
-        if let leafCount = item.leafCount, leafCount > 0, item.type == "show" {
+        else if let leafCount = item.leafCount, leafCount > 0, item.type == "show" {
             Text("\(leafCount)")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(.white)
@@ -266,6 +282,9 @@ struct MediaPosterCard: View, Equatable {
         case "show": return "tv"
         case "season": return "number.square"
         case "episode": return "play.rectangle"
+        case "artist": return "music.mic"
+        case "album": return "square.stack"
+        case "track": return "music.note"
         default: return "photo"
         }
     }
@@ -291,6 +310,14 @@ struct MediaPosterCard: View, Equatable {
             return parts.isEmpty ? nil : parts.joined(separator: " · ")
         case "season":
             return item.title
+        case "artist":
+            return nil  // Artist name is the title
+        case "album":
+            // Show artist name for albums
+            return item.parentTitle ?? item.grandparentTitle
+        case "track":
+            // Show artist name for tracks
+            return item.grandparentTitle ?? item.parentTitle
         default:
             return nil
         }

@@ -24,6 +24,7 @@ struct SettingsView: View {
     @AppStorage("showLibraryHero") private var showLibraryHero = true
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
     @AppStorage("liveTVLayout") private var liveTVLayoutRaw = LiveTVLayout.channels.rawValue
+    @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
     @Environment(\.focusScopeManager) private var focusScopeManager
     @Environment(\.nestedNavigationState) private var nestedNavState
     @State private var focusTrigger = 0  // Increment to trigger first row focus
@@ -80,6 +81,14 @@ struct SettingsView: View {
                                 subtitle: "Choose channel grid or TV guide view",
                                 selection: liveTVLayout,
                                 options: LiveTVLayout.allCases
+                            )
+
+                            SettingsToggleRow(
+                                icon: "rectangle.split.2x2",
+                                iconColor: .blue,
+                                title: "Confirm Exit Multiview",
+                                subtitle: "Ask before closing multiple streams",
+                                isOn: $confirmExitMultiview
                             )
                         }
 

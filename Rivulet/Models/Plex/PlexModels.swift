@@ -143,6 +143,11 @@ struct PlexLibrary: Codable, Identifiable, Sendable {
     var isVideoLibrary: Bool {
         type == "movie" || type == "show"
     }
+
+    /// Check if this is a music library
+    var isMusicLibrary: Bool {
+        type == "artist"
+    }
 }
 
 struct PlexLibraryLocation: Codable, Sendable {
@@ -155,6 +160,8 @@ struct PlexLibraryLocation: Codable, Sendable {
 struct PlexMediaContainer: Codable, Sendable {
     var size: Int?
     var totalSize: Int?  // Total items in collection (for pagination)
+    var librarySectionID: Int?  // Library section ID (at container level)
+    var librarySectionTitle: String?
     var Metadata: [PlexMetadata]?
     var Hub: [PlexHub]?
 }

@@ -19,10 +19,21 @@ struct PlexDetailView: View {
     @State private var showPlayer = false
     @State private var selectedEpisode: PlexMetadata?
 
+    // Music album state
+    @State private var tracks: [PlexMetadata] = []
+    @State private var isLoadingTracks = false
+    @State private var selectedTrack: PlexMetadata?
+
+    // Music artist state
+    @State private var albums: [PlexMetadata] = []
+    @State private var isLoadingAlbums = false
+    @State private var navigateToAlbum: PlexMetadata?  // For binding-based navigation
+
     // New state for cast/crew and related items
     @State private var fullMetadata: PlexMetadata?
     @State private var relatedItems: [PlexMetadata] = []
     @State private var isWatched = false
+    @State private var isStarred = false  // For music: 5-star rating toggle
     @State private var isLoadingExtras = false
     @State private var showTrailerPlayer = false
 
@@ -54,6 +65,16 @@ struct PlexDetailView: View {
                     if item.type == "show" {
                         seasonSection
                     }
+
+                    // Album specific: Tracks
+                    if item.type == "album" {
+                        trackSection
+                    }
+
+                    // Artist specific: Albums
+                    if item.type == "artist" {
+                        albumSection
+                    }
                 }
                 .padding(.horizontal, 48)
                 .padding(.top, 24)
@@ -83,8 +104,14 @@ struct PlexDetailView: View {
         }
         .ignoresSafeArea(edges: .top)
         .task {
+            // Debug: log what item we're loading
+            print("📋 PlexDetailView loading: \(item.title ?? "?") (type: \(item.type ?? "nil"), ratingKey: \(item.ratingKey ?? "nil"))")
+
             // Initialize watched state
             isWatched = item.isWatched
+
+            // Initialize starred state for music (userRating > 0 means starred)
+            isStarred = (item.userRating ?? 0) > 0
 
             // Load full metadata for cast/crew and trailer
             await loadFullMetadata()
@@ -96,6 +123,16 @@ struct PlexDetailView: View {
             if item.type == "show" {
                 await loadSeasons()
             }
+
+            // Load tracks for albums
+            if item.type == "album" {
+                await loadTracks()
+            }
+
+            // Load albums for artists
+            if item.type == "artist" {
+                await loadAlbums()
+            }
         }
         #if os(tvOS)
         .onChange(of: showPlayer) { _, shouldShow in
@@ -105,8 +142,8 @@ struct PlexDetailView: View {
         }
         #else
         .fullScreenCover(isPresented: $showPlayer) {
-            // Play the selected episode if available, otherwise play the main item (movie)
-            let playItem = selectedEpisode ?? item
+            // Play the selected episode/track if available, otherwise play the main item (movie/album)
+            let playItem = selectedEpisode ?? selectedTrack ?? item
             let resumeOffset = Double(playItem.viewOffset ?? 0) / 1000.0
             UniversalPlayerView(
                 metadata: playItem,
@@ -125,11 +162,23 @@ struct PlexDetailView: View {
             }
         }
         .onChange(of: showPlayer) { _, isShowing in
-            // Clear selected episode when player closes
+            // Clear selected episode/track when player closes
             if !isShowing {
                 selectedEpisode = nil
+                selectedTrack = nil
             }
         }
+        .navigationDestination(item: $navigateToAlbum) { album in
+            PlexDetailView(item: album)
+        }
+        #if os(tvOS)
+        // Intercept exit command when viewing nested album to prevent going all the way back
+        .onExitCommand {
+            if navigateToAlbum != nil {
+                navigateToAlbum = nil
+            }
+        }
+        #endif
     }
 
     // MARK: - Hero Section
@@ -198,13 +247,13 @@ struct PlexDetailView: View {
                                 )
                             )
                             .overlay {
-                                Image(systemName: item.type == "movie" ? "film" : "tv")
+                                Image(systemName: iconForType)
                                     .font(.system(size: 40, weight: .light))
                                     .foregroundStyle(.white.opacity(0.4))
                             }
                     }
                 }
-                .frame(width: 200, height: 300)
+                .frame(width: 200, height: isMusicItem ? 200 : 300)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 // GPU-accelerated shadow
                 .background(
@@ -218,7 +267,24 @@ struct PlexDetailView: View {
                 Spacer()
             }
             .padding(.horizontal, 96) // Inset from hero edges
-            .padding(.bottom, -50) // Overlap into content area
+            .padding(.bottom, isMusicItem ? -10 : -50) // Less overlap for square posters
+        }
+    }
+
+    /// Check if this is a music item (album, artist, track)
+    private var isMusicItem: Bool {
+        item.type == "album" || item.type == "artist" || item.type == "track"
+    }
+
+    /// Icon for fallback poster based on item type
+    private var iconForType: String {
+        switch item.type {
+        case "movie": return "film"
+        case "show": return "tv"
+        case "album": return "music.note.list"
+        case "artist": return "music.mic"
+        case "track": return "music.note"
+        default: return "photo"
         }
     }
 
@@ -226,9 +292,9 @@ struct PlexDetailView: View {
 
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Spacer for poster overlap
+            // Spacer for poster overlap (less for square music posters)
             Spacer()
-                .frame(height: 60)
+                .frame(height: isMusicItem ? 20 : 60)
 
             Text(item.title ?? "Unknown Title")
                 .font(.title2)
@@ -287,34 +353,58 @@ struct PlexDetailView: View {
 
     private var actionButtons: some View {
         HStack(spacing: 16) {
-            // Play button - smaller
-            Button {
-                showPlayer = true
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "play.fill")
-                    Text(item.isInProgress ? "Resume" : "Play")
+            // Play button - show for all playable items except artists
+            // For albums: plays the first track
+            if item.type != "artist" {
+                Button {
+                    if item.type == "album" {
+                        // Play first track of album
+                        if let firstTrack = tracks.first {
+                            selectedTrack = firstTrack
+                        }
+                    }
+                    showPlayer = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "play.fill")
+                        Text(item.type == "album" ? "Play Album" : (item.isInProgress ? "Resume" : "Play"))
+                    }
+                    .font(.system(size: 20, weight: .semibold))
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
                 }
-                .font(.system(size: 20, weight: .semibold))
-                .padding(.horizontal, 24)
-                .padding(.vertical, 12)
+                .buttonStyle(.borderedProminent)
+                .disabled(item.type == "album" && tracks.isEmpty)
             }
-            .buttonStyle(.borderedProminent)
 
-            // Watched toggle button
-            Button {
-                Task {
-                    await toggleWatched()
+            // For music: Star rating toggle (5 stars or no rating)
+            // For other content: Watched toggle button
+            if isMusicItem {
+                Button {
+                    Task {
+                        await toggleStarRating()
+                    }
+                } label: {
+                    Image(systemName: isStarred ? "star.fill" : "star")
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundStyle(isStarred ? .yellow : .secondary)
                 }
-            } label: {
-                Image(systemName: isWatched ? "checkmark.circle.fill" : "checkmark.circle")
-                    .font(.system(size: 28, weight: .medium))
-                    .foregroundStyle(isWatched ? .green : .secondary)
+                .buttonStyle(.bordered)
+            } else {
+                Button {
+                    Task {
+                        await toggleWatched()
+                    }
+                } label: {
+                    Image(systemName: isWatched ? "checkmark.circle.fill" : "checkmark.circle")
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundStyle(isWatched ? .green : .secondary)
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.bordered)
 
-            // Trailer button (only show if available)
-            if fullMetadata?.trailer != nil {
+            // Trailer button (only show if available, not for music)
+            if !isMusicItem, fullMetadata?.trailer != nil {
                 Button {
                     showTrailerPlayer = true
                 } label: {
@@ -327,8 +417,8 @@ struct PlexDetailView: View {
 
             Spacer()
 
-            // Progress info on the right
-            if let progress = item.viewOffsetFormatted, item.isInProgress {
+            // Progress info on the right (not for music)
+            if !isMusicItem, let progress = item.viewOffsetFormatted, item.isInProgress {
                 Text("\(progress) watched")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -402,7 +492,78 @@ struct PlexDetailView: View {
                             }
                         }
                     }
+                    #if os(tvOS)
+                    .padding(.horizontal, 8)  // Room for focus scale effect
+                    #endif
                 }
+            }
+        }
+    }
+
+    // MARK: - Track Section (Albums)
+
+    private var trackSection: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            if isLoadingTracks {
+                ProgressView("Loading tracks...")
+            } else if !tracks.isEmpty {
+                Text("Tracks")
+                    .font(.title2)
+                    .fontWeight(.bold)
+
+                LazyVStack(spacing: 12) {
+                    ForEach(Array(tracks.enumerated()), id: \.element.ratingKey) { index, track in
+                        AlbumTrackRow(
+                            track: track,
+                            trackNumber: track.index ?? (index + 1),
+                            serverURL: authManager.selectedServerURL ?? "",
+                            authToken: authManager.authToken ?? ""
+                        ) {
+                            // Play track
+                            selectedTrack = track
+                            showPlayer = true
+                        }
+                    }
+                }
+                #if os(tvOS)
+                .padding(.horizontal, 8)  // Room for focus scale effect
+                #endif
+            }
+        }
+    }
+
+    // MARK: - Album Section (Artists)
+
+    private var albumSection: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            if isLoadingAlbums {
+                ProgressView("Loading albums...")
+            } else if !albums.isEmpty {
+                Text("Albums")
+                    .font(.title2)
+                    .fontWeight(.bold)
+
+                LazyVStack(spacing: 16) {
+                    ForEach(albums, id: \.ratingKey) { album in
+                        Button {
+                            navigateToAlbum = album
+                        } label: {
+                            ArtistAlbumRow(
+                                album: album,
+                                serverURL: authManager.selectedServerURL ?? "",
+                                authToken: authManager.authToken ?? ""
+                            )
+                        }
+                        #if os(tvOS)
+                        .buttonStyle(CardButtonStyle())
+                        #else
+                        .buttonStyle(.plain)
+                        #endif
+                    }
+                }
+                #if os(tvOS)
+                .padding(.horizontal, 8)  // Room for focus scale effect
+                #endif
             }
         }
     }
@@ -441,7 +602,7 @@ struct PlexDetailView: View {
     #if os(tvOS)
     /// Present player using UIViewController to intercept Menu button
     private func presentPlayer() {
-        let playItem = selectedEpisode ?? item
+        let playItem = selectedEpisode ?? selectedTrack ?? item
         let resumeOffset = Double(playItem.viewOffset ?? 0) / 1000.0
 
         // Create viewModel first so we can pass the same instance to both view and container
@@ -544,6 +705,26 @@ struct PlexDetailView: View {
         }
     }
 
+    private func toggleStarRating() async {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken,
+              let ratingKey = item.ratingKey else { return }
+
+        do {
+            // Toggle between 5 stars (rating=10) and no rating (rating=nil)
+            let newRating: Int? = isStarred ? nil : 10
+            try await networkManager.setRating(
+                serverURL: serverURL,
+                authToken: token,
+                ratingKey: ratingKey,
+                rating: newRating
+            )
+            isStarred.toggle()
+        } catch {
+            print("Failed to toggle star rating: \(error)")
+        }
+    }
+
     private func loadSeasons() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.authToken,
@@ -590,6 +771,70 @@ struct PlexDetailView: View {
         }
 
         isLoadingEpisodes = false
+    }
+
+    private func loadTracks() async {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken,
+              let ratingKey = item.ratingKey else { return }
+
+        isLoadingTracks = true
+
+        do {
+            let fetchedTracks = try await networkManager.getChildren(
+                serverURL: serverURL,
+                authToken: token,
+                ratingKey: ratingKey
+            )
+            tracks = fetchedTracks
+        } catch {
+            print("Failed to load tracks: \(error)")
+        }
+
+        isLoadingTracks = false
+    }
+
+    private func loadAlbums() async {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken,
+              let ratingKey = item.ratingKey else {
+            print("🎵 Missing required data for loading albums")
+            return
+        }
+
+        // Get librarySectionID from fullMetadata (fetched first) or item
+        guard let librarySectionId = fullMetadata?.librarySectionID ?? item.librarySectionID else {
+            print("🎵 Missing librarySectionID for artist - item: \(item.librarySectionID ?? -1), fullMetadata: \(fullMetadata?.librarySectionID ?? -1)")
+            return
+        }
+
+        isLoadingAlbums = true
+
+        do {
+            // Use the library section endpoint with artist.id filter
+            // This is more reliable than /children endpoint
+            let fetchedAlbums = try await networkManager.getAlbumsForArtist(
+                serverURL: serverURL,
+                authToken: token,
+                librarySectionId: librarySectionId,
+                artistId: ratingKey
+            )
+
+            // Sort by year (newest first)
+            albums = fetchedAlbums.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
+
+            print("🎵 Found \(albums.count) albums for \(item.title ?? "?")")
+            for album in albums.prefix(5) {
+                print("  - \(album.title ?? "?") (type: \(album.type ?? "nil"), ratingKey: \(album.ratingKey ?? "nil"), parentKey: \(album.parentRatingKey ?? "nil"))")
+            }
+            if albums.count > 5 {
+                print("  ... and \(albums.count - 5) more")
+            }
+        } catch {
+            print("🎵 Failed to load albums: \(error)")
+        }
+
+        isLoadingAlbums = false
     }
 
 
@@ -722,6 +967,166 @@ struct EpisodeRow: View {
 
     private var thumbURL: URL? {
         guard let thumb = episode.thumb else { return nil }
+        return URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(authToken)")
+    }
+}
+
+// MARK: - Album Track Row
+
+struct AlbumTrackRow: View {
+    let track: PlexMetadata
+    let trackNumber: Int
+    let serverURL: String
+    let authToken: String
+    let onPlay: () -> Void
+
+    var body: some View {
+        Button(action: onPlay) {
+            HStack(spacing: 16) {
+                // Track number
+                Text("\(trackNumber)")
+                    #if os(tvOS)
+                    .font(.system(size: 22, weight: .medium, design: .monospaced))
+                    #else
+                    .font(.system(size: 18, weight: .medium, design: .monospaced))
+                    #endif
+                    .foregroundStyle(.secondary)
+                    .frame(width: 40, alignment: .trailing)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(track.title ?? "Track \(trackNumber)")
+                        #if os(tvOS)
+                        .font(.system(size: 22, weight: .medium))
+                        #else
+                        .font(.headline)
+                        #endif
+                        .lineLimit(1)
+
+                    if let duration = track.durationFormatted {
+                        Text(duration)
+                            #if os(tvOS)
+                            .font(.system(size: 18))
+                            #else
+                            .font(.caption)
+                            #endif
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer()
+
+                // Play icon
+                Image(systemName: "play.fill")
+                    #if os(tvOS)
+                    .font(.system(size: 20))
+                    #endif
+                    .foregroundStyle(.secondary)
+            }
+            #if os(tvOS)
+            .padding(.vertical, 16)
+            .padding(.horizontal, 20)
+            #else
+            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            #endif
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.secondary.opacity(0.1))
+            )
+            #if os(tvOS)
+            .hoverEffect(.highlight)
+            #endif
+        }
+        #if os(tvOS)
+        .buttonStyle(CardButtonStyle())
+        #else
+        .buttonStyle(.plain)
+        #endif
+    }
+}
+
+// MARK: - Artist Album Row
+
+struct ArtistAlbumRow: View {
+    let album: PlexMetadata
+    let serverURL: String
+    let authToken: String
+
+    var body: some View {
+        HStack(spacing: 16) {
+            // Album artwork (square)
+            CachedAsyncImage(url: thumbURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                case .empty:
+                    Rectangle()
+                        .fill(Color(white: 0.15))
+                        .overlay { ProgressView().tint(.white.opacity(0.3)) }
+                case .failure:
+                    Rectangle()
+                        .fill(Color(white: 0.15))
+                        .overlay {
+                            Image(systemName: "music.note.list")
+                                .font(.system(size: 24, weight: .light))
+                                .foregroundStyle(.white.opacity(0.4))
+                        }
+                }
+            }
+            #if os(tvOS)
+            .frame(width: 80, height: 80)
+            #else
+            .frame(width: 60, height: 60)
+            #endif
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(album.title ?? "Unknown Album")
+                    #if os(tvOS)
+                    .font(.system(size: 22, weight: .medium))
+                    #else
+                    .font(.headline)
+                    #endif
+                    .lineLimit(1)
+
+                HStack(spacing: 8) {
+                    if let year = album.year {
+                        Text(String(year))
+                    }
+                    if let trackCount = album.leafCount {
+                        Text("\(trackCount) tracks")
+                    }
+                }
+                #if os(tvOS)
+                .font(.system(size: 18))
+                #else
+                .font(.caption)
+                #endif
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        #if os(tvOS)
+        .padding(.vertical, 16)
+        .padding(.horizontal, 20)
+        #else
+        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        #endif
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.secondary.opacity(0.1))
+        )
+        #if os(tvOS)
+        .hoverEffect(.highlight)
+        #endif
+    }
+
+    private var thumbURL: URL? {
+        guard let thumb = album.thumb else { return nil }
         return URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(authToken)")
     }
 }

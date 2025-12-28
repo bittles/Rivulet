@@ -2,743 +2,430 @@
 //  GuideLayoutView.swift
 //  Rivulet
 //
-//  Traditional TV guide layout with timeline and channel rows
-//
 
 import SwiftUI
-
-// MARK: - Cached DateFormatter (avoids allocation per-cell)
-private enum GuideFormatters {
-    static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        return formatter
-    }()
-}
 
 #if os(tvOS)
 
 struct GuideLayoutView: View {
     @StateObject private var dataStore = LiveTVDataStore.shared
     @Environment(\.focusScopeManager) private var focusScopeManager
+    @Environment(\.openSidebar) private var openSidebar
+
     @State private var selectedChannel: UnifiedChannel?
-    @State private var guideStartTime: Date = Date()
-
-    // Manual focus tracking (row = channel index, column = program index within that channel)
-    @State private var focusedRow: Int = 0
-    @State private var focusedColumn: Int = 0
-
-    // Single focused button to capture all d-pad input
-    @FocusState private var isGuideFocused: Bool
-
-    // Layout constants
-    private let channelColumnWidth: CGFloat = 240
-    private let timeSlotWidth: CGFloat = 400  // Width per 30 minutes
-    private let rowHeight: CGFloat = 90
-    private let timeHeaderHeight: CGFloat = 50
-    private let visibleHours: Int = 3  // 3 hours visible
-
-    private var guideEndTime: Date {
-        guideStartTime.addingTimeInterval(TimeInterval(visibleHours * 60 * 60))
-    }
+    @State private var guideStartTime = Date()
+    @State private var focusedRow = 0
+    @State private var focusedColumn = 0
+    @State private var timeOffset = 0  // In 30-min increments for scrolling ahead
+    @FocusState private var hasFocus: Bool
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
+        GeometryReader { geo in
+            ZStack {
+                Color.black.ignoresSafeArea()
 
-            if dataStore.isLoadingChannels && dataStore.channels.isEmpty {
-                loadingView
-            } else if dataStore.isLoadingEPG && dataStore.epg.isEmpty {
-                loadingEPGView
-            } else if dataStore.channels.isEmpty {
-                emptyView
-            } else {
-                guideContent
+                if dataStore.channels.isEmpty {
+                    ProgressView()
+                } else {
+                    guideView(size: geo.size)
+                }
             }
         }
         .onAppear {
-            setupGuideStartTime()
-            // Activate guide scope for focus management
-            focusScopeManager.activate(.guide, savingCurrent: true, pushToStack: true)
-        }
-        .onDisappear {
-            focusScopeManager.deactivate()
+            setupStartTime()
+            if !focusScopeManager.isScopeActive(.sidebar) {
+                focusScopeManager.activate(.guide, savingCurrent: true, pushToStack: true)
+            }
         }
         .task {
-            // Load channels if needed
-            if dataStore.channels.isEmpty && !dataStore.isLoadingChannels {
-                await dataStore.loadChannels()
-            }
-            // Load EPG data
-            if dataStore.epg.isEmpty && !dataStore.isLoadingEPG {
-                await dataStore.loadEPG(startDate: Date(), hours: 6)
-            }
+            if dataStore.channels.isEmpty { await dataStore.loadChannels() }
+            if dataStore.epg.isEmpty { await dataStore.loadEPG(startDate: Date(), hours: 6) }
         }
-        .fullScreenCover(item: $selectedChannel) { channel in
-            LiveTVPlayerView(channel: channel)
-        }
+        .fullScreenCover(item: $selectedChannel) { LiveTVPlayerView(channel: $0) }
     }
 
-    // MARK: - Setup
-
-    private func setupGuideStartTime() {
-        // Round current time down to nearest 30 minutes
+    private func setupStartTime() {
         let now = Date()
-        let calendar = Calendar.current
-        let minute = calendar.component(.minute, from: now)
-        let roundedMinute = (minute / 30) * 30
-        guideStartTime = calendar.date(
-            bySettingHour: calendar.component(.hour, from: now),
-            minute: roundedMinute,
-            second: 0,
-            of: now
-        ) ?? now
+        let cal = Calendar.current
+        let min = cal.component(.minute, from: now)
+        guideStartTime = cal.date(bySettingHour: cal.component(.hour, from: now),
+                                   minute: (min / 30) * 30, second: 0, of: now) ?? now
     }
 
-    // MARK: - Loading Views
+    // MARK: - Main Guide View
 
-    private var loadingView: some View {
-        VStack(spacing: 20) {
-            ProgressView()
-                .scaleEffect(1.5)
+    private func guideView(size: CGSize) -> some View {
+        let channelWidth: CGFloat = 280
+        let rowHeight: CGFloat = 110
+        let headerHeight: CGFloat = 52
+        let gridWidth = size.width - channelWidth
+        let pxPerMin = gridWidth / 180  // Show 3 hours
+        let visibleStart = guideStartTime.addingTimeInterval(Double(timeOffset * 30 * 60))
+        let visibleEnd = visibleStart.addingTimeInterval(180 * 60)
 
-            Text("Loading channels...")
-                .font(.system(size: 24))
-                .foregroundStyle(.white.opacity(0.6))
-        }
-    }
-
-    private var loadingEPGView: some View {
-        VStack(spacing: 20) {
-            ProgressView()
-                .scaleEffect(1.5)
-
-            Text("Loading TV Guide...")
-                .font(.system(size: 24))
-                .foregroundStyle(.white.opacity(0.6))
-        }
-    }
-
-    // MARK: - Empty View
-
-    private var emptyView: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "tv.slash")
-                .font(.system(size: 72, weight: .thin))
-                .foregroundStyle(.white.opacity(0.3))
-
-            VStack(spacing: 12) {
-                Text("No Channels")
-                    .font(.system(size: 36, weight: .semibold))
-                    .foregroundStyle(.white)
-
-                Text("Add a Live TV source in Settings to see the guide.")
-                    .font(.system(size: 20))
-                    .foregroundStyle(.white.opacity(0.6))
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 500)
+        return Button {
+            if focusedRow < dataStore.channels.count {
+                selectedChannel = dataStore.channels[focusedRow]
             }
-        }
-    }
-
-    // MARK: - Guide Content
-
-    private var guideContent: some View {
-        // Single button container captures all focus and d-pad input
-        Button {
-            selectFocusedProgram()
         } label: {
-            guideLayout
-        }
-        .buttonStyle(GuideContainerButtonStyle())
-        .focused($isGuideFocused)
-        .onAppear {
-            isGuideFocused = true
-        }
-        .onMoveCommand { direction in
-            handleNavigation(direction)
-        }
-    }
+            VStack(alignment: .leading, spacing: 0) {
+                // Title
+                Text("Guide")
+                    .font(.system(size: 52, weight: .bold))
+                    .foregroundColor(.white)
+                    .padding(.top, 40)
+                    .padding(.bottom, 20)
+                    .padding(.leading, 40)
 
-    private var guideLayout: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack {
-                Text("TV Guide")
-                    .font(.system(size: 48, weight: .bold))
-                    .foregroundStyle(.white)
+                // Grid
+                VStack(spacing: 0) {
+                    // Header row
+                    HStack(spacing: 0) {
+                        Color(white: 0.08)
+                            .frame(width: channelWidth, height: headerHeight)
+                        TimeHeaderView(startTime: visibleStart, width: gridWidth,
+                                      height: headerHeight, pxPerMin: pxPerMin)
+                    }
 
-                Spacer()
+                    // Scrollable content
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical, showsIndicators: false) {
+                            ZStack(alignment: .topLeading) {
+                                VStack(spacing: 0) {
+                                    ForEach(Array(dataStore.channels.enumerated()), id: \.element.id) { idx, ch in
+                                        HStack(spacing: 0) {
+                                            ChannelCell(channel: ch, isSelected: idx == focusedRow,
+                                                       width: channelWidth, height: rowHeight)
+                                            ProgramRowView(
+                                                programs: dataStore.getPrograms(for: ch, startDate: visibleStart, endDate: visibleEnd),
+                                                startTime: visibleStart,
+                                                width: gridWidth,
+                                                height: rowHeight,
+                                                pxPerMin: pxPerMin,
+                                                isRowFocused: idx == focusedRow,
+                                                focusedCol: idx == focusedRow ? focusedColumn : nil
+                                            )
+                                        }
+                                        .id(idx)
+                                    }
+                                }
 
-                // Current time display
-                Text(Date(), style: .time)
-                    .font(.system(size: 24, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.7))
-
-                // EPG status
-                if dataStore.isLoadingEPG {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                        .padding(.leading, 12)
-                }
-            }
-            .padding(.horizontal, 60)
-            .padding(.top, 40)
-            .padding(.bottom, 24)
-
-            // Time header row
-            HStack(spacing: 0) {
-                // Empty space for channel column
-                Color.clear
-                    .frame(width: channelColumnWidth, height: timeHeaderHeight)
-
-                // Time slots header
-                timeHeader
-            }
-            .padding(.horizontal, 60)
-
-            // Channel rows with programs
-            ScrollViewReader { proxy in
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(dataStore.channels.enumerated()), id: \.element.id) { rowIndex, channel in
-                            GuideChannelRow(
-                                channel: channel,
-                                guideStartTime: guideStartTime,
-                                guideEndTime: guideEndTime,
-                                visibleHours: visibleHours,
-                                timeSlotWidth: timeSlotWidth,
-                                rowHeight: rowHeight,
-                                channelColumnWidth: channelColumnWidth,
-                                isRowFocused: focusedRow == rowIndex,
-                                focusedColumnIndex: focusedRow == rowIndex ? focusedColumn : nil
-                            )
-                            .id("row-\(rowIndex)")
+                                // Time line overlay (inside scroll content)
+                                TimeLineView(now: Date(), startTime: visibleStart, endTime: visibleEnd,
+                                            headerHeight: 0, pxPerMin: pxPerMin,
+                                            totalHeight: CGFloat(dataStore.channels.count) * rowHeight)
+                                    .offset(x: channelWidth)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .onChange(of: focusedRow) { _, row in
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                proxy.scrollTo(row, anchor: .center)
+                            }
                         }
                     }
-                }
-                .onChange(of: focusedRow) { _, newRow in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo("row-\(newRow)", anchor: .center)
-                    }
+                    .frame(maxHeight: .infinity)
                 }
             }
-            .padding(.horizontal, 60)
-            .padding(.bottom, 40)
+        }
+        .buttonStyle(GuideButtonStyle())
+        .focused($hasFocus)
+        .focusSection()  // Prevent focus from escaping to sidebar trigger
+        .onAppear { hasFocus = true }
+        .onMoveCommand { dir in
+            handleNav(dir)
+        }
+        .onExitCommand {
+            hasFocus = false
+            openSidebar()
+        }
+        .onChange(of: focusScopeManager.isScopeActive(.sidebar)) { _, active in
+            if !active { hasFocus = true }
         }
     }
 
-    // MARK: - Navigation
-
-    private func handleNavigation(_ direction: MoveCommandDirection) {
+    private func handleNav(_ dir: MoveCommandDirection) {
         let channels = dataStore.channels
         guard !channels.isEmpty else { return }
 
-        switch direction {
+        switch dir {
         case .up:
             if focusedRow > 0 {
                 focusedRow -= 1
-                // Clamp column to valid range for new row
-                let programCount = programCount(for: focusedRow)
-                focusedColumn = min(focusedColumn, max(0, programCount - 1))
+                clampCol()
             }
-
         case .down:
             if focusedRow < channels.count - 1 {
                 focusedRow += 1
-                // Clamp column to valid range for new row
-                let programCount = programCount(for: focusedRow)
-                focusedColumn = min(focusedColumn, max(0, programCount - 1))
+                clampCol()
             }
-
         case .left:
             if focusedColumn > 0 {
                 focusedColumn -= 1
+            } else if timeOffset > 0 {
+                // Scroll back in time
+                timeOffset -= 1
+                focusedColumn = 0  // Start at first program when scrolling back
+            } else {
+                // At left edge - open sidebar like other views
+                hasFocus = false
+                openSidebar()
             }
-
         case .right:
-            let programCount = programCount(for: focusedRow)
-            if focusedColumn < programCount - 1 {
+            let visibleStart = guideStartTime.addingTimeInterval(Double(timeOffset * 30 * 60))
+            let visibleEnd = visibleStart.addingTimeInterval(180 * 60)
+            let count = progCountFor(start: visibleStart, end: visibleEnd)
+            if focusedColumn < count - 1 {
                 focusedColumn += 1
+            } else if timeOffset < 18 {  // Allow 9 hours ahead (18 x 30min)
+                // Scroll forward in time
+                timeOffset += 1
+                focusedColumn = 0
             }
-
-        @unknown default:
-            break
+        @unknown default: break
         }
     }
 
-    private func programCount(for rowIndex: Int) -> Int {
-        guard rowIndex >= 0 && rowIndex < dataStore.channels.count else { return 1 }
-        let channel = dataStore.channels[rowIndex]
-        let programs = dataStore.getPrograms(for: channel, startDate: guideStartTime, endDate: guideEndTime)
-        return max(1, programs.count)  // At least 1 for "no program" cell
+    private func clampCol() {
+        let visibleStart = guideStartTime.addingTimeInterval(Double(timeOffset * 30 * 60))
+        let visibleEnd = visibleStart.addingTimeInterval(180 * 60)
+        focusedColumn = min(focusedColumn, max(0, progCountFor(start: visibleStart, end: visibleEnd) - 1))
     }
 
-    private func selectFocusedProgram() {
-        guard focusedRow >= 0 && focusedRow < dataStore.channels.count else { return }
-        selectedChannel = dataStore.channels[focusedRow]
-    }
-
-    // MARK: - Time Header
-
-    private var timeHeader: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            ZStack(alignment: .leading) {
-                HStack(spacing: 0) {
-                    ForEach(0..<(visibleHours * 2), id: \.self) { index in
-                        let slotTime = guideStartTime.addingTimeInterval(TimeInterval(index * 30 * 60))
-
-                        Text(formatTime(slotTime))
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.8))
-                            .frame(width: timeSlotWidth, alignment: .leading)
-                            .padding(.leading, 16)
-                    }
-                }
-
-                // Current time indicator line
-                currentTimeMarker
-            }
-            .frame(height: timeHeaderHeight)
-            .background(Color(white: 0.1))
-        }
-        .disabled(true)  // Time header doesn't scroll independently
-    }
-
-    private var currentTimeMarker: some View {
-        let now = Date()
-        let offset = now.timeIntervalSince(guideStartTime)
-        let xPosition = (offset / (30 * 60)) * timeSlotWidth
-
-        return VStack(spacing: 0) {
-            Circle()
-                .fill(Color.red)
-                .frame(width: 12, height: 12)
-
-            Rectangle()
-                .fill(Color.red)
-                .frame(width: 2, height: timeHeaderHeight - 12)
-        }
-        .offset(x: xPosition - 6)
-    }
-
-    // MARK: - Helpers
-
-    private func formatTime(_ date: Date) -> String {
-        GuideFormatters.timeFormatter.string(from: date)
+    private func progCountFor(start: Date, end: Date) -> Int {
+        guard focusedRow >= 0 && focusedRow < dataStore.channels.count else { return 1 }
+        return max(1, dataStore.getPrograms(for: dataStore.channels[focusedRow],
+                                            startDate: start, endDate: end).count)
     }
 }
 
-// MARK: - Guide Container Button Style (no focus highlight)
-
-private struct GuideContainerButtonStyle: ButtonStyle {
+// Custom button style with no focus chrome
+private struct GuideButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-        // No visual changes - we handle highlighting manually
     }
 }
 
-// MARK: - Guide Channel Row
+// MARK: - Subviews
 
-private struct GuideChannelRow: View {
+private struct ChannelCell: View {
     let channel: UnifiedChannel
-    let guideStartTime: Date
-    let guideEndTime: Date
-    let visibleHours: Int
-    let timeSlotWidth: CGFloat
-    let rowHeight: CGFloat
-    let channelColumnWidth: CGFloat
-    let isRowFocused: Bool
-    let focusedColumnIndex: Int?
-
-    @StateObject private var dataStore = LiveTVDataStore.shared
-
-    private var programs: [UnifiedProgram] {
-        dataStore.getPrograms(for: channel, startDate: guideStartTime, endDate: guideEndTime)
-    }
+    let isSelected: Bool
+    let width: CGFloat
+    let height: CGFloat
 
     var body: some View {
-        HStack(spacing: 0) {
-            // Channel info column
-            channelHeader
-                .frame(width: channelColumnWidth)
-
-            // Programs row
-            ScrollView(.horizontal, showsIndicators: false) {
-                ZStack(alignment: .leading) {
-                    // Programs
-                    programsRow
-
-                    // Current time line (extends through content)
-                    currentTimeLine
-                }
-                .frame(width: CGFloat(visibleHours * 2) * timeSlotWidth)
-            }
-        }
-        .frame(height: rowHeight)
-        .background(isRowFocused ? Color.white.opacity(0.05) : Color.clear)
-        .overlay(
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(height: 1),
-            alignment: .bottom
-        )
-    }
-
-    // MARK: - Channel Header
-
-    private var channelHeader: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             // Channel logo
-            if let logoURL = channel.logoURL {
-                AsyncImage(url: logoURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 60, height: 44)
-                    default:
-                        channelPlaceholder
+            Group {
+                if let logoURL = channel.logoURL {
+                    AsyncImage(url: logoURL) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                        default:
+                            Image(systemName: "tv")
+                                .font(.system(size: 36))
+                                .foregroundColor(.white.opacity(0.3))
+                        }
                     }
+                } else {
+                    Image(systemName: "tv")
+                        .font(.system(size: 36))
+                        .foregroundColor(.white.opacity(0.3))
                 }
-            } else {
-                channelPlaceholder
             }
+            .frame(width: 100, height: 70)
 
             // Channel info
             VStack(alignment: .leading, spacing: 4) {
-                if let number = channel.channelNumber {
-                    Text("\(number)")
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.5))
+                if let n = channel.channelNumber {
+                    Text("\(n)")
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundColor(.white.opacity(0.5))
                 }
-
                 Text(channel.name)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
             }
-
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color(white: 0.06))
+        .padding(.leading, 12)
+        .frame(width: width, height: height)
+        .background(Color(white: isSelected ? 0.2 : 0.1))
+    }
+}
+
+private struct TimeHeaderView: View {
+    let startTime: Date
+    let width: CGFloat
+    let height: CGFloat
+    let pxPerMin: CGFloat
+
+    private static let fmt: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f
+    }()
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(0..<6, id: \.self) { i in  // 6 x 30min = 3hrs
+                Text(Self.fmt.string(from: startTime.addingTimeInterval(Double(i * 30 * 60))))
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.8))
+                    .frame(width: pxPerMin * 30, alignment: .leading)
+                    .padding(.leading, 14)
+            }
+        }
+        .frame(width: width, height: height, alignment: .leading)
+        .background(Color(white: 0.12))
+    }
+}
+
+private struct ProgramRowView: View {
+    let programs: [UnifiedProgram]
+    let startTime: Date
+    let width: CGFloat
+    let height: CGFloat
+    let pxPerMin: CGFloat
+    let isRowFocused: Bool
+    let focusedCol: Int?
+
+    private let endTime: Date
+
+    init(programs: [UnifiedProgram], startTime: Date, width: CGFloat, height: CGFloat,
+         pxPerMin: CGFloat, isRowFocused: Bool, focusedCol: Int?) {
+        self.programs = programs
+        self.startTime = startTime
+        self.width = width
+        self.height = height
+        self.pxPerMin = pxPerMin
+        self.isRowFocused = isRowFocused
+        self.focusedCol = focusedCol
+        self.endTime = startTime.addingTimeInterval(180 * 60)
     }
 
-    private var channelPlaceholder: some View {
-        Image(systemName: "tv")
-            .font(.system(size: 24))
-            .foregroundStyle(.white.opacity(0.3))
-            .frame(width: 60, height: 44)
-    }
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Rectangle().fill(Color(white: isRowFocused ? 0.08 : 0.05))
 
-    // MARK: - Programs Row
-
-    private var programsRow: some View {
-        HStack(spacing: 2) {
             if programs.isEmpty {
-                // No program data
-                GuideProgramCellView(
-                    title: "No Program Information",
-                    timeRange: nil,
-                    description: nil,
-                    cellWidth: CGFloat(visibleHours * 2) * timeSlotWidth - 4,
-                    rowHeight: rowHeight,
-                    isFocused: isRowFocused && (focusedColumnIndex == 0 || focusedColumnIndex == nil),
-                    isCurrentlyAiring: false
-                )
+                ProgramCell(title: "No Data", time: nil, x: 2, cellWidth: width - 4,
+                           height: height, isFocused: isRowFocused, isAiring: false)
             } else {
-                ForEach(Array(programs.enumerated()), id: \.element.id) { columnIndex, program in
-                    let cellWidth = calculateCellWidth(for: program)
+                ForEach(Array(programs.enumerated()), id: \.element.id) { idx, prog in
+                    let (x, w) = position(prog)
                     let now = Date()
-                    let isAiring = program.startTime <= now && program.endTime > now
-
-                    GuideProgramCellView(
-                        title: program.title,
-                        timeRange: formatTimeRange(program),
-                        description: program.description,
-                        cellWidth: cellWidth,
-                        rowHeight: rowHeight,
-                        isFocused: isRowFocused && focusedColumnIndex == columnIndex,
-                        isCurrentlyAiring: isAiring
+                    ProgramCell(
+                        title: prog.title,
+                        time: Self.fmt.string(from: prog.startTime),
+                        x: x,
+                        cellWidth: w,
+                        height: height,
+                        isFocused: isRowFocused && focusedCol == idx,
+                        isAiring: prog.startTime <= now && prog.endTime > now
                     )
                 }
             }
         }
-        .padding(.vertical, 4)
+        .frame(width: width, height: height)
+        .clipped()
     }
 
-    private func calculateCellWidth(for program: UnifiedProgram) -> CGFloat {
-        let visibleStart = max(program.startTime, guideStartTime)
-        let visibleEnd = min(program.endTime, guideEndTime)
-        let visibleDuration = visibleEnd.timeIntervalSince(visibleStart)
-        let widthPerSecond = timeSlotWidth / (30 * 60)
-        return max(visibleDuration * widthPerSecond, 80)  // Minimum 80pt width
+    private func position(_ p: UnifiedProgram) -> (CGFloat, CGFloat) {
+        let visStart = max(p.startTime, startTime)
+        let visEnd = min(p.endTime, endTime)
+        let x = CGFloat(visStart.timeIntervalSince(startTime) / 60) * pxPerMin
+        let w = max(CGFloat(visEnd.timeIntervalSince(visStart) / 60) * pxPerMin, 60)
+        return (x, w)
     }
 
-    private func formatTimeRange(_ program: UnifiedProgram) -> String {
-        let formatter = GuideFormatters.timeFormatter
-        return "\(formatter.string(from: program.startTime)) - \(formatter.string(from: program.endTime))"
-    }
-
-    // MARK: - Current Time Line
-
-    private var currentTimeLine: some View {
-        let now = Date()
-        guard now >= guideStartTime && now <= guideEndTime else {
-            return AnyView(EmptyView())
-        }
-
-        let offset = now.timeIntervalSince(guideStartTime)
-        let xPosition = (offset / (30 * 60)) * timeSlotWidth
-
-        return AnyView(
-            Rectangle()
-                .fill(Color.red)
-                .frame(width: 2)
-                .offset(x: xPosition)
-        )
-    }
+    private static let fmt: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f
+    }()
 }
 
-// MARK: - Guide Program Cell View
-
-private struct GuideProgramCellView: View {
+private struct ProgramCell: View {
     let title: String
-    let timeRange: String?
-    let description: String?
+    let time: String?
+    let x: CGFloat
     let cellWidth: CGFloat
-    let rowHeight: CGFloat
+    let height: CGFloat
     let isFocused: Bool
-    let isCurrentlyAiring: Bool
+    let isAiring: Bool
 
     var body: some View {
+        // Match the native tvOS highlight effect styling
+        // Normal: 0.12, Airing: 0.18, Focused: 0.35 (distinct from airing)
+        let bg: Color = {
+            if isFocused {
+                return Color(white: 0.35)
+            } else if isAiring {
+                return Color(white: 0.18)
+            } else {
+                return Color(white: 0.12)
+            }
+        }()
+
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-
-            if let timeRange {
-                Text(timeRange)
-                    .font(.system(size: 14))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .lineLimit(1)
-            }
-
-            if let description, !description.isEmpty {
-                Text(description)
-                    .font(.system(size: 14))
-                    .foregroundStyle(.white.opacity(0.4))
-                    .lineLimit(1)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundColor(.white)
+                .lineLimit(2)
+            if let t = time {
+                Text(t)
+                    .font(.system(size: 16))
+                    .foregroundColor(.white.opacity(0.6))
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .frame(width: cellWidth, alignment: .leading)
-        .frame(maxHeight: .infinity)
+        .frame(width: cellWidth - 6, height: height - 14, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(backgroundColor)
+            RoundedRectangle(cornerRadius: 12)
+                .fill(bg)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(isFocused ? .white : .clear, lineWidth: 3)
-        )
-        .scaleEffect(isFocused ? 1.02 : 1.0)
-        .animation(.easeOut(duration: 0.15), value: isFocused)
+        // Lift shadow when focused (mimics tvOS highlight)
+        .shadow(color: isFocused ? .black.opacity(0.6) : .clear, radius: 12, x: 0, y: 6)
+        .scaleEffect(isFocused ? 1.02 : 1.0, anchor: .leading)
+        .zIndex(isFocused ? 1 : 0)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isFocused)
+        .offset(x: x + 3)
     }
+}
 
-    private var backgroundColor: Color {
-        if isFocused {
-            return .white.opacity(0.25)
-        } else if isCurrentlyAiring {
-            return Color(white: 0.15)
-        } else {
-            return Color(white: 0.08)
+private struct TimeLineView: View {
+    let now: Date
+    let startTime: Date
+    let endTime: Date
+    let headerHeight: CGFloat
+    let pxPerMin: CGFloat
+    let totalHeight: CGFloat
+
+    var body: some View {
+        if now >= startTime && now <= endTime {
+            let x = CGFloat(now.timeIntervalSince(startTime) / 60) * pxPerMin
+            Rectangle()
+                .fill(Color.red)
+                .frame(width: 2, height: totalHeight)
+                .offset(x: x)
         }
     }
 }
 
 #else
 
-// macOS/iOS version with standard focus handling
 struct GuideLayoutView: View {
-    @StateObject private var dataStore = LiveTVDataStore.shared
-    @State private var selectedChannel: UnifiedChannel?
-    @State private var guideStartTime: Date = Date()
-
-    // Layout constants
-    private let channelColumnWidth: CGFloat = 200
-    private let timeSlotWidth: CGFloat = 300
-    private let rowHeight: CGFloat = 70
-    private let timeHeaderHeight: CGFloat = 40
-    private let visibleHours: Int = 3
-
-    private var guideEndTime: Date {
-        guideStartTime.addingTimeInterval(TimeInterval(visibleHours * 60 * 60))
-    }
-
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-
-            if dataStore.isLoadingChannels && dataStore.channels.isEmpty {
-                ProgressView("Loading channels...")
-            } else if dataStore.isLoadingEPG && dataStore.epg.isEmpty {
-                ProgressView("Loading TV Guide...")
-            } else if dataStore.channels.isEmpty {
-                ContentUnavailableView(
-                    "No Channels",
-                    systemImage: "tv.slash",
-                    description: Text("Add a Live TV source in Settings to see the guide.")
-                )
-            } else {
-                guideContent
-            }
-        }
-        .onAppear {
-            setupGuideStartTime()
-        }
-        .task {
-            if dataStore.channels.isEmpty && !dataStore.isLoadingChannels {
-                await dataStore.loadChannels()
-            }
-            if dataStore.epg.isEmpty && !dataStore.isLoadingEPG {
-                await dataStore.loadEPG(startDate: Date(), hours: 6)
-            }
-        }
-        .sheet(item: $selectedChannel) { channel in
-            Text("Playing: \(channel.name)")
-        }
-    }
-
-    private func setupGuideStartTime() {
-        let now = Date()
-        let calendar = Calendar.current
-        let minute = calendar.component(.minute, from: now)
-        let roundedMinute = (minute / 30) * 30
-        guideStartTime = calendar.date(
-            bySettingHour: calendar.component(.hour, from: now),
-            minute: roundedMinute,
-            second: 0,
-            of: now
-        ) ?? now
-    }
-
-    private var guideContent: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack {
-                Text("TV Guide")
-                    .font(.title)
-                    .fontWeight(.bold)
-
-                Spacer()
-
-                Text(Date(), style: .time)
-                    .foregroundStyle(.secondary)
-            }
-            .padding()
-
-            // Time header
-            HStack(spacing: 0) {
-                Color.clear.frame(width: channelColumnWidth, height: timeHeaderHeight)
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 0) {
-                        ForEach(0..<(visibleHours * 2), id: \.self) { index in
-                            let slotTime = guideStartTime.addingTimeInterval(TimeInterval(index * 30 * 60))
-                            Text(formatTime(slotTime))
-                                .font(.caption)
-                                .frame(width: timeSlotWidth, alignment: .leading)
-                                .padding(.leading, 8)
-                        }
-                    }
-                }
-            }
-            .background(Color.gray.opacity(0.1))
-
-            // Channel rows
-            ScrollView(.vertical, showsIndicators: true) {
-                LazyVStack(spacing: 1) {
-                    ForEach(dataStore.channels) { channel in
-                        macOSChannelRow(channel: channel)
-                    }
-                }
-            }
-        }
-    }
-
-    private func macOSChannelRow(channel: UnifiedChannel) -> some View {
-        HStack(spacing: 0) {
-            // Channel info
-            HStack(spacing: 8) {
-                if let number = channel.channelNumber {
-                    Text("\(number)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Text(channel.name)
-                    .font(.subheadline)
-                    .lineLimit(1)
-            }
-            .frame(width: channelColumnWidth, alignment: .leading)
-            .padding(.horizontal, 8)
-
-            // Programs
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 2) {
-                    let programs = dataStore.getPrograms(for: channel, startDate: guideStartTime, endDate: guideEndTime)
-                    if programs.isEmpty {
-                        Text("No Program Information")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .frame(width: CGFloat(visibleHours * 2) * timeSlotWidth)
-                    } else {
-                        ForEach(programs) { program in
-                            Button {
-                                selectedChannel = channel
-                            } label: {
-                                VStack(alignment: .leading) {
-                                    Text(program.title)
-                                        .font(.subheadline)
-                                        .lineLimit(1)
-                                    Text(formatTime(program.startTime))
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(6)
-                                .frame(width: calculateWidth(for: program), alignment: .leading)
-                                .background(Color.gray.opacity(0.1))
-                                .cornerRadius(4)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-            }
-        }
-        .frame(height: rowHeight)
-    }
-
-    private func calculateWidth(for program: UnifiedProgram) -> CGFloat {
-        let visibleStart = max(program.startTime, guideStartTime)
-        let visibleEnd = min(program.endTime, guideEndTime)
-        let visibleDuration = visibleEnd.timeIntervalSince(visibleStart)
-        let widthPerSecond = timeSlotWidth / (30 * 60)
-        return max(visibleDuration * widthPerSecond, 60)
-    }
-
-    private func formatTime(_ date: Date) -> String {
-        GuideFormatters.timeFormatter.string(from: date)
+        Text("Guide")
     }
 }
 
 #endif
-
-#Preview {
-    GuideLayoutView()
-}

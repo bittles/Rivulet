@@ -60,7 +60,7 @@ struct PlexLibraryView: View {
 
     // MARK: - Processed Hubs (merged Continue Watching + On Deck)
 
-    /// Essential hub types that are always shown (Continue Watching, Recently Added, Recently Released)
+    /// Essential hub types that are always shown (Continue Watching, Recently Added, Recently Released, Recently Played)
     private func isEssentialHub(_ hub: PlexHub) -> Bool {
         let identifier = hub.hubIdentifier?.lowercased() ?? ""
         let title = hub.title?.lowercased() ?? ""
@@ -71,7 +71,7 @@ struct PlexLibraryView: View {
             return true
         }
 
-        // Recently Added
+        // Recently Added (video and music)
         if identifier.contains("recentlyadded") || title.contains("recently added") {
             return true
         }
@@ -79,6 +79,11 @@ struct PlexLibraryView: View {
         // Recently Released (by year)
         if identifier.contains("recentlyreleased") || title.contains("recently released") ||
            identifier.contains("newestreleases") || title.contains("newest releases") {
+            return true
+        }
+
+        // Recently Played (music)
+        if identifier.contains("recentlyplayed") || title.contains("recently played") {
             return true
         }
 
@@ -842,6 +847,12 @@ struct PlexLibraryView: View {
                 sectionId: libraryKey
             )
 
+            // Debug: log hub info for troubleshooting
+            print("📚 Library \(libraryKey) hubs: \(fetchedHubs.count)")
+            for hub in fetchedHubs {
+                print("  - \(hub.hubIdentifier ?? "nil"): \(hub.title ?? "nil") (\(hub.Metadata?.count ?? 0) items)")
+            }
+
             // Only update hubs if they're actually different
             if !hubsAreEqual(hubs, fetchedHubs) {
                 hubs = fetchedHubs
@@ -851,6 +862,7 @@ struct PlexLibraryView: View {
             if (error as NSError).code == NSURLErrorCancelled {
                 return
             }
+            print("📚 Failed to fetch hubs for library \(libraryKey): \(error)")
             // Don't show error for hubs - they're optional enhancement
         }
     }

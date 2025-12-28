@@ -11,6 +11,10 @@ import Combine
 struct LiveTVPlayerView: View {
     @StateObject private var viewModel: MultiStreamViewModel
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
+    @State private var showExitConfirmation = false
+    @State private var showChannelInfo = false
+    @State private var channelInfoTimer: Timer?
 
     // Focus management
     @FocusState private var focusArea: FocusArea?
@@ -32,9 +36,15 @@ struct LiveTVPlayerView: View {
             // Stream grid (or single stream fullscreen)
             streamContent
 
-            // Controls overlay
+            // Channel info overlay (shows when switching streams or with controls)
+            if viewModel.showControls || showChannelInfo {
+                channelInfoOverlay
+                    .transition(.opacity.animation(.easeInOut(duration: 0.25)))
+            }
+
+            // Bottom controls overlay
             if viewModel.showControls {
-                controlsOverlay
+                bottomControlsOverlay
                     .transition(.opacity.animation(.easeInOut(duration: 0.25)))
             }
 
@@ -55,6 +65,7 @@ struct LiveTVPlayerView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
+        .animation(.easeInOut(duration: 0.25), value: showChannelInfo)
         // Don't animate stream count changes - causes issues with MPV player resizing
         #if os(tvOS)
         .onPlayPauseCommand {
@@ -84,13 +95,28 @@ struct LiveTVPlayerView: View {
                 viewModel.resetControlsTimer()
             }
         }
+        .onChange(of: viewModel.focusedSlotIndex) { _, _ in
+            // Show channel info briefly when switching focused stream in multiview
+            if viewModel.streamCount > 1 && !viewModel.showControls {
+                showChannelInfoTemporarily()
+            }
+        }
         .onAppear {
             // Start with controls hidden, focus on stream grid
             viewModel.showControls = false
             focusArea = .streamGrid
         }
         .onDisappear {
+            channelInfoTimer?.invalidate()
             viewModel.stopAllStreams()
+        }
+        .alert("Exit Multiview?", isPresented: $showExitConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Exit", role: .destructive) {
+                forceExitPlayer()
+            }
+        } message: {
+            Text("You have \(viewModel.streamCount) streams open. Are you sure you want to exit?")
         }
     }
 
@@ -101,8 +127,6 @@ struct LiveTVPlayerView: View {
         if viewModel.streamCount == 1, let slot = viewModel.streams.first {
             // Single stream - fullscreen
             singleStreamView(slot: slot)
-        } else if case .focus(let mainId) = viewModel.layoutMode {
-            focusedStreamLayout(mainId: mainId)
         } else {
             // Multiple streams - grid
             streamGrid
@@ -145,21 +169,11 @@ struct LiveTVPlayerView: View {
 
     private var streamGrid: some View {
         GeometryReader { geometry in
-            let spacing: CGFloat = 2  // Minimal spacing between videos
-            let layout = gridLayout(for: viewModel.streamCount)
-            let availableWidth = geometry.size.width - CGFloat(layout.columns - 1) * spacing
-            let availableHeight = geometry.size.height - CGFloat(layout.rows - 1) * spacing
-            let slotWidth = availableWidth / CGFloat(layout.columns)
-            let maxRowHeight = availableHeight / CGFloat(layout.rows)
-            let aspect: CGFloat = 16.0 / 9.0
-            let slotHeight = min(slotWidth / aspect, maxRowHeight)
-            let columns = Array(repeating: GridItem(.flexible(), spacing: spacing), count: layout.columns)
-            let slotSize = CGSize(width: slotWidth, height: slotHeight)
-            let verticalPadding = max(0, (geometry.size.height - (slotHeight * CGFloat(layout.rows) + spacing * CGFloat(layout.rows - 1))) / 2)
+            let frames = layoutFrames(for: geometry.size)
 
-            ZStack {
-                LazyVGrid(columns: columns, spacing: spacing) {
-                    ForEach(Array(viewModel.streams.enumerated()), id: \.element.id) { index, slot in
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(viewModel.streams.enumerated()), id: \.element.id) { index, slot in
+                    if let rect = frames[slot.id] {
                         StreamSlotView(
                             slot: slot,
                             index: index,
@@ -170,93 +184,77 @@ struct LiveTVPlayerView: View {
                             }
                         )
                         .id(slot.id)
-                        .frame(width: slotWidth, height: slotHeight)
+                        .frame(width: rect.width, height: rect.height)
                         .clipped()
-                        // Long-press options removed in favor of bottom button
-                    }
-
-                    // Keep grid balanced when showing 3 streams (leave one black slot)
-                    if viewModel.streamCount == 3 {
-                        Color.black
-                            .frame(width: slotWidth, height: slotHeight)
+                        .position(x: rect.midX, y: rect.midY)
                     }
                 }
-                .padding(.vertical, verticalPadding)
-                .onAppear {
-                    print("🧩 Grid: geometry=\(geometry.size), layout=\(layout), slot=\(slotSize), streams=\(viewModel.streamCount)")
-                }
-                .onChange(of: viewModel.streamCount) { _, newCount in
-                    print("🧩 Grid: geometry=\(geometry.size), layout=\(layout), slot=\(slotSize), streams=\(newCount)")
-                }
+            }
 
-                // Invisible focusable overlay for stream navigation
-                if !viewModel.showControls {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .focusable()
-                        .focused($focusArea, equals: .streamGrid)
-                        .onTapGesture {
-                            // Select pressed - show controls
-                            showControlsWithFocus()
-                        }
-                        #if os(tvOS)
-                        .onMoveCommand { direction in
-                            handleStreamNavigation(direction)
-                        }
-                        #endif
-                }
+            // Invisible focusable overlay for stream navigation
+            if !viewModel.showControls {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .focusable()
+                    .focused($focusArea, equals: .streamGrid)
+                    .onTapGesture {
+                        // Select pressed - show controls
+                        showControlsWithFocus()
+                    }
+                    #if os(tvOS)
+                    .onMoveCommand { direction in
+                        handleStreamNavigation(direction)
+                    }
+                    #endif
             }
         }
     }
 
-    private func focusedStreamLayout(mainId: UUID) -> some View {
-        GeometryReader { geometry in
-            let spacing: CGFloat = 4
+    private func layoutFrames(for size: CGSize) -> [UUID: CGRect] {
+        var frames: [UUID: CGRect] = [:]
+        let spacing: CGFloat = 2
+
+        if case .focus(let mainId) = viewModel.layoutMode, viewModel.streamCount > 1 {
             let mainSlot = viewModel.streams.first(where: { $0.id == mainId }) ?? viewModel.streams.first
-
             let sideStreams = viewModel.streams.filter { $0.id != mainSlot?.id }
-            let mainWidth = geometry.size.width * 0.72
-            let sideWidth = geometry.size.width - mainWidth - spacing
+
+            let mainWidth = size.width * 0.72
+            let sideWidth = max(size.width - mainWidth - spacing, 0)
             let sideCount = max(sideStreams.count, 1)
-            let sideSlotHeight = (geometry.size.height - spacing * CGFloat(sideCount - 1)) / CGFloat(sideCount)
+            let sideSlotHeight = sideCount > 0 ? (size.height - spacing * CGFloat(sideCount - 1)) / CGFloat(sideCount) : 0
 
-            HStack(spacing: spacing) {
-                if let mainSlot {
-                    StreamSlotView(
-                        slot: mainSlot,
-                        index: viewModel.streams.firstIndex(where: { $0.id == mainSlot.id }) ?? 0,
-                        isFocused: viewModel.focusedStream?.id == mainSlot.id && !viewModel.showControls,
-                        showBorder: true,
-                        onControllerReady: { controller in
-                            viewModel.setPlayerController(controller, for: mainSlot.id)
-                        }
-                    )
-                    .id(mainSlot.id)
-                    .frame(width: mainWidth, height: geometry.size.height)
-                    .clipped()
-                    // Long-press options removed in favor of bottom button
-                }
+            if let mainSlot {
+                frames[mainSlot.id] = CGRect(x: 0, y: 0, width: mainWidth, height: size.height)
+            }
 
-                VStack(spacing: spacing) {
-                    ForEach(Array(sideStreams.enumerated()), id: \.element.id) { _, slot in
-                        StreamSlotView(
-                            slot: slot,
-                            index: viewModel.streams.firstIndex(where: { $0.id == slot.id }) ?? 0,
-                            isFocused: viewModel.focusedStream?.id == slot.id && !viewModel.showControls,
-                            showBorder: true,
-                            onControllerReady: { controller in
-                                viewModel.setPlayerController(controller, for: slot.id)
-                            }
-                        )
-                        .id(slot.id)
-                        .frame(width: sideWidth, height: sideSlotHeight)
-                        .clipped()
-                        // Long-press options removed in favor of bottom button
-                    }
+            var currentY: CGFloat = 0
+            for slot in sideStreams {
+                frames[slot.id] = CGRect(x: mainWidth + spacing, y: currentY, width: sideWidth, height: sideSlotHeight)
+                currentY += sideSlotHeight + spacing
+            }
+        } else {
+            let layout = gridLayout(for: viewModel.streamCount)
+            let availableWidth = size.width - CGFloat(layout.columns - 1) * spacing
+            let availableHeight = size.height - CGFloat(layout.rows - 1) * spacing
+            let slotWidth = availableWidth / CGFloat(layout.columns)
+            let maxRowHeight = availableHeight / CGFloat(layout.rows)
+            let aspect: CGFloat = 16.0 / 9.0
+            let slotHeight = min(slotWidth / aspect, maxRowHeight)
+            let totalHeight = slotHeight * CGFloat(layout.rows) + spacing * CGFloat(layout.rows - 1)
+            let verticalPadding = max(0, (size.height - totalHeight) / 2)
+
+            for row in 0..<layout.rows {
+                for col in 0..<layout.columns {
+                    let index = row * layout.columns + col
+                    guard index < viewModel.streams.count else { continue }
+                    let x = (slotWidth + spacing) * CGFloat(col)
+                    let y = verticalPadding + (slotHeight + spacing) * CGFloat(row)
+                    frames[viewModel.streams[index].id] = CGRect(x: x, y: y, width: slotWidth, height: slotHeight)
                 }
-                .frame(width: sideWidth, height: geometry.size.height, alignment: .top)
             }
         }
+
+        return frames
     }
 
     private func gridLayout(for count: Int) -> (rows: Int, columns: Int) {
@@ -338,39 +336,60 @@ struct LiveTVPlayerView: View {
 
     // MARK: - Controls Overlay
 
-    private var controlsOverlay: some View {
-        ZStack {
-            // Gradient backgrounds
-            VStack {
-                LinearGradient(
-                    colors: [.black.opacity(0.8), .clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 200)
-
-                Spacer()
-
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.8)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 200)
-            }
+    private var channelInfoOverlay: some View {
+        VStack {
+            // Top gradient
+            LinearGradient(
+                colors: [.black.opacity(0.8), .clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 200)
             .ignoresSafeArea()
 
-            VStack {
-                // Top bar - focused channel info
-                topBar
-                    .padding(.horizontal, 60)
-                    .padding(.top, 50)
+            Spacer()
+        }
+        .overlay(alignment: .top) {
+            topBar
+                .padding(.horizontal, 60)
+                .padding(.top, 50)
+        }
+    }
 
-                Spacer()
+    private var bottomControlsOverlay: some View {
+        VStack {
+            Spacer()
 
-                // Bottom controls
-                bottomControls
-                    .padding(.bottom, 60)
+            // Bottom gradient
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.8)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 200)
+            .ignoresSafeArea()
+        }
+        .overlay(alignment: .bottom) {
+            bottomControls
+                .padding(.bottom, 60)
+        }
+    }
+
+    private func showChannelInfoTemporarily() {
+        // Cancel existing timer
+        channelInfoTimer?.invalidate()
+
+        // Show channel info
+        withAnimation(.easeInOut(duration: 0.25)) {
+            showChannelInfo = true
+        }
+
+        // Hide after 5 seconds
+        channelInfoTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
+            DispatchQueue.main.async {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    showChannelInfo = false
+                }
             }
         }
     }
@@ -491,6 +510,16 @@ struct LiveTVPlayerView: View {
                 .focused($focusArea, equals: .controlButton(index))
             }
         }
+        .padding(.horizontal, 40)
+        .padding(.vertical, 24)
+        .background(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .glassEffect(
+            .regular,
+            in: RoundedRectangle(cornerRadius: 32, style: .continuous)
+        )
     }
 
     private struct ControlButtonConfig {
@@ -503,14 +532,8 @@ struct LiveTVPlayerView: View {
     private func buildControlButtons() -> [ControlButtonConfig] {
         var buttons: [ControlButtonConfig] = []
 
-        // Play/Pause button (always first on left)
-        let isPlaying = viewModel.focusedStream?.playerWrapper.isPlaying ?? false
-        buttons.append(ControlButtonConfig(
-            icon: isPlaying ? "pause.fill" : "play.fill",
-            label: isPlaying ? "Pause" : "Play",
-            isLarge: true,
-            action: { viewModel.togglePlayPauseOnFocused() }
-        ))
+        // Note: Pause/play removed for live TV since time-shifting isn't implemented
+        // Live TV streams are real-time only for now
 
         // Focus/enlarge current stream (only when multiple streams)
         if viewModel.streamCount > 1 {
@@ -599,6 +622,15 @@ struct LiveTVPlayerView: View {
     #endif
 
     private func dismissPlayer() {
+        // Check if we should show confirmation for multiview
+        if confirmExitMultiview && viewModel.streamCount > 1 {
+            showExitConfirmation = true
+        } else {
+            forceExitPlayer()
+        }
+    }
+
+    private func forceExitPlayer() {
         viewModel.stopAllStreams()
         dismiss()
     }

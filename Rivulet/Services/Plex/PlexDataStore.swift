@@ -61,6 +61,21 @@ class PlexDataStore: ObservableObject {
         visibleLibraries.filter { $0.isVideoLibrary }
     }
 
+    /// Music libraries only (artist), filtered and sorted
+    var visibleMusicLibraries: [PlexLibrary] {
+        visibleLibraries.filter { $0.isMusicLibrary }
+    }
+
+    /// Video and music libraries combined (for sidebar display)
+    var visibleMediaLibraries: [PlexLibrary] {
+        visibleLibraries.filter { $0.isVideoLibrary || $0.isMusicLibrary }
+    }
+
+    /// Check if any music library is visible in the sidebar
+    var hasMusicLibraryVisible: Bool {
+        !visibleMusicLibraries.isEmpty
+    }
+
     // Track if initial load has been attempted
     private var hubsLoadTask: Task<Void, Never>?
     private var librariesLoadTask: Task<Void, Never>?

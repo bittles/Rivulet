@@ -98,8 +98,9 @@ struct LibrarySettingsView: View {
     // MARK: - Helpers
 
     /// Libraries sorted by user preference (for display in settings)
+    /// Includes video and music libraries (excludes photos, etc.)
     private var orderedLibraries: [PlexLibrary] {
-        librarySettings.sortLibraries(dataStore.libraries.filter { $0.isVideoLibrary })
+        librarySettings.sortLibraries(dataStore.libraries.filter { $0.isVideoLibrary || $0.isMusicLibrary })
     }
 
     private func canMoveUp(_ library: PlexLibrary) -> Bool {
