@@ -65,7 +65,12 @@ final class MultiStreamViewModel: ObservableObject {
     }
 
     var canAddStream: Bool {
-        streams.count < 4
+        #if targetEnvironment(simulator)
+        // Multiview disabled on simulator - MoltenVK can't handle multiple Vulkan instances
+        return false
+        #else
+        return streams.count < 4
+        #endif
     }
 
     var activeChannelIds: Set<String> {

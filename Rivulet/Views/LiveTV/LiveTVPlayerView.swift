@@ -13,8 +13,8 @@ struct LiveTVPlayerView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
     @State private var showExitConfirmation = false
-    @State private var showChannelInfo = false
-    @State private var channelInfoTimer: Timer?
+    @State private var showChannelBadges = true
+    @State private var channelBadgeTimer: Timer?
 
     // Focus management
     @FocusState private var focusArea: FocusArea?
@@ -34,17 +34,15 @@ struct LiveTVPlayerView: View {
             Color.black.ignoresSafeArea()
 
             // Stream grid (or single stream fullscreen)
+            // Transaction prevents animations from affecting player views when state changes
             streamContent
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
 
-            // Channel info overlay (shows when switching streams or with controls)
-            if viewModel.showControls || showChannelInfo {
-                channelInfoOverlay
-                    .transition(.opacity.animation(.easeInOut(duration: 0.25)))
-            }
-
-            // Bottom controls overlay
+            // Controls overlay
             if viewModel.showControls {
-                bottomControlsOverlay
+                controlsOverlay
                     .transition(.opacity.animation(.easeInOut(duration: 0.25)))
             }
 
@@ -65,7 +63,7 @@ struct LiveTVPlayerView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
-        .animation(.easeInOut(duration: 0.25), value: showChannelInfo)
+        .animation(.easeInOut(duration: 0.25), value: showChannelBadges)
         // Don't animate stream count changes - causes issues with MPV player resizing
         #if os(tvOS)
         .onPlayPauseCommand {
@@ -96,18 +94,32 @@ struct LiveTVPlayerView: View {
             }
         }
         .onChange(of: viewModel.focusedSlotIndex) { _, _ in
-            // Show channel info briefly when switching focused stream in multiview
-            if viewModel.streamCount > 1 && !viewModel.showControls {
-                showChannelInfoTemporarily()
+            // Show channel badges briefly when switching focused stream in multiview
+            if viewModel.streamCount > 1 {
+                showChannelBadgesTemporarily()
+            }
+        }
+        .onChange(of: viewModel.showControls) { _, showControls in
+            // Show/hide badges with controls
+            if showControls {
+                channelBadgeTimer?.invalidate()
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    showChannelBadges = true
+                }
+            } else {
+                // Start hide timer when controls hide
+                showChannelBadgesTemporarily()
             }
         }
         .onAppear {
             // Start with controls hidden, focus on stream grid
             viewModel.showControls = false
             focusArea = .streamGrid
+            // Show badges initially then auto-hide
+            showChannelBadgesTemporarily()
         }
         .onDisappear {
-            channelInfoTimer?.invalidate()
+            channelBadgeTimer?.invalidate()
             viewModel.stopAllStreams()
         }
         .alert("Exit Multiview?", isPresented: $showExitConfirmation) {
@@ -146,6 +158,9 @@ struct LiveTVPlayerView: View {
             )
             .id(slot.id)
             .ignoresSafeArea()
+            .transaction { transaction in
+                transaction.animation = nil
+            }
 
             // Invisible focusable area to capture Select press and show controls
             if !viewModel.showControls {
@@ -179,6 +194,7 @@ struct LiveTVPlayerView: View {
                             index: index,
                             isFocused: viewModel.focusedSlotIndex == index && !viewModel.showControls,
                             showBorder: viewModel.streamCount > 1,
+                            showChannelBadge: showChannelBadges,
                             onControllerReady: { controller in
                                 viewModel.setPlayerController(controller, for: slot.id)
                             }
@@ -187,8 +203,16 @@ struct LiveTVPlayerView: View {
                         .frame(width: rect.width, height: rect.height)
                         .clipped()
                         .position(x: rect.midX, y: rect.midY)
+                        // Prevent animations from affecting this stream when others change
+                        .transaction { transaction in
+                            transaction.animation = nil
+                        }
                     }
                 }
+            }
+            // Disable animations on the entire grid when stream count changes
+            .transaction { transaction in
+                transaction.animation = nil
             }
 
             // Invisible focusable overlay for stream navigation
@@ -334,62 +358,62 @@ struct LiveTVPlayerView: View {
         }
     }
 
+    private func showChannelBadgesTemporarily() {
+        // Cancel existing timer
+        channelBadgeTimer?.invalidate()
+
+        // Show badges
+        withAnimation(.easeInOut(duration: 0.25)) {
+            showChannelBadges = true
+        }
+
+        // Hide after 5 seconds (only if controls are not showing)
+        channelBadgeTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
+            DispatchQueue.main.async {
+                if !viewModel.showControls {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        showChannelBadges = false
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Controls Overlay
 
-    private var channelInfoOverlay: some View {
-        VStack {
-            // Top gradient
-            LinearGradient(
-                colors: [.black.opacity(0.8), .clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 200)
+    private var controlsOverlay: some View {
+        ZStack {
+            // Gradient backgrounds
+            VStack {
+                LinearGradient(
+                    colors: [.black.opacity(0.8), .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 200)
+
+                Spacer()
+
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.8)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 200)
+            }
             .ignoresSafeArea()
 
-            Spacer()
-        }
-        .overlay(alignment: .top) {
-            topBar
-                .padding(.horizontal, 60)
-                .padding(.top, 50)
-        }
-    }
+            VStack {
+                // Top bar - focused channel info
+                topBar
+                    .padding(.horizontal, 60)
+                    .padding(.top, 50)
 
-    private var bottomControlsOverlay: some View {
-        VStack {
-            Spacer()
+                Spacer()
 
-            // Bottom gradient
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.8)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 200)
-            .ignoresSafeArea()
-        }
-        .overlay(alignment: .bottom) {
-            bottomControls
-                .padding(.bottom, 60)
-        }
-    }
-
-    private func showChannelInfoTemporarily() {
-        // Cancel existing timer
-        channelInfoTimer?.invalidate()
-
-        // Show channel info
-        withAnimation(.easeInOut(duration: 0.25)) {
-            showChannelInfo = true
-        }
-
-        // Hide after 5 seconds
-        channelInfoTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
-            DispatchQueue.main.async {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    showChannelInfo = false
-                }
+                // Bottom controls
+                bottomControls
+                    .padding(.bottom, 60)
             }
         }
     }

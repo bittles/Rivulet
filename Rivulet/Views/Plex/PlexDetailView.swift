@@ -10,6 +10,8 @@ import SwiftUI
 struct PlexDetailView: View {
     let item: PlexMetadata
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.nestedNavigationState) private var nestedNavState
+    @Environment(\.focusScopeManager) private var focusScopeManager
     @StateObject private var authManager = PlexAuthManager.shared
     @State private var seasons: [PlexMetadata] = []
     @State private var selectedSeason: PlexMetadata?
@@ -28,6 +30,14 @@ struct PlexDetailView: View {
     @State private var albums: [PlexMetadata] = []
     @State private var isLoadingAlbums = false
     @State private var navigateToAlbum: PlexMetadata?  // For binding-based navigation
+
+    #if os(tvOS)
+    // Focus state for restoring focus when returning from nested navigation
+    @FocusState private var focusedAlbumId: String?
+    @FocusState private var focusedTrackId: String?
+    @State private var savedAlbumFocus: String?  // Save focus when navigating to album
+    @State private var savedTrackFocus: String?  // Save focus when playing track
+    #endif
 
     // New state for cast/crew and related items
     @State private var fullMetadata: PlexMetadata?
@@ -171,11 +181,34 @@ struct PlexDetailView: View {
         .navigationDestination(item: $navigateToAlbum) { album in
             PlexDetailView(item: album)
         }
+        // Update goBackAction when viewing nested album
+        .onChange(of: navigateToAlbum) { oldAlbum, newAlbum in
+            if newAlbum != nil {
+                // Override goBackAction to just dismiss the album, not go all the way back
+                nestedNavState.goBackAction = { [weak nestedNavState] in
+                    navigateToAlbum = nil
+                    // Keep nested state true since we're still in artist view
+                    nestedNavState?.isNested = true
+                }
+            }
+            #if os(tvOS)
+            // Restore focus when returning from album
+            if oldAlbum != nil && newAlbum == nil, let savedFocus = savedAlbumFocus {
+                // Delay slightly to let the view update
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    focusedAlbumId = savedFocus
+                }
+            }
+            #endif
+        }
         #if os(tvOS)
-        // Intercept exit command when viewing nested album to prevent going all the way back
-        .onExitCommand {
-            if navigateToAlbum != nil {
-                navigateToAlbum = nil
+        // Restore track focus when returning from player
+        .onChange(of: showPlayer) { wasPlaying, isPlaying in
+            if wasPlaying && !isPlaying, let savedFocus = savedTrackFocus {
+                // Delay slightly to let the view update
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    focusedTrackId = savedFocus
+                }
             }
         }
         #endif
@@ -513,16 +546,30 @@ struct PlexDetailView: View {
 
                 LazyVStack(spacing: 12) {
                     ForEach(Array(tracks.enumerated()), id: \.element.ratingKey) { index, track in
+                        #if os(tvOS)
+                        AlbumTrackRow(
+                            track: track,
+                            trackNumber: track.index ?? (index + 1),
+                            serverURL: authManager.selectedServerURL ?? "",
+                            authToken: authManager.authToken ?? "",
+                            focusedId: $focusedTrackId,
+                            onPlay: {
+                                savedTrackFocus = track.ratingKey
+                                selectedTrack = track
+                                showPlayer = true
+                            }
+                        )
+                        #else
                         AlbumTrackRow(
                             track: track,
                             trackNumber: track.index ?? (index + 1),
                             serverURL: authManager.selectedServerURL ?? "",
                             authToken: authManager.authToken ?? ""
                         ) {
-                            // Play track
                             selectedTrack = track
                             showPlayer = true
                         }
+                        #endif
                     }
                 }
                 #if os(tvOS)
@@ -546,6 +593,9 @@ struct PlexDetailView: View {
                 LazyVStack(spacing: 16) {
                     ForEach(albums, id: \.ratingKey) { album in
                         Button {
+                            #if os(tvOS)
+                            savedAlbumFocus = album.ratingKey
+                            #endif
                             navigateToAlbum = album
                         } label: {
                             ArtistAlbumRow(
@@ -555,6 +605,7 @@ struct PlexDetailView: View {
                             )
                         }
                         #if os(tvOS)
+                        .focused($focusedAlbumId, equals: album.ratingKey)
                         .buttonStyle(CardButtonStyle())
                         #else
                         .buttonStyle(.plain)
@@ -978,6 +1029,9 @@ struct AlbumTrackRow: View {
     let trackNumber: Int
     let serverURL: String
     let authToken: String
+    #if os(tvOS)
+    var focusedId: FocusState<String?>.Binding?
+    #endif
     let onPlay: () -> Void
 
     var body: some View {
@@ -1014,13 +1068,6 @@ struct AlbumTrackRow: View {
                 }
 
                 Spacer()
-
-                // Play icon
-                Image(systemName: "play.fill")
-                    #if os(tvOS)
-                    .font(.system(size: 20))
-                    #endif
-                    .foregroundStyle(.secondary)
             }
             #if os(tvOS)
             .padding(.vertical, 16)
@@ -1038,12 +1085,29 @@ struct AlbumTrackRow: View {
             #endif
         }
         #if os(tvOS)
+        .modifier(TrackFocusModifier(focusedId: focusedId, trackRatingKey: track.ratingKey))
         .buttonStyle(CardButtonStyle())
         #else
         .buttonStyle(.plain)
         #endif
     }
 }
+
+#if os(tvOS)
+/// Helper modifier to apply focus binding to track rows
+struct TrackFocusModifier: ViewModifier {
+    var focusedId: FocusState<String?>.Binding?
+    let trackRatingKey: String?
+
+    func body(content: Content) -> some View {
+        if let binding = focusedId, let key = trackRatingKey {
+            content.focused(binding, equals: key)
+        } else {
+            content
+        }
+    }
+}
+#endif
 
 // MARK: - Artist Album Row
 

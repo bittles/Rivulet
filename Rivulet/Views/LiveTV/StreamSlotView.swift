@@ -12,6 +12,7 @@ struct StreamSlotView: View {
     let index: Int
     let isFocused: Bool
     var showBorder: Bool = true
+    var showChannelBadge: Bool = true
     let onControllerReady: (MPVMetalViewController) -> Void
 
     @State private var playerController: MPVMetalViewController?
@@ -58,8 +59,8 @@ struct StreamSlotView: View {
                     .shadow(color: .white.opacity(0.3), radius: 8)
             }
 
-            // Mini channel badge (only in grid mode)
-            if showBorder {
+            // Mini channel badge (only in grid mode, controlled by showChannelBadge)
+            if showBorder && showChannelBadge {
                 VStack {
                     Spacer()
                     HStack {
@@ -68,18 +69,19 @@ struct StreamSlotView: View {
                     }
                 }
                 .padding(12)
+                .transition(.opacity)
+            }
 
-                // Muted indicator (top-right, when not focused)
-                if slot.isMuted && !isFocused {
-                    VStack {
-                        HStack {
-                            Spacer()
-                            mutedIndicator
-                        }
+            // Muted indicator (top-right, when not focused, always visible in grid mode)
+            if showBorder && slot.isMuted && !isFocused {
+                VStack {
+                    HStack {
                         Spacer()
+                        mutedIndicator
                     }
-                    .padding(12)
+                    Spacer()
                 }
+                .padding(12)
             }
 
             // Loading/buffering overlay
