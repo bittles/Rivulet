@@ -120,7 +120,10 @@ struct LiveTVPlayerView: View {
         }
         .onDisappear {
             channelBadgeTimer?.invalidate()
-            viewModel.stopAllStreams()
+            // Only stop streams if we're actually exiting (not showing confirmation)
+            if !showExitConfirmation {
+                viewModel.stopAllStreams()
+            }
         }
         .alert("Exit Multiview?", isPresented: $showExitConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -130,6 +133,8 @@ struct LiveTVPlayerView: View {
         } message: {
             Text("You have \(viewModel.streamCount) streams open. Are you sure you want to exit?")
         }
+        // Prevent automatic dismissal when confirmation is needed
+        .interactiveDismissDisabled(confirmExitMultiview && viewModel.streamCount > 1)
     }
 
     // MARK: - Stream Content
@@ -647,9 +652,12 @@ struct LiveTVPlayerView: View {
 
     private func dismissPlayer() {
         // Check if we should show confirmation for multiview
+        print("📺 dismissPlayer: confirmExitMultiview=\(confirmExitMultiview), streamCount=\(viewModel.streamCount)")
         if confirmExitMultiview && viewModel.streamCount > 1 {
+            print("📺 dismissPlayer: Showing exit confirmation")
             showExitConfirmation = true
         } else {
+            print("📺 dismissPlayer: Forcing exit (no confirmation needed)")
             forceExitPlayer()
         }
     }

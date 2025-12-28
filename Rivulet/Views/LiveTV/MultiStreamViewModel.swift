@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Combine
+import UIKit
 
 @MainActor
 final class MultiStreamViewModel: ObservableObject {
@@ -65,12 +66,9 @@ final class MultiStreamViewModel: ObservableObject {
     }
 
     var canAddStream: Bool {
-        #if targetEnvironment(simulator)
-        // Multiview disabled on simulator - MoltenVK can't handle multiple Vulkan instances
-        return false
-        #else
-        return streams.count < 4
-        #endif
+        // AVPlayer is more resource-efficient than MPV/Vulkan
+        // Allow up to 4 streams on all platforms
+        streams.count < 4
     }
 
     var activeChannelIds: Set<String> {
@@ -84,6 +82,9 @@ final class MultiStreamViewModel: ObservableObject {
     // MARK: - Initialization
 
     init(initialChannel: UnifiedChannel) {
+        // Prevent screensaver during Live TV playback
+        UIApplication.shared.isIdleTimerDisabled = true
+
         // Add the initial channel (unmuted since it's first)
         Task {
             await addChannel(initialChannel)
@@ -98,22 +99,6 @@ final class MultiStreamViewModel: ObservableObject {
 
         // Close the picker immediately for responsiveness
         showChannelPicker = false
-
-        // On simulator, we need to pause existing streams and wait before creating a new player
-        // to avoid MoltenVK Metal texture crashes when multiple contexts are active
-        #if targetEnvironment(simulator)
-        if !streams.isEmpty {
-            print("📺 MultiStream: Pausing existing streams before adding new one (simulator workaround)")
-
-            // Pause all existing streams to reduce GPU contention
-            for slot in streams {
-                slot.playerWrapper.pause()
-            }
-
-            // Wait for GPU commands to complete
-            try? await Task.sleep(for: .milliseconds(500))
-        }
-        #endif
 
         let wrapper = MPVPlayerWrapper()
         let isMuted = !streams.isEmpty  // First stream unmuted, others muted
@@ -145,15 +130,6 @@ final class MultiStreamViewModel: ObservableObject {
                 wrapper.setMuted(isMuted)
                 wrapper.play()
                 print("📺 MultiStream: Added channel '\(channel.name)' at slot \(slotIndex), muted: \(isMuted)")
-
-                #if targetEnvironment(simulator)
-                // Resume other streams after new one is loading
-                try? await Task.sleep(for: .milliseconds(300))
-                for (idx, slot) in streams.enumerated() where idx != slotIndex {
-                    slot.playerWrapper.play()
-                }
-                print("📺 MultiStream: Resumed existing streams")
-                #endif
             } catch {
                 print("📺 MultiStream: Failed to load '\(channel.name)': \(error)")
             }
@@ -201,6 +177,8 @@ final class MultiStreamViewModel: ObservableObject {
         cancellables.removeAll()
         streams.removeAll()
         layoutMode = .grid
+        // Re-enable screensaver when Live TV is closed
+        UIApplication.shared.isIdleTimerDisabled = false
         print("📺 MultiStream: Stopped all streams")
     }
 
@@ -330,6 +308,8 @@ final class MultiStreamViewModel: ObservableObject {
 
     deinit {
         controlsTimer?.invalidate()
+        // Ensure screensaver is re-enabled when Live TV is deallocated
+        UIApplication.shared.isIdleTimerDisabled = false
     }
 }
 

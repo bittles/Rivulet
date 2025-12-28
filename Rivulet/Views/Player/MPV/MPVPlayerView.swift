@@ -13,6 +13,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let headers: [String: String]?
     let startTime: Double?
     let delegate: MPVPlayerDelegate?
+    var isLiveStream: Bool = false
 
     @Binding var playerController: MPVMetalViewController?
 
@@ -22,6 +23,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         controller.httpHeaders = headers
         controller.startTime = startTime
         controller.delegate = delegate
+        controller.isLiveStreamMode = isLiveStream
 
         DispatchQueue.main.async {
             self.playerController = controller

@@ -21,14 +21,10 @@ struct SettingsSection<Content: View>: View {
                 .foregroundStyle(.white.opacity(0.5))
                 .padding(.leading, 12)
 
-            VStack(spacing: 2) {
+            VStack(spacing: 12) {
                 content
             }
-            .background(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(.white.opacity(0.08))
-            )
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .padding(8)  // Room for scale effect
         }
     }
 }
@@ -46,53 +42,67 @@ struct SettingsRow: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        HStack(spacing: 20) {
-            // Icon
-            ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(iconColor.gradient)
-                    .frame(width: 64, height: 64)
+        Button(action: action) {
+            HStack(spacing: 20) {
+                // Icon
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(iconColor.gradient)
+                        .frame(width: 64, height: 64)
 
-                Image(systemName: icon)
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(.white)
+                    Image(systemName: icon)
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+
+                // Text - white for dark glass background
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 29, weight: .medium))
+                        .foregroundStyle(.white)
+
+                    Text(subtitle)
+                        .font(.system(size: 23))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+
+                Spacer()
+
+                // Chevron
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(isFocused ? .white.opacity(0.8) : .white.opacity(0.4))
             }
-
-            // Text - white for dark glass background
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 29, weight: .medium))
-                    .foregroundStyle(.white)
-
-                Text(subtitle)
-                    .font(.system(size: 23))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-
-            Spacer()
-
-            // Chevron
-            Image(systemName: "chevron.right")
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.4))
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(
+                                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                lineWidth: 1
+                            )
+                    )
+            )
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 20)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(isFocused ? .white.opacity(0.15) : .clear)
-        )
-        .focusable()
+        .buttonStyle(SettingsButtonStyle())
         .focused($isFocused)
-        .onTapGesture {
-            action()
-        }
+        .scaleEffect(isFocused ? 1.02 : 1.0)
         .onChange(of: focusTrigger) { _, newValue in
             if newValue != nil {
                 isFocused = true
             }
         }
-        .animation(.easeOut(duration: 0.15), value: isFocused)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+    }
+}
+
+/// Button style that removes tvOS default focus ring
+struct SettingsButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
     }
 }
 
@@ -131,48 +141,57 @@ struct SettingsToggleRow: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        HStack(spacing: 20) {
-            // Icon
-            ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(iconColor.gradient)
-                    .frame(width: 64, height: 64)
-
-                Image(systemName: icon)
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-
-            // Text - white for dark glass background
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 29, weight: .medium))
-                    .foregroundStyle(.white)
-
-                Text(subtitle)
-                    .font(.system(size: 23))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-
-            Spacer()
-
-            // On/Off text
-            Text(isOn ? "On" : "Off")
-                .font(.system(size: 26, weight: .medium))
-                .foregroundStyle(isOn ? .green : .white.opacity(0.5))
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 20)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(isFocused ? .white.opacity(0.15) : .clear)
-        )
-        .focusable()
-        .focused($isFocused)
-        .onTapGesture {
+        Button {
             isOn.toggle()
+        } label: {
+            HStack(spacing: 20) {
+                // Icon
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(iconColor.gradient)
+                        .frame(width: 64, height: 64)
+
+                    Image(systemName: icon)
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+
+                // Text - white for dark glass background
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 29, weight: .medium))
+                        .foregroundStyle(.white)
+
+                    Text(subtitle)
+                        .font(.system(size: 23))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+
+                Spacer()
+
+                // On/Off text
+                Text(isOn ? "On" : "Off")
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(isOn ? .green : .white.opacity(0.5))
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(
+                                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                lineWidth: 1
+                            )
+                    )
+            )
         }
-        .animation(.easeOut(duration: 0.15), value: isFocused)
+        .buttonStyle(SettingsButtonStyle())
+        .focused($isFocused)
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
     }
 }
 
@@ -186,24 +205,31 @@ struct SettingsActionRow: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        HStack {
-            Spacer()
-            Text(title)
-                .font(.system(size: 28, weight: .medium))
-                .foregroundStyle(isDestructive ? .red : .white)
-            Spacer()
+        Button(action: action) {
+            HStack {
+                Spacer()
+                Text(title)
+                    .font(.system(size: 28, weight: .medium))
+                    .foregroundStyle(isDestructive ? .red : .white)
+                Spacer()
+            }
+            .padding(.vertical, 20)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isFocused ? (isDestructive ? .red.opacity(0.25) : .white.opacity(0.18)) : .white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(
+                                isFocused ? (isDestructive ? .red.opacity(0.4) : .white.opacity(0.25)) : .white.opacity(0.08),
+                                lineWidth: 1
+                            )
+                    )
+            )
         }
-        .padding(.vertical, 20)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(isFocused ? (isDestructive ? .red.opacity(0.25) : .white.opacity(0.15)) : .clear)
-        )
-        .focusable()
+        .buttonStyle(SettingsButtonStyle())
         .focused($isFocused)
-        .onTapGesture {
-            action()
-        }
-        .animation(.easeOut(duration: 0.15), value: isFocused)
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
     }
 }
 
@@ -220,48 +246,57 @@ struct SettingsPickerRow<T: Hashable & CustomStringConvertible>: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        HStack(spacing: 20) {
-            // Icon
-            ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(iconColor.gradient)
-                    .frame(width: 64, height: 64)
-
-                Image(systemName: icon)
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-
-            // Text
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 29, weight: .medium))
-                    .foregroundStyle(.white)
-
-                Text(subtitle)
-                    .font(.system(size: 23))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-
-            Spacer()
-
-            // Current selection
-            Text(selection.description)
-                .font(.system(size: 26, weight: .medium))
-                .foregroundStyle(.white.opacity(0.7))
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 20)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(isFocused ? .white.opacity(0.15) : .clear)
-        )
-        .focusable()
-        .focused($isFocused)
-        .onTapGesture {
+        Button {
             cycleToNextOption()
+        } label: {
+            HStack(spacing: 20) {
+                // Icon
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(iconColor.gradient)
+                        .frame(width: 64, height: 64)
+
+                    Image(systemName: icon)
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+
+                // Text
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 29, weight: .medium))
+                        .foregroundStyle(.white)
+
+                    Text(subtitle)
+                        .font(.system(size: 23))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+
+                Spacer()
+
+                // Current selection
+                Text(selection.description)
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(
+                                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                lineWidth: 1
+                            )
+                    )
+            )
         }
-        .animation(.easeOut(duration: 0.15), value: isFocused)
+        .buttonStyle(SettingsButtonStyle())
+        .focused($isFocused)
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
     }
 
     private func cycleToNextOption() {

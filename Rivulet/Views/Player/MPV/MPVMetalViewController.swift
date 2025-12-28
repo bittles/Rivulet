@@ -22,6 +22,9 @@ final class MPVMetalViewController: UIViewController {
     var httpHeaders: [String: String]?
     var startTime: Double?
 
+    /// Enable lightweight mode for live streams (smaller buffers, simpler rendering)
+    var isLiveStreamMode: Bool = false
+
     private var timeObserverActive = false
     private var currentState: MPVPlayerState = .idle
     private var isShuttingDown = false
@@ -117,7 +120,13 @@ final class MPVMetalViewController: UIViewController {
         metalLayer.setNeedsDisplay()
         CATransaction.commit()
 
-        // Also tell MPV to reconfigure by toggling a harmless property
+        // For live streams, skip the aggressive reconfigure - GPU scaling is sufficient
+        // This prevents visual glitches when resizing in multiview
+        if isLiveStreamMode {
+            return
+        }
+
+        // For VOD, tell MPV to reconfigure by toggling a harmless property
         queue.async { [weak self] in
             guard let self, self.mpv != nil, !self.isShuttingDown else { return }
 
@@ -249,8 +258,13 @@ final class MPVMetalViewController: UIViewController {
             // Real device: Use gpu-next with native Metal backend (avoid MoltenVK on device)
             checkError(mpv_set_option_string(mpv, "vo", "gpu-next"))
             checkError(mpv_set_option_string(mpv, "gpu-api", "metal"))
-            checkError(mpv_set_option_string(mpv, "hwdec", "videotoolbox"))
+            checkError(mpv_set_option_string(mpv, "hwdec", "videotoolbox"))  // Zero-copy hardware decode
             checkError(mpv_set_option_string(mpv, "target-colorspace-hint", "yes"))  // HDR passthrough
+
+            // GPU optimizations - minimize CPU work
+            checkError(mpv_set_option_string(mpv, "gpu-hwdec-interop", "videotoolbox"))  // Keep frames on GPU
+            checkError(mpv_set_option_string(mpv, "opengl-pbo", "yes"))  // Async texture upload
+
             print("🎬 MPV: Using device settings (gpu-next + Metal + VideoToolbox + HDR)")
         }
 
@@ -263,11 +277,33 @@ final class MPVMetalViewController: UIViewController {
         checkError(mpv_set_option_string(mpv, "video-rotate", "no"))
         checkError(mpv_set_option_string(mpv, "ytdl", "no"))
 
-        // Network
+        // Network & buffering - use smaller buffers for live streams to reduce CPU/memory
         checkError(mpv_set_option_string(mpv, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1"))
-        checkError(mpv_set_option_string(mpv, "cache", "yes"))
-        checkError(mpv_set_option_string(mpv, "demuxer-max-bytes", "150MiB"))
-        checkError(mpv_set_option_string(mpv, "demuxer-max-back-bytes", "75MiB"))
+        if isLiveStreamMode {
+            // Live TV: minimal buffering, no back-buffer (can't seek anyway)
+            checkError(mpv_set_option_string(mpv, "cache", "yes"))
+            checkError(mpv_set_option_string(mpv, "demuxer-max-bytes", "32MiB"))
+            checkError(mpv_set_option_string(mpv, "demuxer-max-back-bytes", "0"))
+            checkError(mpv_set_option_string(mpv, "cache-secs", "10"))
+            checkError(mpv_set_option_string(mpv, "demuxer-readahead-secs", "5"))
+
+            // Reduce CPU overhead for live streams
+            checkError(mpv_set_option_string(mpv, "vd-lavc-threads", "1"))  // Single decode thread (HW does the work)
+            checkError(mpv_set_option_string(mpv, "scale", "bilinear"))  // Fast GPU scaling
+            checkError(mpv_set_option_string(mpv, "dscale", "bilinear"))  // Fast downscaling
+            checkError(mpv_set_option_string(mpv, "dither", "no"))  // Disable dithering
+            checkError(mpv_set_option_string(mpv, "correct-downscaling", "no"))  // Skip correction
+            checkError(mpv_set_option_string(mpv, "linear-downscaling", "no"))  // Skip linear light
+            checkError(mpv_set_option_string(mpv, "deband", "no"))  // No debanding
+            checkError(mpv_set_option_string(mpv, "interpolation", "no"))  // No frame interpolation
+
+            print("🎬 MPV: Using live stream optimized settings (minimal processing, GPU scaling)")
+        } else {
+            // VOD: larger buffers for smooth playback
+            checkError(mpv_set_option_string(mpv, "cache", "yes"))
+            checkError(mpv_set_option_string(mpv, "demuxer-max-bytes", "150MiB"))
+            checkError(mpv_set_option_string(mpv, "demuxer-max-back-bytes", "75MiB"))
+        }
 
         checkError(mpv_initialize(mpv))
 

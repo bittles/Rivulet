@@ -329,8 +329,14 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // Auto-hide controls when playing
                 if state == .playing {
                     self?.startControlsHideTimer()
+                    // Prevent screensaver during playback
+                    UIApplication.shared.isIdleTimerDisabled = true
                 } else {
                     self?.controlsTimer?.invalidate()
+                    // Re-enable screensaver when not playing
+                    if state == .paused || state == .ended || state == .idle {
+                        UIApplication.shared.isIdleTimerDisabled = false
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -406,6 +412,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     func stopPlayback() {
         mpvPlayerWrapper.stop()
         controlsTimer?.invalidate()
+        // Re-enable screensaver
+        UIApplication.shared.isIdleTimerDisabled = false
     }
 
     func togglePlayPause() {
@@ -691,5 +699,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     deinit {
         controlsTimer?.invalidate()
         scrubTimer?.invalidate()
+        // Ensure screensaver is re-enabled when player is deallocated
+        UIApplication.shared.isIdleTimerDisabled = false
     }
 }

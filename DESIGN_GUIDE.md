@@ -1,0 +1,464 @@
+# Rivulet Design Guide
+
+A comprehensive guide to the UI/UX patterns, components, and styling conventions used throughout the Rivulet tvOS app.
+
+---
+
+## Table of Contents
+
+1. [Design Philosophy](#design-philosophy)
+2. [Focus & Selection Styling](#focus--selection-styling)
+3. [Glass Row Components](#glass-row-components)
+4. [Navigation Patterns](#navigation-patterns)
+5. [Focus Management](#focus-management)
+6. [Typography](#typography)
+7. [Colors & Opacity](#colors--opacity)
+8. [Animation Timings](#animation-timings)
+9. [Layout Spacing](#layout-spacing)
+10. [Component Reference](#component-reference)
+11. [tvOS-Specific Considerations](#tvos-specific-considerations)
+
+---
+
+## Design Philosophy
+
+### Core Principles
+
+**Simplicity** and **Elegance** are the foundation of Rivulet's design. Every element should feel intentional, refined, and effortless. When in doubt, remove rather than add.
+
+### Guidelines
+
+- **Simplicity First**: If a feature can be accomplished with fewer UI elements, do it. Avoid clutter, excessive labels, and redundant controls. The interface should feel calm and unobtrusive.
+
+- **Elegant Restraint**: Use subtle effects rather than flashy ones. A 2% scale is more elegant than 10%. A soft glow is more refined than a harsh border. Let the content be the star.
+
+- **Liquid Glass**: Translucent backgrounds with subtle borders create depth without visual noise. This is the tvOS 26 aesthetic.
+
+- **Subtle Motion**: Small scale effects (1.02x) rather than dramatic zooms. Animations should feel natural, not performative.
+
+- **Consistency**: Unified focus behavior across all interactive elements. Users should never wonder "how does this work?"
+
+- **Spatial Clarity**: Clear visual hierarchy with appropriate spacing. Give elements room to breathe.
+
+- **Invisible Complexity**: Complex features should feel simple to use. Hide the machinery, show the magic.
+
+### The 10-Foot Experience
+
+Remember: users view this on a TV from across the room. Design for:
+- **Readability**: Large, clear text
+- **Discoverability**: Obvious focus states
+- **Forgiveness**: Easy navigation, hard to get lost
+
+### Design Don'ts
+
+- **Don't over-decorate**: No gradients where flat colors work. No shadows where elevation isn't needed. No borders where spacing provides separation.
+
+- **Don't add unnecessary icons**: If text is clear, an icon is redundant. We removed play icons from track rows because the row itself is obviously playable.
+
+- **Don't use aggressive animations**: No bouncing, no overshooting, no attention-grabbing effects. The UI should recede, not perform.
+
+- **Don't duplicate information**: If something is shown in one place, don't show it again nearby. Trust users to find it.
+
+- **Don't add "just in case" features**: Every element must earn its place. If users haven't asked for it, don't build it.
+
+---
+
+## Focus & Selection Styling
+
+### Unified Focus Effect (Glass Rows)
+
+All focusable list rows use this consistent styling:
+
+```swift
+// Background
+RoundedRectangle(cornerRadius: 16, style: .continuous)
+    .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+    .overlay(
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .strokeBorder(
+                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                lineWidth: 1
+            )
+    )
+
+// Scale
+.scaleEffect(isFocused ? 1.02 : 1.0)
+
+// Animation
+.animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+```
+
+### Focus States
+
+| State | Background | Border | Scale |
+|-------|-----------|--------|-------|
+| Unfocused | `white.opacity(0.08)` | `white.opacity(0.08)` | 1.0 |
+| Focused | `white.opacity(0.18)` | `white.opacity(0.25)` | 1.02 |
+| Destructive Focused | `red.opacity(0.25)` | `red.opacity(0.4)` | 1.02 |
+
+### Poster Cards (MediaPosterCard)
+
+Media poster cards use `.hoverEffect(.highlight)` on the poster image for native tvOS focus behavior, wrapped in `CardButtonStyle` which removes the default focus ring.
+
+---
+
+## Glass Row Components
+
+### Settings Rows
+
+Located in `Views/Settings/SettingsComponents.swift`:
+
+- **SettingsRow** - Navigation row with icon, title, subtitle, chevron
+- **SettingsToggleRow** - Toggle with On/Off indicator
+- **SettingsPickerRow** - Cycles through options on tap
+- **SettingsActionRow** - Centered action button (supports destructive style)
+- **SettingsInfoRow** - Display-only information
+
+### Content Rows
+
+Located in `Views/Plex/PlexDetailView.swift`:
+
+- **EpisodeRow** - TV show episodes with thumbnail, progress bar, metadata
+- **AlbumTrackRow** - Music tracks with track number and duration
+- **ArtistAlbumRow** - Album cards with artwork, year, track count
+
+### Shared Components
+
+Located in `Views/Components/GlassRowStyle.swift`:
+
+- **GlassRowButtonStyle** - Minimal button style (removes focus ring)
+- **GlassRowBackground** - Reusable glass background view
+- **GlassRowModifier** - View modifier for applying glass styling
+- **FocusableGlassRow** - Complete focusable row component
+
+---
+
+## Navigation Patterns
+
+### Sidebar Navigation
+
+- Main navigation via sidebar (left side)
+- Sidebar opens with Menu button when not in nested navigation
+- Uses `FocusScopeManager` for focus isolation
+
+### Detail Navigation
+
+- Value-based navigation for library items: `.navigationDestination(for: PlexMetadata.self)`
+- Binding-based navigation for nested views: `.navigationDestination(item: $navigateToAlbum)`
+- Prevents duplicate navigationDestination conflicts
+
+### Back Navigation
+
+Custom `goBackAction` in `NestedNavigationState`:
+- Overridden when navigating into nested content (e.g., artist → album)
+- Ensures Menu button returns to parent, not root
+
+```swift
+nestedNavState.goBackAction = { [weak nestedNavState] in
+    navigateToAlbum = nil
+    nestedNavState?.isNested = true  // Stay in parent view
+}
+```
+
+---
+
+## Focus Management
+
+### FocusScopeManager
+
+Central focus control system in `Services/Focus/FocusScopeManager.swift`:
+
+**Scopes:**
+- `.content` - Main content area
+- `.sidebar` - Navigation sidebar
+- `.player` - Video player controls
+- `.playerInfoBar` - Player info overlay
+- `.modal` - Dialogs and sheets
+- `.settings` - Settings screens
+- `.detail` - Detail views
+- `.channelPicker` - Live TV channel picker
+- `.guide` - TV Guide
+
+**Key Methods:**
+- `activate(_ scope:)` - Switch to a scope, save current focus
+- `deactivate()` - Return to previous scope
+- `setFocus(_ item:)` - Track current focus
+- `requestFocusRestore()` - Trigger focus restoration
+
+### Focus Restoration
+
+Save and restore focus when navigating:
+
+```swift
+// Save focus before navigating
+savedAlbumFocus = album.ratingKey
+
+// Restore focus when returning
+.onChange(of: navigateToAlbum) { oldAlbum, newAlbum in
+    if oldAlbum != nil && newAlbum == nil, let savedFocus = savedAlbumFocus {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            focusedAlbumId = savedFocus
+        }
+    }
+}
+```
+
+---
+
+## Typography
+
+### tvOS Font Sizes
+
+| Element | Size | Weight |
+|---------|------|--------|
+| Large Title | 56pt | Bold |
+| Section Header | 21pt | Bold (with 2pt tracking) |
+| Row Title | 29pt | Medium |
+| Row Subtitle | 23pt | Regular |
+| Body Text | 22pt | Medium |
+| Caption/Secondary | 18pt | Regular |
+| Track Number | 22pt | Medium, Monospaced |
+
+### iOS Font Sizes
+
+Use standard semantic fonts (`.headline`, `.caption`, etc.)
+
+---
+
+## Colors & Opacity
+
+### Background Opacities
+
+| Use Case | Opacity |
+|----------|---------|
+| Unfocused row background | 0.08 |
+| Focused row background | 0.18 |
+| Unfocused border | 0.08 |
+| Focused border | 0.25 |
+| Section header text | 0.5 |
+| Secondary text | 0.6 |
+| Chevron/icon unfocused | 0.4 |
+| Chevron/icon focused | 0.8 |
+
+### Semantic Colors
+
+- **Green** - Watched indicator, toggle "On" state
+- **Blue** - Primary actions, progress bars
+- **Red** - Destructive actions
+- **Yellow** - Star rating, critic ratings
+- **Orange** - Director indicator
+
+### Glass Effect
+
+Settings sections use `.glassEffect(.regular, in: RoundedRectangle(...))` for the container background.
+
+---
+
+## Animation Timings
+
+### Standard Spring Animation
+
+```swift
+.animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+```
+
+### Quick Transitions
+
+```swift
+.animation(.easeOut(duration: 0.15), value: someValue)
+```
+
+### Sidebar Animation
+
+```swift
+.animation(.spring(response: 0.18, dampingFraction: 0.9), value: isSidebarVisible)
+```
+
+---
+
+## Layout Spacing
+
+### Padding Values (tvOS)
+
+| Context | Horizontal | Vertical |
+|---------|------------|----------|
+| Screen edge | 48-80pt | - |
+| Row content | 20-24pt | 16-20pt |
+| Section spacing | - | 24-32pt |
+| Item spacing in rows | 16pt | - |
+| Grid item spacing | 32pt | - |
+
+### Corner Radii
+
+| Element | Radius |
+|---------|--------|
+| Hero/backdrop | 32pt |
+| Settings section | 24pt |
+| Row backgrounds | 16-18pt |
+| Thumbnails | 8pt |
+| Poster cards | 12pt |
+| Icon backgrounds | 14pt |
+
+---
+
+## Component Reference
+
+### Button Styles
+
+| Style | Use Case |
+|-------|----------|
+| `CardButtonStyle()` | Poster cards, list rows (removes focus ring) |
+| `.borderedProminent` | Primary action buttons |
+| `.bordered` | Secondary action buttons |
+| `.plain` | Non-tvOS buttons, custom styling |
+
+### Image Loading
+
+Use `CachedAsyncImage` for all remote images:
+
+```swift
+CachedAsyncImage(url: imageURL) { phase in
+    switch phase {
+    case .success(let image):
+        image.resizable().aspectRatio(contentMode: .fill)
+    case .empty:
+        Rectangle().fill(Color(white: 0.15))
+            .overlay { ProgressView().tint(.white.opacity(0.3)) }
+    case .failure:
+        Rectangle().fill(Color(white: 0.15))
+            .overlay {
+                Image(systemName: "photo")
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+    }
+}
+```
+
+### Progress Bars
+
+Watch progress overlay on thumbnails:
+
+```swift
+GeometryReader { geo in
+    VStack {
+        Spacer()
+        ZStack(alignment: .leading) {
+            Rectangle()
+                .fill(Color.black.opacity(0.5))
+                .frame(height: 3)
+            Rectangle()
+                .fill(Color.blue)
+                .frame(width: geo.size.width * progress, height: 3)
+        }
+    }
+}
+```
+
+---
+
+## tvOS-Specific Considerations
+
+### Focus Scale Room
+
+Add padding to containers for scale effect:
+
+```swift
+LazyVStack(spacing: 16) { ... }
+    .padding(.horizontal, 8)  // Room for 1.02x scale
+```
+
+### Exit Command Handling
+
+Handle Menu button presses at appropriate levels:
+
+```swift
+.onExitCommand {
+    if isSidebarVisible {
+        closeSidebar()
+    } else if nestedNavState.isNested {
+        nestedNavState.goBack()
+    } else {
+        openSidebar()
+    }
+}
+```
+
+### Focus State Tracking
+
+Use `@FocusState` for individual items:
+
+```swift
+@FocusState private var isFocused: Bool
+// or for collections:
+@FocusState private var focusedItemId: String?
+
+Button { ... }
+    .focused($isFocused)
+    // or:
+    .focused($focusedItemId, equals: item.ratingKey)
+```
+
+### Conditional Compilation
+
+Always wrap tvOS-specific code:
+
+```swift
+#if os(tvOS)
+@FocusState private var isFocused: Bool
+#endif
+
+// In views:
+#if os(tvOS)
+.buttonStyle(CardButtonStyle())
+.focused($isFocused)
+.scaleEffect(isFocused ? 1.02 : 1.0)
+#else
+.buttonStyle(.plain)
+#endif
+```
+
+---
+
+## File Locations
+
+| Component Type | Location |
+|----------------|----------|
+| Shared UI components | `Views/Components/` |
+| Settings components | `Views/Settings/SettingsComponents.swift` |
+| Glass row styling | `Views/Components/GlassRowStyle.swift` |
+| Focus management | `Services/Focus/FocusScopeManager.swift` |
+| Image caching | `Views/Components/CachedAsyncImage.swift` |
+| Button styles | `Views/Plex/MediaPosterCard.swift` (CardButtonStyle) |
+
+---
+
+## Quick Reference: Adding a New List Row
+
+1. Create the row view with `isFocused` parameter (tvOS)
+2. Apply glass background with focus-aware styling
+3. Wrap in Button with `CardButtonStyle()`
+4. Add `.focused()` binding
+5. Add `.scaleEffect(isFocused ? 1.02 : 1.0)`
+6. Add `.animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)`
+7. Add `.padding(.horizontal, 8)` to parent container
+
+---
+
+## Simplicity Checklist
+
+Before shipping any new UI, ask:
+
+- [ ] Can any element be removed without losing function?
+- [ ] Is every icon/label necessary, or is the context clear enough?
+- [ ] Does the focus effect match our unified glass style?
+- [ ] Are animations subtle (spring 0.3, scale 1.02)?
+- [ ] Is spacing consistent with existing patterns?
+- [ ] Would a first-time user understand this immediately?
+- [ ] Does it look calm and refined, not busy or flashy?
+- [ ] Is the content the hero, not the chrome?
+
+**The goal**: Users should think about their media, not the interface.
+
+---
+
+*Last updated: December 2024*

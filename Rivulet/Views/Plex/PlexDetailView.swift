@@ -30,6 +30,9 @@ struct PlexDetailView: View {
     @State private var albums: [PlexMetadata] = []
     @State private var isLoadingAlbums = false
     @State private var navigateToAlbum: PlexMetadata?  // For binding-based navigation
+    @State private var artistTracks: [PlexMetadata] = []  // All tracks for "Play All"
+    @State private var isLoadingArtistTracks = false
+    @State private var showBioSheet = false  // Show artist bio
 
     #if os(tvOS)
     // Focus state for restoring focus when returning from nested navigation
@@ -171,6 +174,13 @@ struct PlexDetailView: View {
                 )
             }
         }
+        .sheet(isPresented: $showBioSheet) {
+            ArtistBioSheet(
+                artistName: item.title ?? "Artist",
+                bio: fullMetadata?.summary ?? item.summary ?? "",
+                thumbURL: artistThumbURL
+            )
+        }
         .onChange(of: showPlayer) { _, isShowing in
             // Clear selected episode/track when player closes
             if !isShowing {
@@ -189,6 +199,12 @@ struct PlexDetailView: View {
                     navigateToAlbum = nil
                     // Keep nested state true since we're still in artist view
                     nestedNavState?.isNested = true
+                }
+            } else if oldAlbum != nil {
+                // Returned from album - restore goBackAction to dismiss this view
+                nestedNavState.goBackAction = { [weak nestedNavState] in
+                    nestedNavState?.isNested = false
+                    dismiss()
                 }
             }
             #if os(tvOS)
@@ -321,6 +337,41 @@ struct PlexDetailView: View {
         }
     }
 
+    /// Artist thumbnail URL for bio sheet
+    private var artistThumbURL: URL? {
+        guard let thumb = fullMetadata?.thumb ?? item.thumb,
+              let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken else { return nil }
+        return URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(token)")
+    }
+
+    /// Load and play all tracks for an artist
+    private func playAllArtistTracks() async {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken,
+              let ratingKey = item.ratingKey else { return }
+
+        isLoadingArtistTracks = true
+        defer { isLoadingArtistTracks = false }
+
+        do {
+            // Use getAllLeaves to get all tracks for this artist
+            let allTracks = try await networkManager.getAllLeaves(
+                serverURL: serverURL,
+                authToken: token,
+                ratingKey: ratingKey
+            )
+
+            if let firstTrack = allTracks.first {
+                artistTracks = allTracks
+                selectedTrack = firstTrack
+                showPlayer = true
+            }
+        } catch {
+            print("Failed to load artist tracks: \(error)")
+        }
+    }
+
     // MARK: - Header Section
 
     private var headerSection: some View {
@@ -386,28 +437,59 @@ struct PlexDetailView: View {
 
     private var actionButtons: some View {
         HStack(spacing: 16) {
-            // Play button - show for all playable items except artists
-            // For albums: plays the first track
-            if item.type != "artist" {
+            // Play button for movies, shows, albums
+            // Play All button for artists
+            if item.type == "artist" {
                 Button {
-                    if item.type == "album" {
-                        // Play first track of album
-                        if let firstTrack = tracks.first {
-                            selectedTrack = firstTrack
-                        }
+                    Task {
+                        await playAllArtistTracks()
                     }
-                    showPlayer = true
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "play.fill")
-                        Text(item.type == "album" ? "Play Album" : (item.isInProgress ? "Resume" : "Play"))
+                        if isLoadingArtistTracks {
+                            ProgressView()
+                                .tint(.white)
+                        } else {
+                            Image(systemName: "play.fill")
+                        }
+                        Text("Play All")
                     }
                     .font(.system(size: 20, weight: .semibold))
                     .padding(.horizontal, 24)
                     .padding(.vertical, 12)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(item.type == "album" && tracks.isEmpty)
+                .disabled(isLoadingArtistTracks)
+            } else if item.type == "album" {
+                Button {
+                    if let firstTrack = tracks.first {
+                        selectedTrack = firstTrack
+                    }
+                    showPlayer = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "play.fill")
+                        Text("Play Album")
+                    }
+                    .font(.system(size: 20, weight: .semibold))
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(tracks.isEmpty)
+            } else if item.type != "track" {
+                Button {
+                    showPlayer = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "play.fill")
+                        Text(item.isInProgress ? "Resume" : "Play")
+                    }
+                    .font(.system(size: 20, weight: .semibold))
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
             }
 
             // For music: Star rating toggle (5 stars or no rating)
@@ -432,6 +514,18 @@ struct PlexDetailView: View {
                     Image(systemName: isWatched ? "checkmark.circle.fill" : "checkmark.circle")
                         .font(.system(size: 28, weight: .medium))
                         .foregroundStyle(isWatched ? .green : .secondary)
+                }
+                .buttonStyle(.bordered)
+            }
+
+            // Info button for artists with bio
+            if item.type == "artist", let summary = fullMetadata?.summary ?? item.summary, !summary.isEmpty {
+                Button {
+                    showBioSheet = true
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.bordered)
             }
@@ -592,10 +686,19 @@ struct PlexDetailView: View {
 
                 LazyVStack(spacing: 16) {
                     ForEach(albums, id: \.ratingKey) { album in
+                        #if os(tvOS)
+                        AlbumRowButton(
+                            album: album,
+                            serverURL: authManager.selectedServerURL ?? "",
+                            authToken: authManager.authToken ?? "",
+                            focusedAlbumId: $focusedAlbumId,
+                            onSelect: {
+                                savedAlbumFocus = album.ratingKey
+                                navigateToAlbum = album
+                            }
+                        )
+                        #else
                         Button {
-                            #if os(tvOS)
-                            savedAlbumFocus = album.ratingKey
-                            #endif
                             navigateToAlbum = album
                         } label: {
                             ArtistAlbumRow(
@@ -604,10 +707,6 @@ struct PlexDetailView: View {
                                 authToken: authManager.authToken ?? ""
                             )
                         }
-                        #if os(tvOS)
-                        .focused($focusedAlbumId, equals: album.ratingKey)
-                        .buttonStyle(CardButtonStyle())
-                        #else
                         .buttonStyle(.plain)
                         #endif
                     }
@@ -931,6 +1030,10 @@ struct EpisodeRow: View {
     let authToken: String
     let onPlay: () -> Void
 
+    #if os(tvOS)
+    @FocusState private var isFocused: Bool
+    #endif
+
     var body: some View {
         Button(action: onPlay) {
             HStack(spacing: 16) {
@@ -974,23 +1077,39 @@ struct EpisodeRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if let epString = episode.episodeString {
                         Text(epString)
+                            #if os(tvOS)
+                            .font(.system(size: 18))
+                            #else
                             .font(.caption)
+                            #endif
                             .foregroundStyle(.secondary)
                     }
 
                     Text(episode.title ?? "Episode")
+                        #if os(tvOS)
+                        .font(.system(size: 22, weight: .medium))
+                        #else
                         .font(.headline)
+                        #endif
                         .lineLimit(1)
 
                     if let duration = episode.durationFormatted {
                         Text(duration)
+                            #if os(tvOS)
+                            .font(.system(size: 18))
+                            #else
                             .font(.caption)
+                            #endif
                             .foregroundStyle(.secondary)
                     }
 
                     if let summary = episode.summary {
                         Text(summary)
+                            #if os(tvOS)
+                            .font(.system(size: 18))
+                            #else
                             .font(.caption)
+                            #endif
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
@@ -1003,17 +1122,37 @@ struct EpisodeRow: View {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                 }
-
-                Image(systemName: "chevron.right")
-                    .foregroundStyle(.secondary)
             }
+            #if os(tvOS)
+            .padding(.vertical, 16)
+            .padding(.horizontal, 20)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(
+                                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                lineWidth: 1
+                            )
+                    )
+            )
+            #else
             .padding()
             .background(
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.secondary.opacity(0.1))
             )
+            #endif
         }
+        #if os(tvOS)
+        .buttonStyle(CardButtonStyle())
+        .focused($isFocused)
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+        #else
         .buttonStyle(.plain)
+        #endif
     }
 
     private var thumbURL: URL? {
@@ -1031,6 +1170,7 @@ struct AlbumTrackRow: View {
     let authToken: String
     #if os(tvOS)
     var focusedId: FocusState<String?>.Binding?
+    @FocusState private var isFocused: Bool
     #endif
     let onPlay: () -> Void
 
@@ -1072,21 +1212,32 @@ struct AlbumTrackRow: View {
             #if os(tvOS)
             .padding(.vertical, 16)
             .padding(.horizontal, 20)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(
+                                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                lineWidth: 1
+                            )
+                    )
+            )
             #else
             .padding(.vertical, 12)
             .padding(.horizontal, 16)
-            #endif
             .background(
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.secondary.opacity(0.1))
             )
-            #if os(tvOS)
-            .hoverEffect(.highlight)
             #endif
         }
         #if os(tvOS)
-        .modifier(TrackFocusModifier(focusedId: focusedId, trackRatingKey: track.ratingKey))
         .buttonStyle(CardButtonStyle())
+        .modifier(TrackFocusModifier(focusedId: focusedId, trackRatingKey: track.ratingKey))
+        .focused($isFocused)
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
         #else
         .buttonStyle(.plain)
         #endif
@@ -1094,6 +1245,33 @@ struct AlbumTrackRow: View {
 }
 
 #if os(tvOS)
+/// Helper view for album rows with proper focus tracking
+struct AlbumRowButton: View {
+    let album: PlexMetadata
+    let serverURL: String
+    let authToken: String
+    var focusedAlbumId: FocusState<String?>.Binding
+    let onSelect: () -> Void
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button(action: onSelect) {
+            ArtistAlbumRow(
+                album: album,
+                serverURL: serverURL,
+                authToken: authToken,
+                isFocused: isFocused
+            )
+        }
+        .buttonStyle(CardButtonStyle())
+        .focused($isFocused)
+        .focused(focusedAlbumId, equals: album.ratingKey)
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+    }
+}
+
 /// Helper modifier to apply focus binding to track rows
 struct TrackFocusModifier: ViewModifier {
     var focusedId: FocusState<String?>.Binding?
@@ -1115,6 +1293,9 @@ struct ArtistAlbumRow: View {
     let album: PlexMetadata
     let serverURL: String
     let authToken: String
+    #if os(tvOS)
+    var isFocused: Bool = false
+    #endif
 
     var body: some View {
         HStack(spacing: 16) {
@@ -1176,16 +1357,24 @@ struct ArtistAlbumRow: View {
         #if os(tvOS)
         .padding(.vertical, 16)
         .padding(.horizontal, 20)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(
+                            isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                            lineWidth: 1
+                        )
+                )
+        )
         #else
         .padding(.vertical, 12)
         .padding(.horizontal, 16)
-        #endif
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color.secondary.opacity(0.1))
         )
-        #if os(tvOS)
-        .hoverEffect(.highlight)
         #endif
     }
 
@@ -1195,6 +1384,227 @@ struct ArtistAlbumRow: View {
     }
 }
 
+// MARK: - Artist Bio Sheet
+
+struct ArtistBioSheet: View {
+    let artistName: String
+    let bio: String
+    let thumbURL: URL?
+
+    @Environment(\.dismiss) private var dismiss
+    #if os(tvOS)
+    @FocusState private var focusedParagraph: Int?
+
+    /// Split bio into small chunks for smooth scrolling
+    /// Each chunk is ~2-3 sentences or ~300 chars max for comfortable reading
+    private var bioChunks: [String] {
+        let sentences = bio.components(separatedBy: ". ")
+        var chunks: [String] = []
+        var currentChunk = ""
+
+        for sentence in sentences {
+            let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+
+            let sentenceWithPeriod = trimmed.hasSuffix(".") ? trimmed : trimmed + "."
+
+            if currentChunk.isEmpty {
+                currentChunk = sentenceWithPeriod
+            } else if currentChunk.count + sentenceWithPeriod.count < 300 {
+                // Add to current chunk if under limit
+                currentChunk += " " + sentenceWithPeriod
+            } else {
+                // Start new chunk
+                chunks.append(currentChunk)
+                currentChunk = sentenceWithPeriod
+            }
+        }
+
+        // Add remaining chunk
+        if !currentChunk.isEmpty {
+            chunks.append(currentChunk)
+        }
+
+        return chunks.isEmpty ? [bio] : chunks
+    }
+    #endif
+
+    var body: some View {
+        #if os(tvOS)
+        // tvOS: Scrollable view with focusable paragraphs
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 40) {
+                // Header with artist name
+                Text(artistName)
+                    .font(.system(size: 48, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.top, 60)
+
+                // Artist image
+                if let url = thumbURL {
+                    CachedAsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        case .empty:
+                            Rectangle()
+                                .fill(Color(white: 0.15))
+                                .overlay { ProgressView().tint(.white.opacity(0.3)) }
+                        case .failure:
+                            Rectangle()
+                                .fill(Color(white: 0.15))
+                                .overlay {
+                                    Image(systemName: "music.mic")
+                                        .font(.system(size: 40, weight: .light))
+                                        .foregroundStyle(.white.opacity(0.4))
+                                }
+                        }
+                    }
+                    .frame(width: 200, height: 200)
+                    .clipShape(Circle())
+                }
+
+                // Bio text - split into small focusable chunks for smooth scrolling
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(bioChunks.enumerated()), id: \.offset) { index, chunk in
+                        BioParagraphRow(
+                            text: chunk,
+                            isFocused: focusedParagraph == index
+                        )
+                        .focusable()
+                        .focused($focusedParagraph, equals: index)
+                    }
+                }
+                .frame(maxWidth: 1200)
+                .padding(.horizontal, 80)
+
+                // Done button at bottom (index = -1)
+                BioDoneButton(isFocused: focusedParagraph == -1) {
+                    dismiss()
+                }
+                .focused($focusedParagraph, equals: -1)
+                .padding(.top, 20)
+                .padding(.bottom, 80)
+            }
+            .padding(8) // Room for scale effect
+        }
+        .background(Color.black.opacity(0.95))
+        .onExitCommand {
+            dismiss()
+        }
+        #else
+        NavigationStack {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 32) {
+                    // Artist image
+                    if let url = thumbURL {
+                        CachedAsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            case .empty:
+                                Rectangle()
+                                    .fill(Color(white: 0.15))
+                                    .overlay { ProgressView().tint(.white.opacity(0.3)) }
+                            case .failure:
+                                Rectangle()
+                                    .fill(Color(white: 0.15))
+                                    .overlay {
+                                        Image(systemName: "music.mic")
+                                            .font(.system(size: 40, weight: .light))
+                                            .foregroundStyle(.white.opacity(0.4))
+                                    }
+                            }
+                        }
+                        .frame(width: 150, height: 150)
+                        .clipShape(Circle())
+                    }
+
+                    // Bio text
+                    Text(bio)
+                        .font(.body)
+                        .foregroundStyle(.white.opacity(0.9))
+                        .multilineTextAlignment(.leading)
+                        .lineSpacing(6)
+                }
+                .padding()
+            }
+            .background(Color.black.opacity(0.95))
+            .navigationTitle(artistName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        #endif
+    }
+}
+
+// MARK: - Bio Sheet Helper Views (tvOS)
+
+#if os(tvOS)
+/// Focusable text chunk - minimal styling for continuous reading
+private struct BioParagraphRow: View {
+    let text: String
+    let isFocused: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            // Subtle focus indicator on the left edge
+            RoundedRectangle(cornerRadius: 2)
+                .fill(isFocused ? .white.opacity(0.6) : .clear)
+                .frame(width: 3)
+
+            Text(text)
+                .font(.system(size: 26))
+                .foregroundStyle(isFocused ? .white : .white.opacity(0.8))
+                .multilineTextAlignment(.leading)
+                .lineSpacing(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 8)
+        .animation(.easeOut(duration: 0.15), value: isFocused)
+    }
+}
+
+/// Done button for bio sheet - follows design guide glass styling
+private struct BioDoneButton: View {
+    let isFocused: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text("Done")
+                .font(.system(size: 28, weight: .medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 60)
+                .padding(.vertical, 18)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(
+                                    isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                    lineWidth: 1
+                                )
+                        )
+                )
+        }
+        .buttonStyle(SettingsButtonStyle())
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+    }
+}
+#endif
 
 #Preview {
     let sampleMovie = PlexMetadata(

@@ -35,6 +35,7 @@ struct StreamSlotView: View {
                         headers: [:],
                         startTime: nil,
                         delegate: slot.playerWrapper,
+                        isLiveStream: true,
                         playerController: $playerController
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
@@ -107,7 +108,14 @@ struct StreamSlotView: View {
     }
 
     private func updatePlayerSize(_ newSize: CGSize) {
-        guard newSize != .zero, newSize != lastContainerSize else { return }
+        guard newSize != .zero else { return }
+
+        // Only resize if the change is significant (more than 5 pixels)
+        // This prevents unnecessary reconfigurations during minor layout shifts
+        let widthDiff = abs(newSize.width - lastContainerSize.width)
+        let heightDiff = abs(newSize.height - lastContainerSize.height)
+        guard widthDiff > 5 || heightDiff > 5 || lastContainerSize == .zero else { return }
+
         lastContainerSize = newSize
         print("🧩 StreamSlot \(index): container size -> \(newSize)")
         playerController?.updateForContainerSize(newSize)
