@@ -155,21 +155,6 @@ struct CastCrewRow: View {
     let serverURL: String
     let authToken: String
 
-    // Use @FocusState instead of prefersDefaultFocus (which is broken in ScrollView)
-    @FocusState private var focusedPersonId: String?
-
-    /// Get the ID of the first person (for default focus)
-    private var firstPersonId: String? {
-        if let firstDirector = directors.first {
-            return firstDirector.id
-        } else if let firstActor = cast.first {
-            return firstActor.id
-        } else if let firstWriter = writers.first {
-            return firstWriter.id
-        }
-        return nil
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Cast & Crew")
@@ -194,7 +179,6 @@ struct CastCrewRow: View {
                         }
                         #if os(tvOS)
                         .buttonStyle(CardButtonStyle())
-                        .focused($focusedPersonId, equals: director.id)
                         #else
                         .buttonStyle(.plain)
                         #endif
@@ -213,7 +197,6 @@ struct CastCrewRow: View {
                         }
                         #if os(tvOS)
                         .buttonStyle(CardButtonStyle())
-                        .focused($focusedPersonId, equals: actor.id)
                         #else
                         .buttonStyle(.plain)
                         #endif
@@ -234,7 +217,6 @@ struct CastCrewRow: View {
                             }
                             #if os(tvOS)
                             .buttonStyle(CardButtonStyle())
-                            .focused($focusedPersonId, equals: writer.id)
                             #else
                             .buttonStyle(.plain)
                             #endif
@@ -247,10 +229,6 @@ struct CastCrewRow: View {
             .scrollClipDisabled()
         }
         .focusSection()
-        #if os(tvOS)
-        // defaultFocus sets which item receives focus when this section becomes focused
-        .defaultFocus($focusedPersonId, firstPersonId)
-        #endif
     }
 }
 

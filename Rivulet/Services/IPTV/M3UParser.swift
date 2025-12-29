@@ -180,7 +180,7 @@ enum M3UParseError: LocalizedError {
 
 extension M3UParser.ParsedChannel {
     /// Convert to UnifiedChannel
-    func toUnifiedChannel(sourceType: LiveTVSourceType, sourceId: String) -> UnifiedChannel {
+    nonisolated func toUnifiedChannel(sourceType: LiveTVSourceType, sourceId: String) -> UnifiedChannel {
         // Create a unique ID for this channel
         let channelId = tvgId ?? tvgName ?? name
         let id = UnifiedChannel.makeId(sourceType: sourceType, sourceId: sourceId, channelId: channelId)

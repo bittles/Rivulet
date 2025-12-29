@@ -96,7 +96,7 @@ struct PlexHomeView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                if !authManager.isAuthenticated {
+                if !authManager.hasCredentials {
                     notConnectedView
                 } else if dataStore.isLoadingHubs && dataStore.hubs.isEmpty {
                     loadingView
@@ -186,6 +186,26 @@ struct PlexHomeView: View {
                 }
             }
         }
+        // Handle navigation from player (Go to Season / Go to Show)
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToContent)) { notification in
+            guard let ratingKey = notification.userInfo?["ratingKey"] as? String else { return }
+
+            // Fetch metadata and navigate
+            Task {
+                do {
+                    let metadata = try await PlexNetworkManager.shared.getMetadata(
+                        serverURL: authManager.selectedServerURL ?? "",
+                        authToken: authManager.authToken ?? "",
+                        ratingKey: ratingKey
+                    )
+                    await MainActor.run {
+                        selectedItem = metadata
+                    }
+                } catch {
+                    print("❌ [Navigation] Failed to fetch metadata for ratingKey \(ratingKey): \(error)")
+                }
+            }
+        }
     }
 
     // MARK: - Hero Selection
@@ -221,6 +241,11 @@ struct PlexHomeView: View {
     private var contentView: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 0) {
+                // Connection error banner (when showing cached content while offline)
+                if !authManager.isConnected {
+                    connectionErrorBanner
+                }
+
                 // Hero section (if enabled)
                 if showHomeHero, let hero = heroItem {
                     HeroView(
@@ -266,6 +291,61 @@ struct PlexHomeView: View {
         .ignoresSafeArea(edges: .top)
         .defaultFocus($focusedItemId, "hero")  // Set initial focus to hero
         #endif
+    }
+
+    // MARK: - Connection Error Banner
+
+    private var connectionErrorBanner: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "wifi.exclamationmark")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.yellow)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Cannot Connect to Plex")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white)
+
+                Text(authManager.connectionError ?? "Showing cached content")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+
+            Spacer()
+
+            Button {
+                Task {
+                    await authManager.verifyAndFixConnection()
+                    if authManager.isConnected {
+                        await dataStore.refreshHubs()
+                    }
+                }
+            } label: {
+                Text("Retry")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(.white.opacity(0.2))
+                    )
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.yellow.opacity(0.15))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(.yellow.opacity(0.3), lineWidth: 1)
+                )
+        )
+        .padding(.horizontal, 80)
+        .padding(.top, 100)  // Below safe area
+        .padding(.bottom, 20)
     }
 
     // MARK: - Loading View

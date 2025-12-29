@@ -12,6 +12,10 @@ struct IPTVSettingsView: View {
     @StateObject private var authManager = PlexAuthManager.shared
     @State private var showAddSourceSheet = false
     @State private var selectedSourceForDetail: LiveTVDataStore.LiveTVSourceInfo?
+    @State private var plexDVRAvailable: Bool = false
+    @State private var isCheckingPlexDVR: Bool = false
+    @State private var isAddingPlexLiveTV: Bool = false
+    @State private var plexAddError: String?
     var goBack: () -> Void = {}
 
     var body: some View {
@@ -48,10 +52,13 @@ struct IPTVSettingsView: View {
                         }
                     }
 
-                    // Plex Live TV availability hint
-                    if authManager.isAuthenticated && !hasPlexLiveTVSource {
-                        PlexLiveTVHintCard {
-                            showAddSourceSheet = true
+                    // Plex Live TV availability hint - only show if DVR is confirmed available
+                    if authManager.isAuthenticated && !hasPlexLiveTVSource && plexDVRAvailable {
+                        PlexLiveTVHintCard(
+                            isLoading: isAddingPlexLiveTV,
+                            errorMessage: plexAddError
+                        ) {
+                            addPlexLiveTV()
                         }
                     }
                 }
@@ -60,11 +67,77 @@ struct IPTVSettingsView: View {
             }
         }
         .background(Color.black)
+        .task {
+            await checkPlexDVRAvailability()
+        }
+        .onChange(of: authManager.isAuthenticated) { _, isAuthenticated in
+            if isAuthenticated {
+                Task {
+                    await checkPlexDVRAvailability()
+                }
+            } else {
+                plexDVRAvailable = false
+            }
+        }
         .fullScreenCover(isPresented: $showAddSourceSheet) {
             AddLiveTVSourceSheet()
         }
         .fullScreenCover(item: $selectedSourceForDetail) { source in
             LiveTVSourceDetailSheet(source: source)
+        }
+    }
+
+    // MARK: - Plex DVR Check
+
+    private func checkPlexDVRAvailability() async {
+        guard authManager.isAuthenticated,
+              let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken,
+              !hasPlexLiveTVSource else {
+            plexDVRAvailable = false
+            return
+        }
+
+        isCheckingPlexDVR = true
+
+        let isAvailable = await PlexLiveTVProvider.checkAvailability(
+            serverURL: serverURL,
+            authToken: token
+        )
+
+        await MainActor.run {
+            plexDVRAvailable = isAvailable
+            isCheckingPlexDVR = false
+        }
+    }
+
+    // MARK: - Auto-Add Plex Live TV
+
+    private func addPlexLiveTV() {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken,
+              let serverName = authManager.savedServerName else {
+            plexAddError = "Plex server not connected"
+            return
+        }
+
+        isAddingPlexLiveTV = true
+        plexAddError = nil
+
+        Task {
+            let provider = PlexLiveTVProvider(
+                serverURL: serverURL,
+                authToken: token,
+                serverName: serverName
+            )
+
+            await dataStore.addPlexSource(provider: provider)
+            await dataStore.loadChannels()
+
+            await MainActor.run {
+                isAddingPlexLiveTV = false
+                // Hide the hint card by updating state - already handled by hasPlexLiveTVSource
+            }
         }
     }
 
@@ -211,6 +284,8 @@ struct AddSourceButton: View {
 // MARK: - Plex Live TV Hint Card
 
 struct PlexLiveTVHintCard: View {
+    var isLoading: Bool = false
+    var errorMessage: String? = nil
     let action: () -> Void
 
     @FocusState private var isFocused: Bool
@@ -218,16 +293,24 @@ struct PlexLiveTVHintCard: View {
     var body: some View {
         VStack(spacing: 20) {
             HStack(spacing: 18) {
-                Image(systemName: "tv.and.mediabox")
-                    .font(.system(size: 36, weight: .medium))
-                    .foregroundStyle(.orange)
+                ZStack {
+                    Image(systemName: "tv.and.mediabox")
+                        .font(.system(size: 36, weight: .medium))
+                        .foregroundStyle(.orange)
+                        .opacity(isLoading ? 0 : 1)
+
+                    if isLoading {
+                        ProgressView()
+                            .tint(.orange)
+                    }
+                }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Plex Live TV Available")
+                    Text(isLoading ? "Adding Plex Live TV..." : "Plex Live TV Available")
                         .font(.system(size: 28, weight: .semibold))
                         .foregroundStyle(.white)
 
-                    Text("Your Plex server may have Live TV. Add it as a source to access channels.")
+                    Text(isLoading ? "Setting up channels from your Plex server" : "Your Plex server has Live TV. Tap to add it.")
                         .font(.system(size: 22))
                         .foregroundStyle(.white.opacity(0.6))
                         .fixedSize(horizontal: false, vertical: true)
@@ -236,14 +319,26 @@ struct PlexLiveTVHintCard: View {
                 Spacer()
             }
 
-            HStack {
-                Spacer()
-                Text("Add Plex Live TV")
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(.blue)
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(.blue)
+            if let error = errorMessage {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.yellow)
+                    Text(error)
+                        .font(.system(size: 20))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if !isLoading {
+                HStack {
+                    Spacer()
+                    Text("Add Plex Live TV")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(.blue)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(.blue)
+                }
             }
         }
         .padding(24)
@@ -256,12 +351,15 @@ struct PlexLiveTVHintCard: View {
                 .stroke(isFocused ? .blue.opacity(0.5) : .clear, lineWidth: 3)
         )
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .focusable()
+        .focusable(!isLoading)
         .focused($isFocused)
         .onTapGesture {
-            action()
+            if !isLoading {
+                action()
+            }
         }
         .animation(.easeOut(duration: 0.15), value: isFocused)
+        .animation(.easeOut(duration: 0.2), value: isLoading)
     }
 }
 

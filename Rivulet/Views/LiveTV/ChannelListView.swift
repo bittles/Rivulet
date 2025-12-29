@@ -35,7 +35,17 @@ struct ChannelListView: View {
             } else {
                 channelGrid
             }
+
+            // Player overlay - using ZStack instead of fullScreenCover to control dismissal
+            if let channel = selectedChannel {
+                LiveTVPlayerView(channel: channel, onDismiss: {
+                    selectedChannel = nil
+                })
+                .transition(.opacity)
+                .zIndex(100)
+            }
         }
+        .animation(.easeInOut(duration: 0.25), value: selectedChannel != nil)
         .task {
             // Load channels if not already loaded
             if dataStore.channels.isEmpty && !dataStore.isLoadingChannels {
@@ -112,9 +122,6 @@ struct ChannelListView: View {
                 .padding(.horizontal, 80)
                 .padding(.bottom, 80)
             }
-        }
-        .fullScreenCover(item: $selectedChannel) { channel in
-            LiveTVPlayerView(channel: channel)
         }
     }
 

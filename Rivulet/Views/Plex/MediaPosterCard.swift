@@ -95,13 +95,13 @@ struct MediaPosterCard: View, Equatable {
             // Poster Image
             posterImage
                 .frame(width: posterWidth, height: posterHeight)
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                 .overlay(alignment: .bottom) {
                     progressOverlay
                 }
                 .overlay(alignment: .topTrailing) {
                     unwatchedBadge
                 }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                 #if os(tvOS)
                 .hoverEffect(.highlight)  // Native tvOS focus effect on poster only
                 // Simple shadow using .shadow() - more efficient than blur during animations

@@ -51,13 +51,16 @@ actor XMLTVParser {
             throw XMLTVParseError.httpError(httpResponse.statusCode)
         }
 
-        return try parse(data: data)
+        return try await parse(data: data)
     }
 
     /// Parse XMLTV data from raw data
-    func parse(data: Data) throws -> ParseResult {
-        let parser = XMLTVInternalParser()
-        return try parser.parse(data: data)
+    func parse(data: Data) async throws -> ParseResult {
+        // XMLParser and its delegate require main actor
+        try await MainActor.run {
+            let parser = XMLTVInternalParser()
+            return try parser.parse(data: data)
+        }
     }
 
     /// Get programs for a specific channel within a time range
@@ -283,7 +286,7 @@ enum XMLTVParseError: LocalizedError {
 
 extension XMLTVParser.ParsedProgram {
     /// Convert to UnifiedProgram
-    func toUnifiedProgram(unifiedChannelId: String) -> UnifiedProgram {
+    nonisolated func toUnifiedProgram(unifiedChannelId: String) -> UnifiedProgram {
         // Create unique ID from channel and start time
         let id = "\(unifiedChannelId):\(Int(start.timeIntervalSince1970))"
 

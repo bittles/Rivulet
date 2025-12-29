@@ -236,6 +236,14 @@ struct PlayerControlsOverlay: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        #if os(tvOS)
+        .onExitCommand {
+            // Close info panel when back/menu is pressed
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                viewModel.showInfoPanel = false
+            }
+        }
+        #endif
     }
 
     /// Column container with header

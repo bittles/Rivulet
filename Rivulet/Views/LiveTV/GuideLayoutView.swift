@@ -20,28 +20,39 @@ struct GuideLayoutView: View {
     @FocusState private var hasFocus: Bool
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                Color.black.ignoresSafeArea()
+        ZStack {
+            GeometryReader { geo in
+                ZStack {
+                    Color.black.ignoresSafeArea()
 
-                if dataStore.channels.isEmpty {
-                    ProgressView()
-                } else {
-                    guideView(size: geo.size)
+                    if dataStore.channels.isEmpty {
+                        ProgressView()
+                    } else {
+                        guideView(size: geo.size)
+                    }
                 }
             }
-        }
-        .onAppear {
-            setupStartTime()
-            if !focusScopeManager.isScopeActive(.sidebar) {
-                focusScopeManager.activate(.guide, savingCurrent: true, pushToStack: true)
+            .onAppear {
+                setupStartTime()
+                if !focusScopeManager.isScopeActive(.sidebar) {
+                    focusScopeManager.activate(.guide, savingCurrent: true, pushToStack: true)
+                }
+            }
+            .task {
+                if dataStore.channels.isEmpty { await dataStore.loadChannels() }
+                if dataStore.epg.isEmpty { await dataStore.loadEPG(startDate: Date(), hours: 6) }
+            }
+
+            // Player overlay - using ZStack instead of fullScreenCover to control dismissal
+            if let channel = selectedChannel {
+                LiveTVPlayerView(channel: channel, onDismiss: {
+                    selectedChannel = nil
+                })
+                .transition(.opacity)
+                .zIndex(100)
             }
         }
-        .task {
-            if dataStore.channels.isEmpty { await dataStore.loadChannels() }
-            if dataStore.epg.isEmpty { await dataStore.loadEPG(startDate: Date(), hours: 6) }
-        }
-        .fullScreenCover(item: $selectedChannel) { LiveTVPlayerView(channel: $0) }
+        .animation(.easeInOut(duration: 0.25), value: selectedChannel != nil)
     }
 
     private func setupStartTime() {

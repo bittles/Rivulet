@@ -49,6 +49,12 @@ class PlexAuthManager: ObservableObject {
     @Published var selectedServer: PlexDevice?
     @Published var selectedServerURL: String?
 
+    /// Whether we can currently reach the Plex server (separate from authentication)
+    @Published var isConnected: Bool = true
+
+    /// Error message when connection fails (displayed to user)
+    @Published var connectionError: String?
+
     // MARK: - Private Properties
 
     private let networkManager = PlexNetworkManager.shared
@@ -123,9 +129,13 @@ class PlexAuthManager: ObservableObject {
                 selectedServerURL = workingURL
                 userDefaults.set(selectedServerURL, forKey: serverURLKey)
                 userDefaults.set(server.name, forKey: serverNameKey)
+                isConnected = true
+                connectionError = nil
                 state = .authenticated
                 print("🔐 PlexAuthManager: Selected connection: \(workingURL)")
             } else {
+                isConnected = false
+                connectionError = "Could not connect to server. Check your network."
                 state = .error(message: "Could not connect to server. Check your network.")
                 scheduleErrorDismissal()
             }
@@ -257,6 +267,8 @@ class PlexAuthManager: ObservableObject {
         username = nil
         selectedServer = nil
         selectedServerURL = nil
+        isConnected = true  // Reset to default
+        connectionError = nil
 
         userDefaults.removeObject(forKey: tokenKey)
         userDefaults.removeObject(forKey: usernameKey)
@@ -273,9 +285,14 @@ class PlexAuthManager: ObservableObject {
         state = .idle
     }
 
-    /// Check if currently authenticated
+    /// Check if currently authenticated (has valid credentials)
     var isAuthenticated: Bool {
         authToken != nil && selectedServerURL != nil
+    }
+
+    /// Check if user has saved Plex credentials (for showing cached content even when offline)
+    var hasCredentials: Bool {
+        authToken != nil && userDefaults.string(forKey: serverURLKey) != nil
     }
 
     /// Get saved server name
@@ -300,6 +317,8 @@ class PlexAuthManager: ObservableObject {
                 }
             } catch {
                 print("🔐 PlexAuthManager: Failed to fetch servers: \(error)")
+                isConnected = false
+                connectionError = "Unable to reach Plex. Check your network connection."
             }
             return
         }
@@ -310,23 +329,35 @@ class PlexAuthManager: ObservableObject {
 
         if await testConnection(currentURL) {
             print("🔐 PlexAuthManager: ✅ Current connection is working")
+            isConnected = true
+            connectionError = nil
         } else {
-            print("🔐 PlexAuthManager: ❌ Current connection failed, re-selecting...")
-            // Clear bad URL and re-fetch servers
-            selectedServerURL = nil
-            userDefaults.removeObject(forKey: serverURLKey)
+            print("🔐 PlexAuthManager: ❌ Current connection failed")
+            isConnected = false
+            connectionError = "Cannot connect to Plex server"
 
+            // Try to find a better connection without clearing credentials
+            // This allows cached content to still be shown
             do {
                 let servers = try await networkManager.getServers(authToken: token)
-                if servers.count == 1 {
-                    selectServer(servers[0])
-                } else if servers.count > 1 {
-                    state = .selectingServer(servers: servers)
+                if let currentServer = servers.first(where: { server in
+                    server.connections.contains { $0.uri == currentURL }
+                }) ?? servers.first {
+                    // Try to find a working connection on this server
+                    if let workingURL = await findBestConnection(for: currentServer) {
+                        selectedServerURL = workingURL
+                        userDefaults.set(selectedServerURL, forKey: serverURLKey)
+                        userDefaults.set(currentServer.name, forKey: serverNameKey)
+                        isConnected = true
+                        connectionError = nil
+                        state = .authenticated
+                        print("🔐 PlexAuthManager: ✅ Found alternative connection: \(workingURL)")
+                    }
                 }
             } catch {
-                print("🔐 PlexAuthManager: Failed to fetch servers: \(error)")
-                state = .error(message: "Could not connect to Plex server")
-                scheduleErrorDismissal()
+                print("🔐 PlexAuthManager: Failed to fetch servers for re-selection: \(error)")
+                // Keep existing credentials - just mark as not connected
+                // User can still see cached content
             }
         }
     }

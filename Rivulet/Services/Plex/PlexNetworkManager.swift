@@ -24,8 +24,8 @@ enum NetworkPriority {
 
 // MARK: - Plex Network Manager
 
-class PlexNetworkManager: NSObject {
-    static let shared = PlexNetworkManager()
+class PlexNetworkManager: NSObject, @unchecked Sendable {
+    nonisolated(unsafe) static let shared = PlexNetworkManager()
 
     // Default timeout for requests
     private let defaultTimeout: TimeInterval = 30.0
@@ -385,7 +385,16 @@ class PlexNetworkManager: NSObject {
         authToken: String,
         ratingKey: String
     ) async throws -> [PlexMetadata] {
-        guard let url = URL(string: "\(serverURL)/library/metadata/\(ratingKey)/children") else {
+        guard var components = URLComponents(string: "\(serverURL)/library/metadata/\(ratingKey)/children") else {
+            throw PlexAPIError.invalidURL
+        }
+
+        // Include markers for skip intro/credits functionality
+        components.queryItems = [
+            URLQueryItem(name: "includeMarkers", value: "1")
+        ]
+
+        guard let url = components.url else {
             throw PlexAPIError.invalidURL
         }
 
@@ -404,7 +413,16 @@ class PlexNetworkManager: NSObject {
         authToken: String,
         ratingKey: String
     ) async throws -> [PlexMetadata] {
-        guard let url = URL(string: "\(serverURL)/library/metadata/\(ratingKey)/allLeaves") else {
+        guard var components = URLComponents(string: "\(serverURL)/library/metadata/\(ratingKey)/allLeaves") else {
+            throw PlexAPIError.invalidURL
+        }
+
+        // Include markers for skip intro/credits functionality
+        components.queryItems = [
+            URLQueryItem(name: "includeMarkers", value: "1")
+        ]
+
+        guard let url = components.url else {
             throw PlexAPIError.invalidURL
         }
 

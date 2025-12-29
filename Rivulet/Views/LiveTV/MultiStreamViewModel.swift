@@ -130,6 +130,9 @@ final class MultiStreamViewModel: ObservableObject {
                 wrapper.setMuted(isMuted)
                 wrapper.play()
                 print("📺 MultiStream: Added channel '\(channel.name)' at slot \(slotIndex), muted: \(isMuted)")
+
+                // Focus the newly added stream
+                setFocus(to: slotIndex)
             } catch {
                 print("📺 MultiStream: Failed to load '\(channel.name)': \(error)")
             }

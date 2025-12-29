@@ -33,9 +33,12 @@ actor ImageCacheManager: NSObject {
     // MARK: - Caches
 
     private let memoryCache = NSCache<NSString, UIImage>()
-    nonisolated private let keyCache = NSCache<NSString, NSString>()
+    private let keyCache = NSCache<NSString, NSString>()
     private var cacheMetadata: [String: ImageCacheEntry] = [:]
     private var metadataLoaded = false
+
+    // tvOS is always 2x scale - static for nonisolated access
+    private static let screenScale: CGFloat = 2.0
 
     // MARK: - URL Session (with SSL handling)
 
@@ -82,15 +85,14 @@ actor ImageCacheManager: NSObject {
 
     // MARK: - Public API
 
-    /// Synchronously check memory cache only (for instant display without loading state).
-    /// Thread-safe: NSCache is thread-safe, so nonisolated access is safe.
-    nonisolated func cachedImage(for url: URL) -> UIImage? {
+    /// Check memory cache only (for instant display without loading state).
+    func cachedImage(for url: URL) -> UIImage? {
         let key = cacheKey(for: url)
         return memoryCache.object(forKey: key as NSString)
     }
 
-    /// Synchronous cache key generation (needed for nonisolated cachedImage)
-    nonisolated private func cacheKey(for url: URL) -> String {
+    /// Cache key generation with memoization
+    private func cacheKey(for url: URL) -> String {
         let urlKey = url.absoluteString as NSString
         if let cachedKey = keyCache.object(forKey: urlKey) {
             return cachedKey as String
@@ -428,7 +430,7 @@ actor ImageCacheManager: NSObject {
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceShouldCacheImmediately: true,  // Decode now (in background)
             kCGImageSourceCreateThumbnailWithTransform: true,  // Apply EXIF orientation
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize * UIScreen.main.scale
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize * Self.screenScale
         ]
 
         guard let downsampledImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, downsampleOptions as CFDictionary) else {

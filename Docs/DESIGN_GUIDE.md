@@ -419,6 +419,242 @@ Always wrap tvOS-specific code:
 
 ---
 
+## Skeleton Loading Placeholders
+
+When loading content that has a known count (e.g., episodes in a season), show skeleton placeholders immediately rather than a spinner. This prevents layout jank and gives users immediate feedback.
+
+### Skeleton Row Pattern
+
+```swift
+struct SkeletonEpisodeRow: View {
+    let episodeNumber: Int
+
+    var body: some View {
+        HStack(spacing: 16) {
+            // Placeholder thumbnail with spinner
+            Rectangle()
+                .fill(Color(white: 0.15))
+                .frame(width: 200, height: 112)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    ProgressView()
+                        .tint(.white.opacity(0.3))
+                }
+
+            VStack(alignment: .leading, spacing: 4) {
+                // Known text (e.g., "Episode 1")
+                Text("Episode \(episodeNumber)")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.white.opacity(0.3))
+
+                // Placeholder bars for unknown content
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.white.opacity(0.1))
+                    .frame(width: 200, height: 22)
+
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.white.opacity(0.08))
+                    .frame(width: 80, height: 18)
+            }
+            Spacer()
+        }
+        // Use dimmer glass styling than interactive rows
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.white.opacity(0.04))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(.white.opacity(0.06), lineWidth: 1)
+                )
+        )
+    }
+}
+```
+
+### Usage Pattern
+
+```swift
+let episodeCount = selectedSeason?.leafCount ?? 0
+if isLoadingEpisodes && episodeCount > 0 {
+    // Show skeleton rows based on known count
+    LazyVStack(spacing: 16) {
+        ForEach(1...episodeCount, id: \.self) { index in
+            SkeletonEpisodeRow(episodeNumber: index)
+        }
+    }
+} else if isLoadingEpisodes {
+    // Fallback to spinner if count unknown
+    ProgressView("Loading episodes...")
+} else if !episodes.isEmpty {
+    // Show actual content
+    LazyVStack(spacing: 16) {
+        ForEach(episodes, id: \.ratingKey) { episode in
+            EpisodeRow(episode: episode, ...)
+        }
+    }
+}
+```
+
+### Skeleton Styling
+
+| Element | Opacity |
+|---------|---------|
+| Background fill | 0.04 |
+| Border | 0.06 |
+| Placeholder bars | 0.08-0.1 |
+| Known text | 0.3 |
+
+---
+
+## Horizontal Scroll Sections
+
+### Full-Bleed Scrolling Pattern
+
+For horizontal scroll sections that need to extend beyond parent padding while keeping content aligned:
+
+```swift
+ScrollView(.horizontal, showsIndicators: false) {
+    HStack(spacing: 24) {
+        ForEach(items) { item in
+            ItemCard(item: item)
+        }
+    }
+    .padding(.horizontal, 48)  // Match parent padding
+    .padding(.vertical, 32)    // Room for shadow/focus overflow
+}
+.padding(.horizontal, -48)     // Extend beyond parent padding
+.scrollClipDisabled()          // Allow shadow/scale overflow
+```
+
+### Focus Section with Default Focus
+
+For sections that should always focus a specific item when entered:
+
+```swift
+ScrollView(.horizontal, showsIndicators: false) {
+    HStack(spacing: 24) {
+        ForEach(items) { item in
+            ItemCard(item: item)
+                .focused($focusedItemId, equals: item.id)
+        }
+    }
+}
+.focusSection()
+#if os(tvOS)
+.defaultFocus($focusedItemId, selectedItem?.id)
+#endif
+```
+
+### Focus Binding Modifiers
+
+When passing FocusState bindings to child views, use a helper modifier:
+
+```swift
+struct ItemFocusModifier: ViewModifier {
+    var focusedItemId: FocusState<String?>.Binding?
+    let itemId: String?
+
+    func body(content: Content) -> some View {
+        if let binding = focusedItemId, let id = itemId {
+            content.focused(binding, equals: id)
+        } else {
+            content
+        }
+    }
+}
+```
+
+---
+
+## Poster Cards vs Glass Rows
+
+### Poster Cards (MediaPosterCard, SeasonPosterCard)
+
+Use `.hoverEffect(.highlight)` on the poster image only - NOT `.scaleEffect()` on the whole card:
+
+```swift
+CachedAsyncImage(url: posterURL) { ... }
+    .frame(width: posterWidth, height: posterHeight)
+    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+    .hoverEffect(.highlight)  // Native tvOS focus on poster only
+    .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 6)
+    .padding(.bottom, 10)     // Space for hover scale effect
+
+// Text labels below poster stay stationary
+Text(title)
+    .font(.system(size: 19, weight: .medium))
+```
+
+**Key differences from glass rows:**
+- No manual `.scaleEffect()` - use `.hoverEffect(.highlight)` instead
+- Add `.padding(.bottom, 10)` to poster for hover effect room
+- Text below the poster remains stationary (doesn't scale)
+- Use `CardButtonStyle()` to remove default focus ring
+
+### Glass Rows (EpisodeRow, AlbumTrackRow)
+
+Use manual `.scaleEffect()` on the whole button:
+
+```swift
+Button(action: onPlay) {
+    HStack { ... }
+    .background(GlassRowBackground(isFocused: isFocused))
+}
+.buttonStyle(CardButtonStyle())
+.focused($isFocused)
+.scaleEffect(isFocused ? 1.02 : 1.0)
+.animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+```
+
+---
+
+## Focus Memory (Section Focus Restoration)
+
+For sections within a view that need to remember and restore focus when navigating between them:
+
+### Usage Pattern
+
+```swift
+@FocusState private var focusedItemId: String?
+
+ScrollView(.horizontal) {
+    HStack(spacing: 24) {
+        ForEach(items, id: \.ratingKey) { item in
+            ItemCard(item: item)
+                .focused($focusedItemId, equals: item.ratingKey)
+        }
+    }
+}
+.focusSection()
+.remembersFocus(key: "uniqueSectionKey", focusedId: $focusedItemId)
+// NO .scrollPosition() - let focus engine handle scrolling
+```
+
+### Key Rules
+
+1. **Never use `.scrollPosition()` with focus-managed sections** - causes scroll jumping
+2. **Always use `.focusSection()`** - helps focus engine navigate between sections
+3. **Use unique memory keys** - e.g., "detailSeasons", "librarySortOptions"
+4. **Let focus engine scroll** - don't manually control scroll position; tvOS auto-scrolls to focused items
+
+### When to Use FocusMemory vs FocusScopeManager
+
+| System | Use Case |
+|--------|----------|
+| FocusMemory | Sections within a view (seasons, episodes, cast) |
+| FocusScopeManager | Isolating focus between views (sidebar, player, overlays) |
+
+### Why Not `.scrollPosition()`?
+
+Using `.scrollPosition()` with `.focused()` creates race conditions:
+- Multiple `onChange` handlers compete to set scroll position
+- Focus engine tries to auto-scroll, but manual scroll overrides it
+- Result: visible scroll jumping
+
+The FocusMemory pattern is simpler: let tvOS focus engine handle scrolling automatically.
+
+---
+
 ## File Locations
 
 | Component Type | Location |
@@ -426,7 +662,8 @@ Always wrap tvOS-specific code:
 | Shared UI components | `Views/Components/` |
 | Settings components | `Views/Settings/SettingsComponents.swift` |
 | Glass row styling | `Views/Components/GlassRowStyle.swift` |
-| Focus management | `Services/Focus/FocusScopeManager.swift` |
+| Focus memory (section focus) | `Services/Focus/FocusMemory.swift` |
+| Focus scope isolation | `Services/Focus/FocusScopeManager.swift` |
 | Image caching | `Views/Components/CachedAsyncImage.swift` |
 | Button styles | `Views/Plex/MediaPosterCard.swift` (CardButtonStyle) |
 

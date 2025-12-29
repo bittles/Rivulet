@@ -16,6 +16,24 @@ enum SettingsDestination: Hashable {
     case cache
 }
 
+// MARK: - Autoplay Countdown
+
+enum AutoplayCountdown: Int, CaseIterable, CustomStringConvertible {
+    case off = 0
+    case fiveSeconds = 5
+    case tenSeconds = 10
+    case twentySeconds = 20
+
+    var description: String {
+        switch self {
+        case .off: return "Off"
+        case .fiveSeconds: return "5 seconds"
+        case .tenSeconds: return "10 seconds"
+        case .twentySeconds: return "20 seconds"
+        }
+    }
+}
+
 // MARK: - Settings View
 
 struct SettingsView: View {
@@ -25,6 +43,11 @@ struct SettingsView: View {
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
     @AppStorage("liveTVLayout") private var liveTVLayoutRaw = LiveTVLayout.channels.rawValue
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
+    @AppStorage("showSkipButton") private var showSkipButton = true
+    @AppStorage("autoSkipIntro") private var autoSkipIntro = false
+    @AppStorage("autoSkipCredits") private var autoSkipCredits = false
+    @AppStorage("useAirPlayAudio") private var useAirPlayAudio = false
+    @AppStorage("autoplayCountdown") private var autoplayCountdownRaw = AutoplayCountdown.fiveSeconds.rawValue
     @Environment(\.focusScopeManager) private var focusScopeManager
     @Environment(\.nestedNavigationState) private var nestedNavState
     @State private var focusTrigger = 0  // Increment to trigger first row focus
@@ -33,6 +56,13 @@ struct SettingsView: View {
         Binding(
             get: { LiveTVLayout(rawValue: liveTVLayoutRaw) ?? .channels },
             set: { liveTVLayoutRaw = $0.rawValue }
+        )
+    }
+
+    private var autoplayCountdown: Binding<AutoplayCountdown> {
+        Binding(
+            get: { AutoplayCountdown(rawValue: autoplayCountdownRaw) ?? .fiveSeconds },
+            set: { autoplayCountdownRaw = $0.rawValue }
         )
     }
 
@@ -140,25 +170,48 @@ struct SettingsView: View {
                             }
                         }
 
-                        // Playback section (for future use)
+                        // Playback section
                         SettingsSection(title: "Playback") {
-                            SettingsRow(
-                                icon: "play.rectangle",
-                                iconColor: .purple,
-                                title: "Video",
-                                subtitle: "Quality and streaming options"
-                            ) {
-                                // Future: Video settings
-                            }
+                            SettingsToggleRow(
+                                icon: "forward.fill",
+                                iconColor: .blue,
+                                title: "Show Skip Button",
+                                subtitle: "Display button to skip intro and credits",
+                                isOn: $showSkipButton
+                            )
 
-                            SettingsRow(
-                                icon: "speaker.wave.3",
-                                iconColor: .pink,
-                                title: "Audio",
-                                subtitle: "Sound and language preferences"
-                            ) {
-                                // Future: Audio settings
-                            }
+                            SettingsToggleRow(
+                                icon: "play.circle",
+                                iconColor: .green,
+                                title: "Auto-Skip Intro",
+                                subtitle: "Automatically skip TV show intros",
+                                isOn: $autoSkipIntro
+                            )
+
+                            SettingsToggleRow(
+                                icon: "stop.circle",
+                                iconColor: .orange,
+                                title: "Auto-Skip Credits",
+                                subtitle: "Automatically skip end credits",
+                                isOn: $autoSkipCredits
+                            )
+
+                            SettingsPickerRow(
+                                icon: "forward.end.alt",
+                                iconColor: .purple,
+                                title: "Autoplay Countdown",
+                                subtitle: "Time before next episode plays",
+                                selection: autoplayCountdown,
+                                options: AutoplayCountdown.allCases
+                            )
+
+                            SettingsToggleRow(
+                                icon: "homepod.2",
+                                iconColor: .indigo,
+                                title: "AirPlay Audio Output",
+                                subtitle: "Enable for HomePod or AirPlay speakers",
+                                isOn: $useAirPlayAudio
+                            )
                         }
 
                         // About section

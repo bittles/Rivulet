@@ -44,6 +44,43 @@ struct PlexExtrasContainer: Codable, Sendable {
     var Metadata: [PlexExtra]?
 }
 
+// MARK: - Marker Model
+
+/// Plex media marker (intro, credits, commercial)
+struct PlexMarker: Codable, Identifiable, Sendable {
+    var id: Int?
+    var type: String?              // "intro", "credits", "commercial"
+    var startTimeOffset: Int?      // Start time in milliseconds
+    var endTimeOffset: Int?        // End time in milliseconds
+
+    /// Start time in seconds
+    var startTimeSeconds: TimeInterval {
+        guard let start = startTimeOffset else { return 0 }
+        return TimeInterval(start) / 1000.0
+    }
+
+    /// End time in seconds
+    var endTimeSeconds: TimeInterval {
+        guard let end = endTimeOffset else { return 0 }
+        return TimeInterval(end) / 1000.0
+    }
+
+    /// Whether this is an intro marker
+    var isIntro: Bool {
+        type == "intro"
+    }
+
+    /// Whether this is a credits/outro marker
+    var isCredits: Bool {
+        type == "credits"
+    }
+
+    /// Whether this is a commercial marker
+    var isCommercial: Bool {
+        type == "commercial"
+    }
+}
+
 // MARK: - Main Metadata Model
 
 /// Plex media item metadata (movie, show, season, episode)
@@ -133,6 +170,9 @@ struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
     // MARK: - Extras (Trailers, etc.)
     var Extras: PlexExtrasContainer?
 
+    // MARK: - Markers (Intro, Credits, etc.)
+    var Marker: [PlexMarker]?
+
     // MARK: - Additional Metadata
     var hasPremiumPrimaryExtra: String?
     var primaryExtraKey: String?
@@ -202,6 +242,7 @@ struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
         Director: [PlexCrewMember]? = nil,
         Writer: [PlexCrewMember]? = nil,
         Extras: PlexExtrasContainer? = nil,
+        Marker: [PlexMarker]? = nil,
         hasPremiumPrimaryExtra: String? = nil,
         primaryExtraKey: String? = nil
     ) {
@@ -258,6 +299,7 @@ struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
         self.Director = Director
         self.Writer = Writer
         self.Extras = Extras
+        self.Marker = Marker
         self.hasPremiumPrimaryExtra = hasPremiumPrimaryExtra
         self.primaryExtraKey = primaryExtraKey
     }
@@ -284,6 +326,21 @@ extension PlexMetadata {
     var viewOffsetFormatted: String? {
         guard let offset = viewOffset else { return nil }
         let totalMinutes = offset / 1000 / 60
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        } else {
+            return "\(minutes)m"
+        }
+    }
+
+    /// Remaining time formatted (duration - viewOffset)
+    var remainingTimeFormatted: String? {
+        guard let offset = viewOffset, let total = duration, total > offset else { return nil }
+        let remainingMs = total - offset
+        let totalMinutes = remainingMs / 1000 / 60
         let hours = totalMinutes / 60
         let minutes = totalMinutes % 60
 
@@ -379,5 +436,27 @@ extension PlexMetadata {
     /// All extras (trailers, behind the scenes, etc.)
     var allExtras: [PlexExtra] {
         Extras?.Metadata ?? []
+    }
+
+    // MARK: - Marker Helpers
+
+    /// Intro marker if available
+    var introMarker: PlexMarker? {
+        Marker?.first { $0.isIntro }
+    }
+
+    /// Credits/outro marker if available
+    var creditsMarker: PlexMarker? {
+        Marker?.first { $0.isCredits }
+    }
+
+    /// Commercial markers if available
+    var commercialMarkers: [PlexMarker] {
+        Marker?.filter { $0.isCommercial } ?? []
+    }
+
+    /// All markers
+    var allMarkers: [PlexMarker] {
+        Marker ?? []
     }
 }

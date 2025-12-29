@@ -50,6 +50,9 @@ struct FocusScope: Hashable, Equatable, CustomStringConvertible {
 
     /// TV Guide layout
     static let guide = FocusScope("guide")
+
+    /// Post-video summary overlay
+    static let postVideo = FocusScope("postVideo")
 }
 
 // MARK: - Focus Item Identifier

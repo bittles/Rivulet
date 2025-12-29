@@ -22,16 +22,20 @@ struct LiveTVPlayerView: View {
     enum FocusArea: Hashable {
         case streamGrid
         case controlButton(Int)
+        case exitConfirmButton(Int)
     }
 
     init(channel: UnifiedChannel) {
         _viewModel = StateObject(wrappedValue: MultiStreamViewModel(initialChannel: channel))
     }
 
+    @Namespace private var playerFocusNamespace
+
     var body: some View {
         ZStack {
             // Background
-            Color.black.ignoresSafeArea()
+            Color.black
+                .ignoresSafeArea()
 
             // Stream grid (or single stream fullscreen)
             // Transaction prevents animations from affecting player views when state changes
@@ -61,7 +65,15 @@ struct LiveTVPlayerView: View {
                 )
                 .transition(.opacity.animation(.easeInOut(duration: 0.2)))
             }
+
+            // Exit confirmation overlay
+            if showExitConfirmation {
+                exitConfirmationOverlay
+                    .transition(.opacity.animation(.easeInOut(duration: 0.2)))
+            }
         }
+        .focusScope(playerFocusNamespace)
+        .prefersDefaultFocus(in: playerFocusNamespace)
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
         .animation(.easeInOut(duration: 0.25), value: showChannelBadges)
         // Don't animate stream count changes - causes issues with MPV player resizing
@@ -125,66 +137,26 @@ struct LiveTVPlayerView: View {
                 viewModel.stopAllStreams()
             }
         }
-        .alert("Exit Multiview?", isPresented: $showExitConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Exit", role: .destructive) {
-                forceExitPlayer()
+        .onChange(of: showExitConfirmation) { _, show in
+            if show {
+                // Focus the Cancel button (index 0) when confirmation appears
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    focusArea = .exitConfirmButton(0)
+                }
             }
-        } message: {
-            Text("You have \(viewModel.streamCount) streams open. Are you sure you want to exit?")
         }
-        // Prevent automatic dismissal when confirmation is needed
-        .interactiveDismissDisabled(confirmExitMultiview && viewModel.streamCount > 1)
+        .animation(.easeInOut(duration: 0.2), value: showExitConfirmation)
+        // Always prevent system dismissal - we handle all exits through onExitCommand
+        .interactiveDismissDisabled(true)
     }
 
     // MARK: - Stream Content
 
-    @ViewBuilder
+    // Always use streamGrid for all stream counts (1-4) to prevent view hierarchy
+    // destruction when transitioning from 1 to 2 streams. The grid layout handles
+    // single streams as a 1x1 fullscreen layout.
     private var streamContent: some View {
-        if viewModel.streamCount == 1, let slot = viewModel.streams.first {
-            // Single stream - fullscreen
-            singleStreamView(slot: slot)
-        } else {
-            // Multiple streams - grid
-            streamGrid
-        }
-    }
-
-    private func singleStreamView(slot: MultiStreamViewModel.StreamSlot) -> some View {
-        ZStack {
-            StreamSlotView(
-                slot: slot,
-                index: 0,
-                isFocused: false,
-                showBorder: false,
-                onControllerReady: { controller in
-                    viewModel.setPlayerController(controller, for: slot.id)
-                }
-            )
-            .id(slot.id)
-            .ignoresSafeArea()
-            .transaction { transaction in
-                transaction.animation = nil
-            }
-
-            // Invisible focusable area to capture Select press and show controls
-            if !viewModel.showControls {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .focusable()
-                    .focused($focusArea, equals: .streamGrid)
-                    .onTapGesture {
-                        // Select pressed - show controls
-                        showControlsWithFocus()
-                    }
-                    #if os(tvOS)
-                    .onMoveCommand { direction in
-                        // Single stream: any d-pad press shows controls
-                        showControlsWithFocus()
-                    }
-                    #endif
-            }
-        }
+        streamGrid
     }
 
     private var streamGrid: some View {
@@ -237,28 +209,52 @@ struct LiveTVPlayerView: View {
                     #endif
             }
         }
+        .ignoresSafeArea()
     }
 
     private func layoutFrames(for size: CGSize) -> [UUID: CGRect] {
         var frames: [UUID: CGRect] = [:]
-        let spacing: CGFloat = 2
+
+        // Single stream: use full screen, no spacing or aspect ratio constraints
+        // (MPV handles letterboxing internally)
+        if viewModel.streamCount == 1, let slot = viewModel.streams.first {
+            frames[slot.id] = CGRect(x: 0, y: 0, width: size.width, height: size.height)
+            return frames
+        }
+
+        let spacing: CGFloat = 8
+        let aspect: CGFloat = 16.0 / 9.0
 
         if case .focus(let mainId) = viewModel.layoutMode, viewModel.streamCount > 1 {
             let mainSlot = viewModel.streams.first(where: { $0.id == mainId }) ?? viewModel.streams.first
             let sideStreams = viewModel.streams.filter { $0.id != mainSlot?.id }
-
-            let mainWidth = size.width * 0.72
-            let sideWidth = max(size.width - mainWidth - spacing, 0)
             let sideCount = max(sideStreams.count, 1)
-            let sideSlotHeight = sideCount > 0 ? (size.height - spacing * CGFloat(sideCount - 1)) / CGFloat(sideCount) : 0
+
+            // Main stream: 75% width, maintain 16:9 aspect ratio
+            let mainWidth = size.width * 0.75
+            let mainHeight = min(mainWidth / aspect, size.height)
+            let actualMainWidth = mainHeight * aspect  // Recalculate if height-constrained
+
+            // Side streams: remaining width, stacked vertically with 16:9 aspect
+            let sideWidth = size.width - actualMainWidth - spacing * 2
+            let sideSlotHeight = sideWidth / aspect
+            let totalSideHeight = sideSlotHeight * CGFloat(sideCount) + spacing * CGFloat(sideCount - 1)
+
+            // Center everything vertically
+            let mainY = (size.height - mainHeight) / 2
+            let sideStartY = (size.height - totalSideHeight) / 2
+
+            // Center everything horizontally
+            let totalWidth = actualMainWidth + spacing + sideWidth
+            let startX = (size.width - totalWidth) / 2
 
             if let mainSlot {
-                frames[mainSlot.id] = CGRect(x: 0, y: 0, width: mainWidth, height: size.height)
+                frames[mainSlot.id] = CGRect(x: startX, y: mainY, width: actualMainWidth, height: mainHeight)
             }
 
-            var currentY: CGFloat = 0
+            var currentY = sideStartY
             for slot in sideStreams {
-                frames[slot.id] = CGRect(x: mainWidth + spacing, y: currentY, width: sideWidth, height: sideSlotHeight)
+                frames[slot.id] = CGRect(x: startX + actualMainWidth + spacing, y: currentY, width: sideWidth, height: sideSlotHeight)
                 currentY += sideSlotHeight + spacing
             }
         } else {
@@ -267,7 +263,6 @@ struct LiveTVPlayerView: View {
             let availableHeight = size.height - CGFloat(layout.rows - 1) * spacing
             let slotWidth = availableWidth / CGFloat(layout.columns)
             let maxRowHeight = availableHeight / CGFloat(layout.rows)
-            let aspect: CGFloat = 16.0 / 9.0
             let slotHeight = min(slotWidth / aspect, maxRowHeight)
             let totalHeight = slotHeight * CGFloat(layout.rows) + spacing * CGFloat(layout.rows - 1)
             let verticalPadding = max(0, (size.height - totalHeight) / 2)
@@ -352,8 +347,10 @@ struct LiveTVPlayerView: View {
             if newIndex != currentIndex {
                 viewModel.setFocus(to: newIndex)
             }
+        } else {
+            // Single stream: any d-pad press shows controls
+            showControlsWithFocus()
         }
-        // Single stream: Select shows controls (handled by Button action)
     }
     #endif
 
@@ -421,6 +418,92 @@ struct LiveTVPlayerView: View {
                     .padding(.bottom, 60)
             }
         }
+        #if os(tvOS)
+        .onExitCommand {
+            // Menu/Back pressed while controls visible - hide controls
+            withAnimation(.easeOut(duration: 0.2)) {
+                viewModel.showControls = false
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                focusArea = .streamGrid
+            }
+        }
+        #endif
+    }
+
+    private var exitConfirmationOverlay: some View {
+        ZStack {
+            // Dimmed background
+            Color.black.opacity(0.7)
+                .ignoresSafeArea()
+
+            // Confirmation dialog
+            VStack(spacing: 24) {
+                Text("Exit Multiview?")
+                    .font(.system(size: 36, weight: .bold))
+                    .foregroundStyle(.white)
+
+                Text("You have \(viewModel.streamCount) streams open.")
+                    .font(.system(size: 22))
+                    .foregroundStyle(.white.opacity(0.7))
+
+                HStack(spacing: 40) {
+                    // Cancel button
+                    Button {
+                        showExitConfirmation = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            focusArea = .streamGrid
+                        }
+                    } label: {
+                        Text("Cancel")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 160, height: 54)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(focusArea == .exitConfirmButton(0) ? .white.opacity(0.3) : .white.opacity(0.15))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .focused($focusArea, equals: .exitConfirmButton(0))
+
+                    // Exit button
+                    Button {
+                        forceExitPlayer()
+                    } label: {
+                        Text("Exit")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 160, height: 54)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(focusArea == .exitConfirmButton(1) ? .red.opacity(0.8) : .red.opacity(0.5))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .focused($focusArea, equals: .exitConfirmButton(1))
+                }
+                .padding(.top, 16)
+            }
+            .padding(48)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .glassEffect(
+                .regular,
+                in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+            )
+        }
+        #if os(tvOS)
+        .onExitCommand {
+            // Menu/Back on confirmation = cancel
+            showExitConfirmation = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                focusArea = .streamGrid
+            }
+        }
+        #endif
     }
 
     private var topBar: some View {
@@ -634,10 +717,20 @@ struct LiveTVPlayerView: View {
 
     #if os(tvOS)
     private func handleExitCommand() {
-        if viewModel.showChannelPicker {
+        print("📺 handleExitCommand: showExitConfirmation=\(showExitConfirmation), showChannelPicker=\(viewModel.showChannelPicker), showControls=\(viewModel.showControls), streamCount=\(viewModel.streamCount)")
+        if showExitConfirmation {
+            // Cancel the confirmation and return to streams
+            print("📺 handleExitCommand: Cancelling exit confirmation")
+            showExitConfirmation = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                focusArea = .streamGrid
+            }
+        } else if viewModel.showChannelPicker {
+            print("📺 handleExitCommand: Closing channel picker")
             viewModel.showChannelPicker = false
         } else if viewModel.showControls {
             // Hide controls and return focus to stream grid
+            print("📺 handleExitCommand: Hiding controls")
             withAnimation(.easeOut(duration: 0.2)) {
                 viewModel.showControls = false
             }
@@ -645,6 +738,7 @@ struct LiveTVPlayerView: View {
                 focusArea = .streamGrid
             }
         } else {
+            print("📺 handleExitCommand: Calling dismissPlayer")
             dismissPlayer()
         }
     }

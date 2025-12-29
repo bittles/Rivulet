@@ -39,7 +39,6 @@ struct CachedAsyncImage<Content: View>: View {
 
     @State private var phase: CachedAsyncImagePhase = .empty
     @State private var loadTask: Task<Void, Never>?
-    @State private var hasInitialized = false
 
     init(url: URL?, @ViewBuilder content: @escaping (CachedAsyncImagePhase) -> Content) {
         self.url = url
@@ -48,15 +47,6 @@ struct CachedAsyncImage<Content: View>: View {
 
     var body: some View {
         content(phase)
-            .onAppear {
-                // Synchronous memory cache check for instant display
-                if !hasInitialized {
-                    hasInitialized = true
-                    if let url, let cached = ImageCacheManager.shared.cachedImage(for: url) {
-                        phase = .success(Image(uiImage: cached))
-                    }
-                }
-            }
             .task(id: url) {
                 await loadImage()
             }
@@ -74,10 +64,11 @@ struct CachedAsyncImage<Content: View>: View {
             return
         }
 
-        // Skip loading if already have cached image (from onAppear sync check)
-        if case .success = phase {
+        // Quick memory cache check first (nearly instant)
+        if let cached = await ImageCacheManager.shared.cachedImage(for: url) {
+            phase = .success(Image(uiImage: cached))
             // Still trigger background refresh for stale-while-revalidate
-            loadTask = Task {
+            Task.detached(priority: .low) {
                 _ = await ImageCacheManager.shared.image(for: url)
             }
             return

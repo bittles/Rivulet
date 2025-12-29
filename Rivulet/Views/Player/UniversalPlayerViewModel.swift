@@ -95,6 +95,36 @@ enum SubtitlePreferenceManager {
     }
 }
 
+// MARK: - Post-Video State
+
+/// State machine for post-video summary experience
+enum PostVideoState: Equatable {
+    case hidden
+    case loading
+    case showingEpisodeSummary
+    case showingMovieSummary
+}
+
+/// Video frame state for shrink animation
+enum VideoFrameState: Equatable {
+    case fullscreen
+    case shrunk
+
+    var scale: CGFloat {
+        switch self {
+        case .fullscreen: return 1.0
+        case .shrunk: return 0.25  // 25% size - roughly 480x270 on 1920x1080
+        }
+    }
+
+    var offset: CGSize {
+        switch self {
+        case .fullscreen: return .zero
+        case .shrunk: return CGSize(width: 60, height: 60)  // Padding from top-left corner
+        }
+    }
+}
+
 @MainActor
 final class UniversalPlayerViewModel: ObservableObject {
 
@@ -109,7 +139,23 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published var showControls = true
     @Published var showInfoPanel = false
     @Published var isScrubbing = false
+
+    // MARK: - Skip Marker State
+    @Published private(set) var activeMarker: PlexMarker?
+    @Published private(set) var showSkipButton = false
+    private var hasSkippedIntro = false
+    private var hasSkippedCredits = false
+    private var hasTriggeredPostVideo = false
     @Published var scrubTime: TimeInterval = 0
+
+    // MARK: - Post-Video State
+    @Published var postVideoState: PostVideoState = .hidden
+    @Published var videoFrameState: VideoFrameState = .fullscreen
+    @Published private(set) var nextEpisode: PlexMetadata?
+    @Published private(set) var recommendations: [PlexMetadata] = []
+    @Published var countdownSeconds: Int = 0
+    @Published var isCountdownPaused: Bool = false
+    private var countdownTimer: Timer?
     @Published var scrubThumbnail: UIImage?
     @Published private(set) var scrubSpeed: Int = 0  // -6 to 6, 0 = not scrubbing
     @Published private(set) var audioTracks: [MediaTrack] = []
@@ -198,7 +244,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - Metadata
 
-    let metadata: PlexMetadata
+    private(set) var metadata: PlexMetadata
     var title: String { metadata.title ?? "Unknown" }
     var subtitle: String? {
         if metadata.type == "episode" {
@@ -338,6 +384,11 @@ final class UniversalPlayerViewModel: ObservableObject {
                         UIApplication.shared.isIdleTimerDisabled = false
                     }
                 }
+
+                // Handle video end - show post-video summary
+                if state == .ended {
+                    Task { await self?.handlePlaybackEnded() }
+                }
             }
             .store(in: &cancellables)
 
@@ -349,6 +400,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                 if let wrapper = self?.mpvPlayerWrapper, wrapper.duration > 0 {
                     self?.duration = wrapper.duration
                 }
+                // Check for markers at current time
+                self?.checkMarkers(at: time)
             }
             .store(in: &cancellables)
 
@@ -381,6 +434,23 @@ final class UniversalPlayerViewModel: ObservableObject {
             errorMessage = "No stream URL available"
             playbackState = .failed(.invalidURL)
             return
+        }
+
+        // Fetch detailed metadata with markers if not already present
+        if metadata.Marker == nil || metadata.Marker?.isEmpty == true {
+            print("⏭️ [Skip] No markers in initial metadata, fetching detailed metadata...")
+            await fetchMarkersIfNeeded()
+        }
+
+        // Log marker info at playback start
+        if let intro = metadata.introMarker {
+            print("⏭️ [Skip] Intro marker found: \(intro.startTimeSeconds)s - \(intro.endTimeSeconds)s")
+        }
+        if let credits = metadata.creditsMarker {
+            print("⏭️ [Skip] Credits marker found: \(credits.startTimeSeconds)s - \(credits.endTimeSeconds)s")
+        }
+        if metadata.Marker == nil || metadata.Marker?.isEmpty == true {
+            print("⏭️ [Skip] No markers found in metadata (even after fetch)")
         }
 
         do {
@@ -694,12 +764,486 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Marker Detection & Skipping
+
+    /// How many seconds before a marker to show the skip button
+    private let markerPreviewTime: TimeInterval = 5.0
+
+    /// Check if current time is within a marker range (or approaching one)
+    /// Also triggers post-video summary at credits marker or 45s before end
+    private func checkMarkers(at time: TimeInterval) {
+        // Don't check while scrubbing or if post-video already showing
+        guard !isScrubbing, postVideoState == .hidden else { return }
+
+        // Check intro marker (show 5 seconds early)
+        if let intro = metadata.introMarker {
+            let previewStart = max(0, intro.startTimeSeconds - markerPreviewTime)
+
+            // Reset skip flag if user rewound before the marker
+            if time < previewStart && hasSkippedIntro {
+                hasSkippedIntro = false
+            }
+
+            if time >= previewStart && time < intro.endTimeSeconds {
+                handleMarkerActive(intro, isIntro: true)
+                return
+            }
+        }
+
+        // Check credits marker - trigger post-video when credits START
+        if let credits = metadata.creditsMarker {
+            let previewStart = max(0, credits.startTimeSeconds - markerPreviewTime)
+
+            // Reset flags if user rewound before the marker
+            if time < previewStart {
+                if hasSkippedCredits { hasSkippedCredits = false }
+                if hasTriggeredPostVideo { hasTriggeredPostVideo = false }
+            }
+
+            // Trigger post-video summary when credits start (not when skip button would show)
+            if time >= credits.startTimeSeconds && !hasTriggeredPostVideo {
+                hasTriggeredPostVideo = true
+                print("🎬 [PostVideo] Credits marker started at \(credits.startTimeSeconds)s, triggering summary")
+                Task { await handlePlaybackEnded() }
+                return
+            }
+
+            // Show skip button 5 seconds early (before credits actually start)
+            if time >= previewStart && time < credits.startTimeSeconds {
+                handleMarkerActive(credits, isIntro: false)
+                return
+            }
+        }
+
+        // No credits marker - trigger post-video 45 seconds before end
+        if metadata.creditsMarker == nil && duration > 60 {
+            let triggerTime = duration - 45
+
+            // Reset flag if user rewound before trigger point
+            if time < triggerTime - 10 && hasTriggeredPostVideo {
+                hasTriggeredPostVideo = false
+            }
+
+            if time >= triggerTime && !hasTriggeredPostVideo {
+                hasTriggeredPostVideo = true
+                print("🎬 [PostVideo] 45s before end (no credits marker), triggering summary at \(time)s")
+                Task { await handlePlaybackEnded() }
+                return
+            }
+        }
+
+        // No active marker
+        if activeMarker != nil {
+            activeMarker = nil
+            showSkipButton = false
+        }
+    }
+
+    /// Handle when playback enters a marker range
+    private func handleMarkerActive(_ marker: PlexMarker, isIntro: Bool) {
+        let autoSkipIntro = UserDefaults.standard.bool(forKey: "autoSkipIntro")
+        let autoSkipCredits = UserDefaults.standard.bool(forKey: "autoSkipCredits")
+        let showSkipButtonSetting = UserDefaults.standard.object(forKey: "showSkipButton") as? Bool ?? true
+
+        // Check for auto-skip
+        if isIntro && autoSkipIntro && !hasSkippedIntro {
+            hasSkippedIntro = true
+            Task { await skipActiveMarker() }
+            return
+        }
+
+        if !isIntro && autoSkipCredits && !hasSkippedCredits {
+            hasSkippedCredits = true
+            Task { await skipActiveMarker() }
+            return
+        }
+
+        // Show skip button if enabled and not already skipped
+        if showSkipButtonSetting {
+            let alreadySkipped = isIntro ? hasSkippedIntro : hasSkippedCredits
+            if !alreadySkipped && activeMarker == nil {
+                // Only log and set when first entering the marker range
+                activeMarker = marker
+                showSkipButton = true
+                let markerType = isIntro ? "intro" : "credits"
+                print("⏭️ [Skip] Showing skip button for \(markerType) marker: \(marker.startTimeSeconds)s - \(marker.endTimeSeconds)s")
+            }
+        }
+    }
+
+    /// Skip to end of current marker
+    func skipActiveMarker() async {
+        guard let marker = activeMarker ?? metadata.introMarker ?? metadata.creditsMarker else { return }
+
+        // Mark as skipped to prevent re-showing button if user seeks back
+        if marker.isIntro {
+            hasSkippedIntro = true
+        } else if marker.isCredits {
+            hasSkippedCredits = true
+        }
+
+        // Seek to end of marker
+        await seek(to: marker.endTimeSeconds)
+
+        // Hide button
+        activeMarker = nil
+        showSkipButton = false
+    }
+
+    /// Label for current skip button
+    var skipButtonLabel: String {
+        guard let marker = activeMarker else { return "Skip" }
+        if marker.isIntro {
+            return "Skip Intro"
+        } else if marker.isCredits {
+            return "Skip Credits"
+        }
+        return "Skip"
+    }
+
+    /// Fetch detailed metadata with markers if not already present
+    private func fetchMarkersIfNeeded() async {
+        guard let ratingKey = metadata.ratingKey else {
+            print("⏭️ [Skip] No rating key for metadata fetch")
+            return
+        }
+
+        do {
+            let networkManager = PlexNetworkManager.shared
+            let detailedMetadata = try await networkManager.getFullMetadata(
+                serverURL: serverURL,
+                authToken: authToken,
+                ratingKey: ratingKey
+            )
+
+            // Update metadata with markers from detailed fetch
+            if let markers = detailedMetadata.Marker, !markers.isEmpty {
+                metadata.Marker = markers
+                print("⏭️ [Skip] Fetched \(markers.count) markers from detailed metadata")
+            } else {
+                print("⏭️ [Skip] Detailed metadata also has no markers")
+            }
+        } catch {
+            print("⏭️ [Skip] Failed to fetch detailed metadata: \(error)")
+        }
+    }
+
+    // MARK: - Post-Video Handling
+
+    /// Handle video end - transition to post-video summary
+    func handlePlaybackEnded() async {
+        // Don't re-enter if already showing post-video
+        guard postVideoState == .hidden else { return }
+
+        print("🎬 [PostVideo] Playback ended, preparing summary...")
+        print("🎬 [PostVideo] Content type: \(metadata.type ?? "nil")")
+        print("🎬 [PostVideo] Title: \(metadata.title ?? "nil")")
+        print("🎬 [PostVideo] parentRatingKey (season): \(metadata.parentRatingKey ?? "nil")")
+        print("🎬 [PostVideo] grandparentRatingKey (show): \(metadata.grandparentRatingKey ?? "nil")")
+        print("🎬 [PostVideo] Current episode index: \(metadata.index ?? -1)")
+
+        postVideoState = .loading
+
+        let isEpisode = metadata.type == "episode"
+
+        if isEpisode {
+            // If parent metadata is missing (e.g., from Continue Watching), fetch full metadata first
+            if metadata.parentRatingKey == nil || metadata.index == nil {
+                print("🎬 [PostVideo] Missing parent metadata, fetching full metadata...")
+                await fetchFullMetadataIfNeeded()
+                print("🎬 [PostVideo] After fetch - parentRatingKey: \(metadata.parentRatingKey ?? "nil"), index: \(metadata.index ?? -1)")
+            }
+
+            // Fetch next episode
+            nextEpisode = await fetchNextEpisode()
+            print("🎬 [PostVideo] Next episode result: \(nextEpisode?.title ?? "nil")")
+
+            // Animate video shrink
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+                videoFrameState = .shrunk
+            }
+            print("🎬 [PostVideo] Video frame set to shrunk")
+
+            // Show episode summary after brief delay
+            try? await Task.sleep(nanoseconds: 200_000_000)  // 0.2s
+            postVideoState = .showingEpisodeSummary
+            print("🎬 [PostVideo] State set to showingEpisodeSummary")
+
+            // Start countdown if enabled and next episode exists
+            if nextEpisode != nil {
+                print("🎬 [PostVideo] Starting autoplay countdown")
+                startAutoplayCountdown()
+            } else {
+                print("🎬 [PostVideo] No next episode, skipping countdown")
+            }
+        } else {
+            // Movie - fetch recommendations
+            recommendations = await fetchRecommendations()
+
+            // Animate video shrink
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+                videoFrameState = .shrunk
+            }
+
+            // Show movie summary after brief delay
+            try? await Task.sleep(nanoseconds: 200_000_000)  // 0.2s
+            postVideoState = .showingMovieSummary
+        }
+    }
+
+    /// Fetch full metadata if parent keys are missing (e.g., from Continue Watching)
+    private func fetchFullMetadataIfNeeded() async {
+        guard let ratingKey = metadata.ratingKey else {
+            print("🎬 [PostVideo] No rating key for full metadata fetch")
+            return
+        }
+
+        let networkManager = PlexNetworkManager.shared
+
+        do {
+            let fullMetadata = try await networkManager.getMetadata(
+                serverURL: serverURL,
+                authToken: authToken,
+                ratingKey: ratingKey
+            )
+
+            // Update our metadata with the parent keys
+            if metadata.parentRatingKey == nil {
+                metadata.parentRatingKey = fullMetadata.parentRatingKey
+            }
+            if metadata.grandparentRatingKey == nil {
+                metadata.grandparentRatingKey = fullMetadata.grandparentRatingKey
+            }
+            if metadata.parentIndex == nil {
+                metadata.parentIndex = fullMetadata.parentIndex
+            }
+            if metadata.grandparentTitle == nil {
+                metadata.grandparentTitle = fullMetadata.grandparentTitle
+            }
+            if metadata.index == nil {
+                metadata.index = fullMetadata.index
+            }
+
+            print("🎬 [PostVideo] Updated metadata from full fetch:")
+            print("🎬 [PostVideo]   parentRatingKey: \(metadata.parentRatingKey ?? "nil")")
+            print("🎬 [PostVideo]   grandparentRatingKey: \(metadata.grandparentRatingKey ?? "nil")")
+            print("🎬 [PostVideo]   parentIndex (season): \(metadata.parentIndex ?? -1)")
+            print("🎬 [PostVideo]   index (episode): \(metadata.index ?? -1)")
+        } catch {
+            print("🎬 [PostVideo] Failed to fetch full metadata: \(error)")
+        }
+    }
+
+    /// Fetch the next episode for TV shows
+    func fetchNextEpisode() async -> PlexMetadata? {
+        print("🎬 [PostVideo] fetchNextEpisode called")
+        print("🎬 [PostVideo] seasonKey (parentRatingKey): \(metadata.parentRatingKey ?? "nil")")
+        print("🎬 [PostVideo] currentIndex: \(metadata.index ?? -1)")
+
+        guard let seasonKey = metadata.parentRatingKey,
+              let currentIndex = metadata.index else {
+            print("🎬 [PostVideo] FAILED: No season key or episode index")
+            return nil
+        }
+
+        let networkManager = PlexNetworkManager.shared
+
+        do {
+            // Get all episodes in current season
+            print("🎬 [PostVideo] Fetching episodes for season: \(seasonKey)")
+            let episodes = try await networkManager.getChildren(
+                serverURL: serverURL,
+                authToken: authToken,
+                ratingKey: seasonKey
+            )
+            print("🎬 [PostVideo] Got \(episodes.count) episodes in season")
+
+            // Find next episode in season
+            if let nextEp = episodes.first(where: { $0.index == currentIndex + 1 }) {
+                print("🎬 [PostVideo] Found next episode: S\(nextEp.parentIndex ?? 0)E\(nextEp.index ?? 0) - \(nextEp.title ?? "?")")
+                return nextEp
+            }
+            print("🎬 [PostVideo] No episode with index \(currentIndex + 1) found, trying next season...")
+
+            // End of season - try next season
+            guard let showKey = metadata.grandparentRatingKey,
+                  let seasonIndex = metadata.parentIndex else {
+                print("🎬 [PostVideo] End of season, no show key for next season lookup")
+                return nil
+            }
+
+            let seasons = try await networkManager.getChildren(
+                serverURL: serverURL,
+                authToken: authToken,
+                ratingKey: showKey
+            )
+
+            guard let nextSeason = seasons.first(where: { $0.index == seasonIndex + 1 }),
+                  let nextSeasonKey = nextSeason.ratingKey else {
+                print("🎬 [PostVideo] End of series - no next season")
+                return nil
+            }
+
+            let nextSeasonEpisodes = try await networkManager.getChildren(
+                serverURL: serverURL,
+                authToken: authToken,
+                ratingKey: nextSeasonKey
+            )
+
+            if let firstEp = nextSeasonEpisodes.first {
+                print("🎬 [PostVideo] Found first episode of next season: S\(firstEp.parentIndex ?? 0)E\(firstEp.index ?? 0)")
+                return firstEp
+            }
+
+            return nil
+        } catch {
+            print("🎬 [PostVideo] Failed to fetch next episode: \(error)")
+            return nil
+        }
+    }
+
+    /// Fetch recommendations for movies
+    func fetchRecommendations() async -> [PlexMetadata] {
+        guard let ratingKey = metadata.ratingKey else { return [] }
+
+        let networkManager = PlexNetworkManager.shared
+
+        do {
+            let related = try await networkManager.getRelatedItems(
+                serverURL: serverURL,
+                authToken: authToken,
+                ratingKey: ratingKey,
+                limit: 10
+            )
+            print("🎬 [PostVideo] Fetched \(related.count) recommendations")
+            return related
+        } catch {
+            print("🎬 [PostVideo] Failed to fetch recommendations: \(error)")
+            return []
+        }
+    }
+
+    /// Start autoplay countdown timer
+    func startAutoplayCountdown() {
+        let countdownSetting = UserDefaults.standard.integer(forKey: "autoplayCountdown")
+
+        // 0 means disabled
+        guard countdownSetting > 0 else {
+            print("🎬 [PostVideo] Autoplay countdown disabled")
+            return
+        }
+
+        countdownSeconds = countdownSetting
+        isCountdownPaused = false
+
+        countdownTimer?.invalidate()
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self = self else { return }
+                guard !self.isCountdownPaused else { return }
+
+                self.countdownSeconds -= 1
+
+                if self.countdownSeconds <= 0 {
+                    self.countdownTimer?.invalidate()
+                    await self.playNextEpisode()
+                }
+            }
+        }
+    }
+
+    /// Cancel countdown but stay on summary
+    func cancelCountdown() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        isCountdownPaused = true
+        print("🎬 [PostVideo] Countdown cancelled")
+    }
+
+    /// Play the next episode
+    func playNextEpisode() async {
+        guard let next = nextEpisode else { return }
+
+        print("🎬 [PostVideo] Playing next episode: \(next.title ?? "Unknown")")
+
+        // Stop countdown
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+
+        // Reset post-video state
+        postVideoState = .hidden
+        videoFrameState = .fullscreen
+
+        // Update metadata to next episode
+        metadata = next
+
+        // Reset skip tracking for new episode
+        hasSkippedIntro = false
+        hasSkippedCredits = false
+        hasTriggeredPostVideo = false
+        nextEpisode = nil
+
+        // Prepare new stream URL
+        await prepareStreamURL()
+
+        // Start playback
+        await startPlayback()
+    }
+
+    /// Dismiss post-video overlay and reset state
+    func dismissPostVideo() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        postVideoState = .hidden
+        videoFrameState = .fullscreen
+        nextEpisode = nil
+        recommendations = []
+        countdownSeconds = 0
+        isCountdownPaused = false
+        hasTriggeredPostVideo = false
+    }
+
+    // MARK: - Navigation
+
+    /// Navigate to the current episode's season
+    func navigateToSeason() {
+        guard let seasonKey = metadata.parentRatingKey else { return }
+        stopPlayback()
+        dismissPostVideo()
+        NotificationCenter.default.post(
+            name: .navigateToContent,
+            object: nil,
+            userInfo: ["ratingKey": seasonKey, "type": "season"]
+        )
+    }
+
+    /// Navigate to the current episode's show
+    func navigateToShow() {
+        guard let showKey = metadata.grandparentRatingKey else { return }
+        stopPlayback()
+        dismissPostVideo()
+        NotificationCenter.default.post(
+            name: .navigateToContent,
+            object: nil,
+            userInfo: ["ratingKey": showKey, "type": "show"]
+        )
+    }
+
     // MARK: - Cleanup
 
     deinit {
         controlsTimer?.invalidate()
         scrubTimer?.invalidate()
+        countdownTimer?.invalidate()
         // Ensure screensaver is re-enabled when player is deallocated
         UIApplication.shared.isIdleTimerDisabled = false
     }
+}
+
+// MARK: - Navigation Notifications
+
+extension Notification.Name {
+    /// Posted when player requests navigation to a specific content item
+    /// userInfo contains: "ratingKey" (String), "type" (String: "show", "season", "movie")
+    static let navigateToContent = Notification.Name("navigateToContent")
 }

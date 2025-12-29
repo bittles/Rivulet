@@ -29,6 +29,7 @@ final class MPVMetalViewController: UIViewController {
     private var currentState: MPVPlayerState = .idle
     private var isShuttingDown = false
     private var lastKnownSize: CGSize = .zero
+    private var previousDrawableSize: CGSize = .zero
     private var resizeWorkItem: DispatchWorkItem?
 
     // MARK: - Simulator Detection
@@ -112,7 +113,11 @@ final class MPVMetalViewController: UIViewController {
     private func forceVideoResize() {
         guard mpv != nil, !isShuttingDown else { return }
 
-        print("🎬 MPV: Forcing video resize to \(lastKnownSize)")
+        let currentDrawable = metalLayer.drawableSize
+        let isGrowing = currentDrawable.width > previousDrawableSize.width ||
+                        currentDrawable.height > previousDrawableSize.height
+
+        print("🎬 MPV: Forcing video resize to \(lastKnownSize), drawable: \(previousDrawableSize) -> \(currentDrawable), growing: \(isGrowing)")
 
         // Force the Metal layer to redraw at new size
         CATransaction.begin()
@@ -120,13 +125,17 @@ final class MPVMetalViewController: UIViewController {
         metalLayer.setNeedsDisplay()
         CATransaction.commit()
 
-        // For live streams, skip the aggressive reconfigure - GPU scaling is sufficient
+        // For live streams when shrinking, skip the aggressive reconfigure - GPU scaling is sufficient
         // This prevents visual glitches when resizing in multiview
-        if isLiveStreamMode {
+        // But when GROWING, we must tell MPV to render at the new larger size
+        if isLiveStreamMode && !isGrowing {
+            previousDrawableSize = currentDrawable
             return
         }
 
-        // For VOD, tell MPV to reconfigure by toggling a harmless property
+        previousDrawableSize = currentDrawable
+
+        // Tell MPV to reconfigure by toggling a harmless property
         queue.async { [weak self] in
             guard let self, self.mpv != nil, !self.isShuttingDown else { return }
 
@@ -168,8 +177,23 @@ final class MPVMetalViewController: UIViewController {
             height: min(screenSize.height, baseHeight)
         )
 
-        if metalLayer.drawableSize != targetSize {
-            metalLayer.drawableSize = targetSize
+        // For live streams: only grow the drawable, never shrink it while rendering.
+        // Shrinking can cause Metal validation errors when MPV's render pass is still
+        // configured for the old larger size. The frame shrinks (for display) but the
+        // drawable stays at the max size to avoid renderTargetWidth > attachmentWidth.
+        let currentDrawable = metalLayer.drawableSize
+        let safeTargetSize: CGSize
+        if isLiveStreamMode && hasSetupMpv {
+            safeTargetSize = CGSize(
+                width: max(currentDrawable.width, targetSize.width),
+                height: max(currentDrawable.height, targetSize.height)
+            )
+        } else {
+            safeTargetSize = targetSize
+        }
+
+        if metalLayer.drawableSize != safeTargetSize {
+            metalLayer.drawableSize = safeTargetSize
         }
         CATransaction.commit()
 
@@ -199,27 +223,38 @@ final class MPVMetalViewController: UIViewController {
         // Clear the wakeup callback to prevent dangling pointer
         mpv_set_wakeup_callback(mpv, nil, nil)
 
-        // Stop playback first
+        // Stop playback first - this begins GPU resource cleanup
         command("stop")
 
         #if targetEnvironment(simulator)
-        // On simulator, we need to be extra careful about Metal resource cleanup
-        // Wait for any in-flight GPU commands before touching the metal layer
-        Thread.sleep(forTimeInterval: 0.1)
+        // Simulator: MoltenVK software rendering needs more time for GPU flush
+        // Wait for in-flight commands before any layer modifications
+        Thread.sleep(forTimeInterval: 0.3)
         #endif
 
-        // Remove metal layer from view to stop rendering
-        metalLayer.removeFromSuperlayer()
-
-        // Tell MPV to quit gracefully - this flushes GPU commands
+        // Tell MPV to quit gracefully BEFORE removing layer
+        // This allows MPV to properly flush Vulkan command queues
         command("quit")
 
-        // Wait for GPU to finish all pending commands
-        // MoltenVK needs time to complete Vulkan->Metal translation
-        // This is longer in simulator due to software rendering
         #if targetEnvironment(simulator)
-        Thread.sleep(forTimeInterval: 0.8)  // Increased for multi-stream stability
+        // Wait for MPV to process quit and flush GPU commands
+        // MoltenVK command buffer completion is slower in simulator
+        Thread.sleep(forTimeInterval: 1.0)
         #else
+        Thread.sleep(forTimeInterval: 0.2)
+        #endif
+
+        // NOW remove metal layer - after GPU work is complete
+        if Thread.isMainThread {
+            metalLayer.removeFromSuperlayer()
+        } else {
+            DispatchQueue.main.sync {
+                metalLayer.removeFromSuperlayer()
+            }
+        }
+
+        #if targetEnvironment(simulator)
+        // Final wait for any deferred cleanup
         Thread.sleep(forTimeInterval: 0.2)
         #endif
 
@@ -268,14 +303,41 @@ final class MPVMetalViewController: UIViewController {
             print("🎬 MPV: Using device settings (gpu-next + Metal + VideoToolbox + HDR)")
         }
 
-        // Subtitles
-        checkError(mpv_set_option_string(mpv, "subs-match-os-language", "yes"))
-        checkError(mpv_set_option_string(mpv, "subs-fallback", "yes"))
+        // Audio configuration
+        // Force 5.1 max to avoid audiounit sp255-sp255 bug with 8-channel layouts
+        // This affects PCM output; passthrough codecs bypass this entirely
+        checkError(mpv_set_option_string(mpv, "audio-channels", "5.1"))
+
+        // Force downmix of 7.1 to 5.1 to avoid audiounit crash with 8 channels
+        checkError(mpv_set_option_string(mpv, "af", "lavfi=[aformat=channel_layouts=5.1|stereo]"))
+
+        // Audio buffer for smoother playback (default ~0.2s can cause stuttering with high-bitrate content)
+        // Note: This option may not be available in all MPV builds - fail silently
+        let audioBufferResult = mpv_set_option_string(mpv, "audio-buffer", "0.5")
+        if audioBufferResult < 0 {
+            print("🎬 MPV: audio-buffer option not available (error \(audioBufferResult)), using default")
+        }
+
+        let useAirPlayAudio = UserDefaults.standard.bool(forKey: "useAirPlayAudio")
+        if useAirPlayAudio {
+            // AirPlay/HomePod: 5.1 is already set, no passthrough possible
+            print("🎬 MPV: Using AirPlay audio mode (5.1 channels)")
+        } else {
+            // HDMI receiver: Enable passthrough for compressed surround formats
+            // These bypass the channel limit and go directly to receiver
+            checkError(mpv_set_option_string(mpv, "audio-spdif", "ac3,eac3,dts-hd,truehd"))
+            print("🎬 MPV: Using HDMI mode (5.1 PCM, passthrough for AC3/DTS/TrueHD)")
+        }
+
+        // Subtitles - use standard MPV options
         checkError(mpv_set_option_string(mpv, "sub-auto", "fuzzy"))
+        checkError(mpv_set_option_string(mpv, "slang", "en,eng"))  // Prefer English subtitles
 
         // Performance
-        checkError(mpv_set_option_string(mpv, "video-rotate", "no"))
-        checkError(mpv_set_option_string(mpv, "ytdl", "no"))
+        // video-rotate=0 means no rotation
+        checkError(mpv_set_option_string(mpv, "video-rotate", "0"))
+        // Disable youtube-dl integration (not needed, saves startup time)
+        mpv_set_option_string(mpv, "ytdl", "no")  // May not exist in all builds
 
         // Network & buffering - use smaller buffers for live streams to reduce CPU/memory
         checkError(mpv_set_option_string(mpv, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1"))
@@ -365,6 +427,8 @@ final class MPVMetalViewController: UIViewController {
     func stop() {
         command("stop")
         updateState(.idle)
+        // Trigger full shutdown to ensure clean state for next player instance
+        shutdownMpv()
     }
 
     func seek(to seconds: Double) {

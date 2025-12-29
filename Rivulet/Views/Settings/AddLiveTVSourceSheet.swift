@@ -122,7 +122,7 @@ struct AddLiveTVSourceSheet: View {
                         icon: "server.rack",
                         iconColor: .blue,
                         title: "M3U Server",
-                        subtitle: "Server with M3U and EPG endpoints (like Dispatcharr)"
+                        subtitle: "Server with M3U and EPG endpoints"
                     ) {
                         selectedSourceType = .dispatcharr
                     }
