@@ -90,7 +90,6 @@ struct PlayerProgressBar: View {
             isSeeking = true
 
             let stepSmall = 0.005  // ~0.5% per tap for fine control
-            let stepLarge = 0.02   // ~2% for faster seeking
 
             switch direction {
             case .left:

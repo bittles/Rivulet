@@ -16,7 +16,6 @@ struct PersonCard: View {
     let thumbURL: URL?
     let serverURL: String
     let authToken: String
-    var isDirector: Bool = false
 
     #if os(tvOS)
     private let cardWidth: CGFloat = 160
@@ -24,52 +23,32 @@ struct PersonCard: View {
     private let cornerRadius: CGFloat = 16
     private let nameFont: CGFloat = 19
     private let subtitleFont: CGFloat = 16
-    private let badgeSize: CGFloat = 36
     #else
     private let cardWidth: CGFloat = 120
     private let cardHeight: CGFloat = 180
     private let cornerRadius: CGFloat = 12
     private let nameFont: CGFloat = 15
     private let subtitleFont: CGFloat = 13
-    private let badgeSize: CGFloat = 24
     #endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Photo - full card is the image
-            ZStack(alignment: .topTrailing) {
-                personImage
-                    .frame(width: cardWidth, height: cardHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                    #if os(tvOS)
-                    .hoverEffect(.highlight)
-                    // GPU-accelerated shadow: blur is hardware-accelerated, unlike .shadow() with large radius
-                    .background(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(.black)
-                            .blur(radius: 12)
-                            .offset(y: 6)
-                            .opacity(0.4)
-                    )
-                    #endif
-
-                // Director badge
-                if isDirector {
-                    ZStack {
-                        Circle()
-                            .fill(.orange.gradient)
-                            .frame(width: badgeSize, height: badgeSize)
-
-                        Image(systemName: "megaphone.fill")
-                            .font(.system(size: badgeSize * 0.5, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
-                    .padding(10)
-                }
-            }
-            #if os(tvOS)
-            .padding(.bottom, 10)  // Space for hover scale effect
-            #endif
+            personImage
+                .frame(width: cardWidth, height: cardHeight)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                #if os(tvOS)
+                .hoverEffect(.highlight)
+                // GPU-accelerated shadow: blur is hardware-accelerated, unlike .shadow() with large radius
+                .background(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(.black)
+                        .blur(radius: 12)
+                        .offset(y: 6)
+                        .opacity(0.4)
+                )
+                .padding(.bottom, 10)  // Space for hover scale effect
+                #endif
 
             // Name and role - below image like MediaPosterCard
             VStack(alignment: .leading, spacing: 6) {
@@ -151,7 +130,6 @@ struct PersonCard: View {
 struct CastCrewRow: View {
     let cast: [PlexRole]
     let directors: [PlexCrewMember]
-    let writers: [PlexCrewMember]
     let serverURL: String
     let authToken: String
 
@@ -173,8 +151,7 @@ struct CastCrewRow: View {
                                 subtitle: "Director",
                                 thumbURL: director.thumb.flatMap { URL(string: $0) },
                                 serverURL: serverURL,
-                                authToken: authToken,
-                                isDirector: true
+                                authToken: authToken
                             )
                         }
                         #if os(tvOS)
@@ -201,27 +178,6 @@ struct CastCrewRow: View {
                         .buttonStyle(.plain)
                         #endif
                     }
-
-                    // Writers (if not already a director)
-                    ForEach(writers) { writer in
-                        let isDirector = directors.contains { $0.tag == writer.tag }
-                        if !isDirector {
-                            Button { } label: {
-                                PersonCard(
-                                    name: writer.tag ?? "Unknown",
-                                    subtitle: "Writer",
-                                    thumbURL: writer.thumb.flatMap { URL(string: $0) },
-                                    serverURL: serverURL,
-                                    authToken: authToken
-                                )
-                            }
-                            #if os(tvOS)
-                            .buttonStyle(CardButtonStyle())
-                            #else
-                            .buttonStyle(.plain)
-                            #endif
-                        }
-                    }
                 }
                 .padding(.horizontal, 48)
                 .padding(.vertical, 32)
@@ -241,8 +197,7 @@ struct CastCrewRow: View {
             subtitle: "Walter White",
             thumbURL: nil,
             serverURL: "http://localhost:32400",
-            authToken: "test",
-            isDirector: true
+            authToken: "test"
         )
     }
 }

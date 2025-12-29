@@ -142,16 +142,19 @@ struct GuideLayoutView: View {
         .buttonStyle(GuideButtonStyle())
         .focused($hasFocus)
         .focusSection()  // Prevent focus from escaping to sidebar trigger
+        .focusable(selectedChannel == nil)  // Disable focus when player is showing
         .onAppear { hasFocus = true }
         .onMoveCommand { dir in
+            guard selectedChannel == nil else { return }  // Don't handle when player is showing
             handleNav(dir)
         }
         .onExitCommand {
+            guard selectedChannel == nil else { return }  // Don't handle when player is showing
             hasFocus = false
             openSidebar()
         }
         .onChange(of: focusScopeManager.isScopeActive(.sidebar)) { _, active in
-            if !active { hasFocus = true }
+            if !active && selectedChannel == nil { hasFocus = true }
         }
     }
 

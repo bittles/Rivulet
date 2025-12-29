@@ -606,7 +606,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func startScrubTimer() {
         scrubTimer?.invalidate()
         scrubTimer = Timer.scheduledTimer(withTimeInterval: scrubUpdateInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+            guard let self else { return }
+            Task { @MainActor [weak self] in
                 self?.updateScrubFromTimer()
             }
         }
@@ -753,12 +754,12 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func startControlsHideTimer() {
         controlsTimer?.invalidate()
         controlsTimer = Timer.scheduledTimer(withTimeInterval: controlsHideDelay, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                guard let self = self else { return }
-                if self.playbackState == .playing {
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        self.showControls = false
-                    }
+            guard let self else { return }
+            let isPlaying = self.playbackState == .playing
+            Task { @MainActor [weak self] in
+                guard let self, isPlaying else { return }
+                withAnimation(.easeOut(duration: 0.3)) {
+                    self.showControls = false
                 }
             }
         }
@@ -1236,7 +1237,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         scrubTimer?.invalidate()
         countdownTimer?.invalidate()
         // Ensure screensaver is re-enabled when player is deallocated
-        UIApplication.shared.isIdleTimerDisabled = false
+        Task { @MainActor in
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
     }
 }
 

@@ -191,7 +191,7 @@ struct PlexDVR: Codable, Sendable {
 
 extension PlexLiveTVChannel {
     /// Convert to UnifiedChannel
-    nonisolated func toUnifiedChannel(sourceId: String, serverURL: String, authToken: String) -> UnifiedChannel {
+    func toUnifiedChannel(sourceId: String, serverURL: String, authToken: String) -> UnifiedChannel {
         let channelId = UnifiedChannel.makeId(
             sourceType: .plex,
             sourceId: sourceId,
@@ -226,7 +226,7 @@ extension PlexLiveTVChannel {
         )
     }
 
-    private nonisolated func buildPlexLiveTVStreamURL(serverURL: String, authToken: String, channelKey: String) -> URL {
+    private func buildPlexLiveTVStreamURL(serverURL: String, authToken: String, channelKey: String) -> URL {
         // Plex Live TV uses HLS streaming
         var components = URLComponents(string: "\(serverURL)\(channelKey)")!
         components.queryItems = [
@@ -241,7 +241,7 @@ extension PlexLiveTVChannel {
 
 extension PlexLiveTVProgram {
     /// Convert to UnifiedProgram
-    nonisolated func toUnifiedProgram(unifiedChannelId: String) -> UnifiedProgram? {
+    func toUnifiedProgram(unifiedChannelId: String) -> UnifiedProgram? {
         guard let start = startDate, let end = endDate else {
             return nil
         }

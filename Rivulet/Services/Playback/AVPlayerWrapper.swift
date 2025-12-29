@@ -167,11 +167,14 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
 
         // Observe player rate (playing/paused)
         rateObservation = player.observe(\.rate, options: [.new]) { [weak self] player, _ in
-            Task { @MainActor in
-                guard let self = self else { return }
-                if player.rate > 0 {
+            guard let self else { return }
+            let rate = player.rate
+            let currentState = self.playbackStateSubject.value
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if rate > 0 {
                     self.playbackStateSubject.send(.playing)
-                } else if self.playbackStateSubject.value == .playing {
+                } else if currentState == .playing {
                     self.playbackStateSubject.send(.paused)
                 }
             }
@@ -179,14 +182,18 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
 
         // Observe player item status
         itemStatusObservation = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
-            Task { @MainActor in
-                guard let self = self else { return }
-                switch item.status {
+            guard let self else { return }
+            let status = item.status
+            let duration = item.duration.seconds
+            let errorMessage = item.error?.localizedDescription
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch status {
                 case .readyToPlay:
-                    self._duration = item.duration.seconds.isFinite ? item.duration.seconds : 0
+                    self._duration = duration.isFinite ? duration : 0
                     // Don't set playing here - let rate observation handle it
                 case .failed:
-                    let message = item.error?.localizedDescription ?? "Unknown error"
+                    let message = errorMessage ?? "Unknown error"
                     self.playbackStateSubject.send(.failed(.unknown(message)))
                     self.errorSubject.send(.unknown(message))
                 case .unknown:
@@ -200,8 +207,9 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         // Observe time updates
         let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            Task { @MainActor in
-                self?.timeSubject.send(time.seconds)
+            let seconds = time.seconds
+            Task { @MainActor [weak self] in
+                self?.timeSubject.send(seconds)
             }
         }
 

@@ -286,7 +286,7 @@ enum XMLTVParseError: LocalizedError {
 
 extension XMLTVParser.ParsedProgram {
     /// Convert to UnifiedProgram
-    nonisolated func toUnifiedProgram(unifiedChannelId: String) -> UnifiedProgram {
+    func toUnifiedProgram(unifiedChannelId: String) -> UnifiedProgram {
         // Create unique ID from channel and start time
         let id = "\(unifiedChannelId):\(Int(start.timeIntervalSince1970))"
 

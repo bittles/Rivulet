@@ -51,6 +51,7 @@ final class MultiStreamViewModel: ObservableObject {
         }
     }
     @Published var layoutMode: LayoutMode = .grid
+    @Published var replaceSlotIndex: Int? = nil  // Set when replacing a stream
 
     // MARK: - Private State
 
@@ -77,6 +78,19 @@ final class MultiStreamViewModel: ObservableObject {
 
     var streamCount: Int {
         streams.count
+    }
+
+    /// Returns true if currently in focus layout mode
+    var isFocusLayout: Bool {
+        if case .focus = layoutMode { return true }
+        return false
+    }
+
+    /// Returns true if focused stream is NOT the main/expanded stream (i.e., it's in the sidebar)
+    var isFocusedStreamInSidebar: Bool {
+        guard case .focus(let mainId) = layoutMode,
+              let focusedId = focusedStream?.id else { return false }
+        return focusedId != mainId
     }
 
     // MARK: - Initialization
@@ -222,6 +236,62 @@ final class MultiStreamViewModel: ObservableObject {
         layoutMode = .grid
     }
 
+    /// Expands the currently focused sidebar stream to be the main stream
+    func expandFocusedStream() {
+        guard let focusedId = focusedStream?.id else { return }
+        // Simply make the focused stream the new main - keeps focus on it
+        layoutMode = .focus(mainId: focusedId)
+        print("📺 MultiStream: Expanded focused stream to main")
+    }
+
+    /// Replaces the stream at the given index with a new channel
+    func replaceStream(at index: Int, with channel: UnifiedChannel) async {
+        guard index >= 0, index < streams.count else { return }
+        guard !activeChannelIds.contains(channel.id) else { return }
+
+        let oldSlot = streams[index]
+
+        // Stop and cleanup old player
+        oldSlot.playerWrapper.stop()
+        cancellables.removeValue(forKey: oldSlot.id)
+
+        // Create new slot
+        let wrapper = MPVPlayerWrapper()
+        let isMuted = index != focusedSlotIndex  // Mute if not focused
+
+        var newSlot = StreamSlot(
+            channel: channel,
+            playerWrapper: wrapper,
+            isMuted: isMuted
+        )
+        newSlot.currentProgram = LiveTVDataStore.shared.getCurrentProgram(for: channel)
+
+        // Replace in array
+        streams[index] = newSlot
+
+        // Subscribe to state changes
+        subscribeToSlot(at: index)
+
+        // Update focus layout if the replaced stream was the main one
+        if case .focus(let mainId) = layoutMode, mainId == oldSlot.id {
+            layoutMode = .focus(mainId: newSlot.id)
+        }
+
+        // Start playback
+        if let url = LiveTVDataStore.shared.buildStreamURL(for: channel) {
+            do {
+                try await wrapper.load(url: url, headers: [:], startTime: nil)
+                wrapper.setMuted(isMuted)
+                wrapper.play()
+                print("📺 MultiStream: Replaced stream at slot \(index) with '\(channel.name)'")
+            } catch {
+                print("📺 MultiStream: Failed to load replacement '\(channel.name)': \(error)")
+            }
+        }
+
+        replaceSlotIndex = nil
+    }
+
     // MARK: - Playback Controls
 
     func togglePlayPauseOnFocused() {
@@ -275,7 +345,8 @@ final class MultiStreamViewModel: ObservableObject {
     private func startControlsHideTimer() {
         controlsTimer?.invalidate()
         controlsTimer = Timer.scheduledTimer(withTimeInterval: controlsHideDelay, repeats: false) { [weak self] _ in
-            Task { @MainActor in
+            guard let self else { return }
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 // Hide controls after timeout - user can press Select to show again
                 // Note: Timer is cancelled when picker opens, so this won't fire during picker
@@ -312,7 +383,9 @@ final class MultiStreamViewModel: ObservableObject {
     deinit {
         controlsTimer?.invalidate()
         // Ensure screensaver is re-enabled when Live TV is deallocated
-        UIApplication.shared.isIdleTimerDisabled = false
+        Task { @MainActor in
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
     }
 }
 

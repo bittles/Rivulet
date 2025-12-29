@@ -61,7 +61,8 @@ final class MPVMetalViewController: UIViewController {
         view.clipsToBounds = true
         view.layer.masksToBounds = true
 
-        metalLayer.contentsScale = UIScreen.main.nativeScale
+        // Use trait collection scale instead of deprecated UIScreen.main
+        metalLayer.contentsScale = view.traitCollection.displayScale
         metalLayer.framebufferOnly = true
         metalLayer.backgroundColor = UIColor.black.cgColor
 
@@ -168,7 +169,8 @@ final class MPVMetalViewController: UIViewController {
         // Pick a drawable size that matches the view aspect, is large enough for MPV blits,
         // and never exceeds the screen's native size. We don't downscale below the view size
         // to avoid triggering Metal validation on large copies.
-        let screenSize = UIScreen.main.nativeBounds.size
+        // Get screen from window scene, fallback to a reasonable default size for 4K
+        let screenSize = view.window?.windowScene?.screen.nativeBounds.size ?? CGSize(width: 3840, height: 2160)
         let baseWidth = max(newSize.width * metalLayer.contentsScale, 1)
         let baseHeight = max(newSize.height * metalLayer.contentsScale, 1)
         // Clamp strictly to screen to avoid oversized blits; no expansion beyond needed
@@ -200,7 +202,7 @@ final class MPVMetalViewController: UIViewController {
         view.setNeedsLayout()
         view.layoutIfNeeded()
 
-        print("🎬 MPV: updateForContainerSize new=\(newSize), bounds=\(view.bounds.size), frame=\(view.frame.size), layer=\(metalLayer.frame.size), drawable=\(metalLayer.drawableSize), scale=\(metalLayer.contentsScale), screen=\(UIScreen.main.nativeBounds.size)")
+        print("🎬 MPV: updateForContainerSize new=\(newSize), bounds=\(view.bounds.size), frame=\(view.frame.size), layer=\(metalLayer.frame.size), drawable=\(metalLayer.drawableSize), scale=\(metalLayer.contentsScale), screen=\(screenSize)")
 
         lastKnownSize = newSize
 
@@ -280,7 +282,9 @@ final class MPVMetalViewController: UIViewController {
         #endif
 
         // Rendering - use different settings for simulator vs device
-        checkError(mpv_set_option(mpv, "wid", MPV_FORMAT_INT64, &metalLayer))
+        // Pass the metal layer as an Int64 pointer value to MPV
+        var layerPtr = Int64(Int(bitPattern: Unmanaged.passUnretained(metalLayer).toOpaque()))
+        checkError(mpv_set_option(mpv, "wid", MPV_FORMAT_INT64, &layerPtr))
 
         if isSimulator {
             // Simulator: Use 'gpu' renderer (more stable with MoltenVK)
@@ -311,9 +315,10 @@ final class MPVMetalViewController: UIViewController {
         // Force downmix of 7.1 to 5.1 to avoid audiounit crash with 8 channels
         checkError(mpv_set_option_string(mpv, "af", "lavfi=[aformat=channel_layouts=5.1|stereo]"))
 
-        // Audio buffer for smoother playback (default ~0.2s can cause stuttering with high-bitrate content)
+        // Audio buffer for smoother playback (default ~0.2s can cause stuttering with high-bitrate 4K content)
+        // 1 second buffer provides headroom for 4K HDR streams at 100+ Mbps
         // Note: This option may not be available in all MPV builds - fail silently
-        let audioBufferResult = mpv_set_option_string(mpv, "audio-buffer", "0.5")
+        let audioBufferResult = mpv_set_option_string(mpv, "audio-buffer", "1.0")
         if audioBufferResult < 0 {
             print("🎬 MPV: audio-buffer option not available (error \(audioBufferResult)), using default")
         }
@@ -361,10 +366,13 @@ final class MPVMetalViewController: UIViewController {
 
             print("🎬 MPV: Using live stream optimized settings (minimal processing, GPU scaling)")
         } else {
-            // VOD: larger buffers for smooth playback
+            // VOD: larger buffers for smooth 4K HDR playback (100+ Mbps streams)
+            // 250MiB forward buffer + 30s readahead provides ~30 seconds of 4K content
             checkError(mpv_set_option_string(mpv, "cache", "yes"))
-            checkError(mpv_set_option_string(mpv, "demuxer-max-bytes", "150MiB"))
-            checkError(mpv_set_option_string(mpv, "demuxer-max-back-bytes", "75MiB"))
+            checkError(mpv_set_option_string(mpv, "demuxer-max-bytes", "250MiB"))
+            checkError(mpv_set_option_string(mpv, "demuxer-max-back-bytes", "100MiB"))
+            checkError(mpv_set_option_string(mpv, "cache-secs", "30"))
+            checkError(mpv_set_option_string(mpv, "demuxer-readahead-secs", "30"))
         }
 
         checkError(mpv_initialize(mpv))
@@ -394,7 +402,7 @@ final class MPVMetalViewController: UIViewController {
 
         updateState(.loading)
 
-        var args = [url.absoluteString, "replace"]
+        let args = [url.absoluteString, "replace"]
 
         // Add HTTP headers if provided
         if let headers = httpHeaders, !headers.isEmpty {

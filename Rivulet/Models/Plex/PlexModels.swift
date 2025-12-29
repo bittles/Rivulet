@@ -11,7 +11,7 @@ import Foundation
 // MARK: - Plex API Configuration
 
 /// Plex API constants
-enum PlexAPI {
+enum PlexAPI: Sendable {
     static let baseUrl = "https://plex.tv"
     static let clientIdentifier = "com.gstudios.rivulet"
     static let productName = "Rivulet"

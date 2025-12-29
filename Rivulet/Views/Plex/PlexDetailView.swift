@@ -117,7 +117,6 @@ struct PlexDetailView: View {
                     CastCrewRow(
                         cast: metadata.cast,
                         directors: metadata.Director ?? [],
-                        writers: metadata.Writer ?? [],
                         serverURL: authManager.selectedServerURL ?? "",
                         authToken: authManager.authToken ?? ""
                     )
@@ -985,6 +984,7 @@ struct PlexDetailView: View {
                 }
                 #if os(tvOS)
                 .padding(.horizontal, 8)  // Room for focus scale effect
+                .focusSection()
                 #endif
             }
         }
@@ -1403,52 +1403,41 @@ struct SeasonPosterCard: View {
     private let cornerRadius: CGFloat = 12
     #endif
 
+    /// Season is fully watched when all episodes have been viewed
+    private var isFullyWatched: Bool {
+        guard let leafCount = season.leafCount,
+              let viewedLeafCount = season.viewedLeafCount,
+              leafCount > 0 else { return false }
+        return viewedLeafCount >= leafCount
+    }
+
     var body: some View {
         Button(action: onSelect) {
             VStack(alignment: .center, spacing: 12) {
-                // Season poster
-                CachedAsyncImage(url: posterURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    case .empty:
-                        Rectangle()
-                            .fill(Color(white: 0.15))
-                            .overlay { ProgressView().tint(.white.opacity(0.3)) }
-                    case .failure:
-                        Rectangle()
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color(white: 0.18), Color(white: 0.12)],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                            .overlay {
-                                Image(systemName: "number.square")
-                                    .font(.system(size: 32, weight: .light))
-                                    .foregroundStyle(.white.opacity(0.3))
-                            }
+                // Season poster - structure matches MediaPosterCard
+                posterImage
+                    .frame(width: posterWidth, height: posterHeight)
+                    .overlay(alignment: .topTrailing) {
+                        // Watched indicator (corner triangle tag) - inside clipShape so it curves
+                        if isFullyWatched {
+                            WatchedCornerTag()
+                        }
                     }
-                }
-                .frame(width: posterWidth, height: posterHeight)
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                #if os(tvOS)
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(isSelected ? Color.blue : Color.clear, lineWidth: 4)
-                )
-                .hoverEffect(.highlight)  // Native tvOS focus effect on poster only
-                .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 6)
-                .padding(.bottom, 10)  // Space for hover scale effect
-                #else
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(isSelected ? Color.blue : Color.clear, lineWidth: 3)
-                )
-                #endif
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    #if os(tvOS)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .strokeBorder(isSelected ? Color.blue : Color.clear, lineWidth: 4)
+                    )
+                    .hoverEffect(.highlight)  // Native tvOS focus effect - scales poster AND badge
+                    .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 6)
+                    .padding(.bottom, 10)  // Space for hover scale effect
+                    #else
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .strokeBorder(isSelected ? Color.blue : Color.clear, lineWidth: 3)
+                    )
+                    #endif
 
                 // Season label
                 VStack(spacing: 4) {
@@ -1486,6 +1475,35 @@ struct SeasonPosterCard: View {
             return String(format: "Season %02d", index)
         }
         return season.title ?? "Season"
+    }
+
+    private var posterImage: some View {
+        CachedAsyncImage(url: posterURL) { phase in
+            switch phase {
+            case .success(let image):
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            case .empty:
+                Rectangle()
+                    .fill(Color(white: 0.15))
+                    .overlay { ProgressView().tint(.white.opacity(0.3)) }
+            case .failure:
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [Color(white: 0.18), Color(white: 0.12)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .overlay {
+                        Image(systemName: "number.square")
+                            .font(.system(size: 32, weight: .light))
+                            .foregroundStyle(.white.opacity(0.3))
+                    }
+            }
+        }
     }
 
     private var posterURL: URL? {

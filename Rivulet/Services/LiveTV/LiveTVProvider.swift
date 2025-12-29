@@ -75,7 +75,7 @@ struct UnifiedChannel: Identifiable, Hashable, Sendable {
     }
 
     /// Create a unique identifier combining source and channel
-    static func makeId(sourceType: LiveTVSourceType, sourceId: String, channelId: String) -> String {
+    nonisolated static func makeId(sourceType: LiveTVSourceType, sourceId: String, channelId: String) -> String {
         "\(sourceType.rawValue):\(sourceId):\(channelId)"
     }
 }

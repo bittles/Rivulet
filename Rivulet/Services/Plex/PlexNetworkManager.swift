@@ -25,7 +25,7 @@ enum NetworkPriority {
 // MARK: - Plex Network Manager
 
 class PlexNetworkManager: NSObject, @unchecked Sendable {
-    nonisolated(unsafe) static let shared = PlexNetworkManager()
+    static let shared = PlexNetworkManager()
 
     // Default timeout for requests
     private let defaultTimeout: TimeInterval = 30.0

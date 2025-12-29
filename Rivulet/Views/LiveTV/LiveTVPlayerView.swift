@@ -10,11 +10,13 @@ import Combine
 
 struct LiveTVPlayerView: View {
     @StateObject private var viewModel: MultiStreamViewModel
-    @Environment(\.dismiss) private var dismiss
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
     @State private var showExitConfirmation = false
     @State private var showChannelBadges = true
     @State private var channelBadgeTimer: Timer?
+
+    // Dismiss callback - used instead of @Environment(\.dismiss) since we use ZStack overlay
+    private let onDismiss: () -> Void
 
     // Focus management
     @FocusState private var focusArea: FocusArea?
@@ -25,8 +27,9 @@ struct LiveTVPlayerView: View {
         case exitConfirmButton(Int)
     }
 
-    init(channel: UnifiedChannel) {
+    init(channel: UnifiedChannel, onDismiss: @escaping () -> Void) {
         _viewModel = StateObject(wrappedValue: MultiStreamViewModel(initialChannel: channel))
+        self.onDismiss = onDismiss
     }
 
     @Namespace private var playerFocusNamespace
@@ -50,17 +53,32 @@ struct LiveTVPlayerView: View {
                     .transition(.opacity.animation(.easeInOut(duration: 0.25)))
             }
 
-            // Channel picker
+            // Channel picker (for adding or replacing streams)
             if viewModel.showChannelPicker {
+                // When replacing, don't exclude the current channel (user might want to re-select it)
+                let excludedIds: Set<String> = {
+                    if viewModel.replaceSlotIndex != nil,
+                       let currentId = viewModel.focusedStream?.channel.id {
+                        return viewModel.activeChannelIds.subtracting([currentId])
+                    }
+                    return viewModel.activeChannelIds
+                }()
                 ChannelPickerSheet(
-                    excludedChannelIds: viewModel.activeChannelIds,
+                    excludedChannelIds: excludedIds,
                     onSelect: { channel in
                         Task {
-                            await viewModel.addChannel(channel)
+                            if let replaceIndex = viewModel.replaceSlotIndex {
+                                // Replace the stream at the specified index
+                                await viewModel.replaceStream(at: replaceIndex, with: channel)
+                            } else {
+                                // Add a new stream
+                                await viewModel.addChannel(channel)
+                            }
                         }
                     },
                     onDismiss: {
                         viewModel.showChannelPicker = false
+                        viewModel.replaceSlotIndex = nil
                     }
                 )
                 .transition(.opacity.animation(.easeInOut(duration: 0.2)))
@@ -73,7 +91,8 @@ struct LiveTVPlayerView: View {
             }
         }
         .focusScope(playerFocusNamespace)
-        .prefersDefaultFocus(in: playerFocusNamespace)
+        .focusSection()
+        .defaultFocus($focusArea, .streamGrid)
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
         .animation(.easeInOut(duration: 0.25), value: showChannelBadges)
         // Don't animate stream count changes - causes issues with MPV player resizing
@@ -124,11 +143,19 @@ struct LiveTVPlayerView: View {
             }
         }
         .onAppear {
+            print("📺 LiveTVPlayerView onAppear")
             // Start with controls hidden, focus on stream grid
             viewModel.showControls = false
-            focusArea = .streamGrid
+            // Delay focus grab slightly to ensure view is laid out
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                print("📺 LiveTVPlayerView setting focusArea to .streamGrid")
+                focusArea = .streamGrid
+            }
             // Show badges initially then auto-hide
             showChannelBadgesTemporarily()
+        }
+        .onChange(of: focusArea) { oldValue, newValue in
+            print("📺 focusArea changed: \(String(describing: oldValue)) → \(String(describing: newValue))")
         }
         .onDisappear {
             channelBadgeTimer?.invalidate()
@@ -146,8 +173,6 @@ struct LiveTVPlayerView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: showExitConfirmation)
-        // Always prevent system dismissal - we handle all exits through onExitCommand
-        .interactiveDismissDisabled(true)
     }
 
     // MARK: - Stream Content
@@ -193,11 +218,12 @@ struct LiveTVPlayerView: View {
             }
 
             // Invisible focusable overlay for stream navigation
-            if !viewModel.showControls {
+            if !viewModel.showControls && !showExitConfirmation {
                 Color.clear
                     .contentShape(Rectangle())
                     .focusable()
                     .focused($focusArea, equals: .streamGrid)
+                    .prefersDefaultFocus(in: playerFocusNamespace)
                     .onTapGesture {
                         // Select pressed - show controls
                         showControlsWithFocus()
@@ -205,6 +231,9 @@ struct LiveTVPlayerView: View {
                     #if os(tvOS)
                     .onMoveCommand { direction in
                         handleStreamNavigation(direction)
+                    }
+                    .onExitCommand {
+                        handleExitCommand()
                     }
                     #endif
             }
@@ -432,7 +461,10 @@ struct LiveTVPlayerView: View {
     }
 
     private var exitConfirmationOverlay: some View {
-        ZStack {
+        let cancelFocused = focusArea == .exitConfirmButton(0)
+        let exitFocused = focusArea == .exitConfirmButton(1)
+
+        return ZStack {
             // Dimmed background
             Color.black.opacity(0.7)
                 .ignoresSafeArea()
@@ -445,10 +477,10 @@ struct LiveTVPlayerView: View {
 
                 Text("You have \(viewModel.streamCount) streams open.")
                     .font(.system(size: 22))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.white.opacity(0.6))
 
-                HStack(spacing: 40) {
-                    // Cancel button
+                HStack(spacing: 32) {
+                    // Cancel button - standard glass styling
                     Button {
                         showExitConfirmation = false
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -456,32 +488,50 @@ struct LiveTVPlayerView: View {
                         }
                     } label: {
                         Text("Cancel")
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.system(size: 22, weight: .medium))
                             .foregroundStyle(.white)
-                            .frame(width: 160, height: 54)
+                            .frame(width: 180, height: 58)
                             .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(focusArea == .exitConfirmButton(0) ? .white.opacity(0.3) : .white.opacity(0.15))
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(cancelFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .strokeBorder(
+                                                cancelFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                                lineWidth: 1
+                                            )
+                                    )
                             )
                     }
                     .buttonStyle(.plain)
                     .focused($focusArea, equals: .exitConfirmButton(0))
+                    .scaleEffect(cancelFocused ? 1.02 : 1.0)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: cancelFocused)
 
-                    // Exit button
+                    // Exit button - destructive styling
                     Button {
                         forceExitPlayer()
                     } label: {
                         Text("Exit")
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.system(size: 22, weight: .medium))
                             .foregroundStyle(.white)
-                            .frame(width: 160, height: 54)
+                            .frame(width: 180, height: 58)
                             .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(focusArea == .exitConfirmButton(1) ? .red.opacity(0.8) : .red.opacity(0.5))
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(exitFocused ? .red.opacity(0.25) : .white.opacity(0.08))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .strokeBorder(
+                                                exitFocused ? .red.opacity(0.4) : .white.opacity(0.08),
+                                                lineWidth: 1
+                                            )
+                                    )
                             )
                     }
                     .buttonStyle(.plain)
                     .focused($focusArea, equals: .exitConfirmButton(1))
+                    .scaleEffect(exitFocused ? 1.02 : 1.0)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: exitFocused)
                 }
                 .padding(.top, 16)
             }
@@ -647,24 +697,61 @@ struct LiveTVPlayerView: View {
         // Note: Pause/play removed for live TV since time-shifting isn't implemented
         // Live TV streams are real-time only for now
 
-        // Focus/enlarge current stream (only when multiple streams)
+        // Layout controls (only when multiple streams)
         if viewModel.streamCount > 1 {
-            let isFocusedLayout = {
-                if case .focus = viewModel.layoutMode { return true }
-                return false
-            }()
-            buttons.append(ControlButtonConfig(
-                icon: isFocusedLayout ? "rectangle.stack.fill" : "rectangle.expand.vertical",
-                label: isFocusedLayout ? "Reset View" : "Enlarge",
-                action: {
-                    if isFocusedLayout {
-                        viewModel.resetLayout()
-                    } else if let slotId = viewModel.focusedStream?.id {
-                        viewModel.setFocusedLayout(on: slotId)
+            if viewModel.isFocusedStreamInSidebar {
+                // Focused stream is in sidebar - offer to expand it to main
+                buttons.append(ControlButtonConfig(
+                    icon: "arrow.up.left.and.arrow.down.right",
+                    label: "Expand",
+                    action: {
+                        viewModel.expandFocusedStream()
                     }
+                ))
+            } else if viewModel.isFocusLayout {
+                // Focused stream is the main one - offer to reset to grid
+                buttons.append(ControlButtonConfig(
+                    icon: "rectangle.split.2x2",
+                    label: "Grid View",
+                    action: {
+                        viewModel.resetLayout()
+                    }
+                ))
+            } else {
+                // Grid layout - offer to enlarge focused stream
+                buttons.append(ControlButtonConfig(
+                    icon: "rectangle.expand.vertical",
+                    label: "Enlarge",
+                    action: {
+                        if let slotId = viewModel.focusedStream?.id {
+                            viewModel.setFocusedLayout(on: slotId)
+                        }
+                    }
+                ))
+            }
+        }
+
+        // Add Stream button (2nd position)
+        if viewModel.canAddStream {
+            buttons.append(ControlButtonConfig(
+                icon: "plus.circle.fill",
+                label: "Add Stream",
+                action: {
+                    viewModel.replaceSlotIndex = nil  // Adding, not replacing
+                    viewModel.showChannelPicker = true
                 }
             ))
         }
+
+        // Replace button (replace focused stream with new channel)
+        buttons.append(ControlButtonConfig(
+            icon: "arrow.triangle.2.circlepath",
+            label: "Replace",
+            action: {
+                viewModel.replaceSlotIndex = viewModel.focusedSlotIndex
+                viewModel.showChannelPicker = true
+            }
+        ))
 
         // Remove stream button (only when multiple streams)
         if viewModel.streamCount > 1 {
@@ -673,24 +760,12 @@ struct LiveTVPlayerView: View {
                 label: "Remove",
                 action: {
                     print("📺 Remove pressed: focusedSlotIndex=\(viewModel.focusedSlotIndex), streamCount=\(viewModel.streamCount)")
-                    for (idx, stream) in viewModel.streams.enumerated() {
-                        print("  - Stream \(idx): \(stream.channel.name) (focused: \(idx == viewModel.focusedSlotIndex))")
-                    }
                     viewModel.removeStream(at: viewModel.focusedSlotIndex)
                     // If only 1 stream left, hide controls
                     if viewModel.streamCount <= 1 {
                         viewModel.showControls = false
                     }
                 }
-            ))
-        }
-
-        // Add channel button (next to Remove)
-        if viewModel.canAddStream {
-            buttons.append(ControlButtonConfig(
-                icon: "plus.circle.fill",
-                label: "Add Stream",
-                action: { viewModel.showChannelPicker = true }
             ))
         }
 
@@ -758,7 +833,7 @@ struct LiveTVPlayerView: View {
 
     private func forceExitPlayer() {
         viewModel.stopAllStreams()
-        dismiss()
+        onDismiss()
     }
 }
 
@@ -805,17 +880,20 @@ private struct PlayerButtonStyle: ButtonStyle {
 }
 
 #Preview {
-    LiveTVPlayerView(channel: UnifiedChannel(
-        id: "test",
-        sourceType: .dispatcharr,
-        sourceId: "test-source",
-        channelNumber: 101,
-        name: "Test Channel HD",
-        callSign: "TEST",
-        logoURL: nil,
-        streamURL: URL(string: "http://example.com/stream.m3u8")!,
-        tvgId: nil,
-        groupTitle: "Entertainment",
-        isHD: true
-    ))
+    LiveTVPlayerView(
+        channel: UnifiedChannel(
+            id: "test",
+            sourceType: .dispatcharr,
+            sourceId: "test-source",
+            channelNumber: 101,
+            name: "Test Channel HD",
+            callSign: "TEST",
+            logoURL: nil,
+            streamURL: URL(string: "http://example.com/stream.m3u8")!,
+            tvgId: nil,
+            groupTitle: "Entertainment",
+            isHD: true
+        ),
+        onDismiss: {}
+    )
 }
