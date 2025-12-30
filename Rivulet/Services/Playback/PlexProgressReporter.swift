@@ -67,11 +67,17 @@ actor PlexProgressReporter {
 
             let (_, response) = try await URLSession.shared.data(for: request)
 
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
-                print("PlexProgressReporter: Timeline report failed with status \(httpResponse.statusCode)")
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 200 {
+                    let timeFormatted = String(format: "%.0f", time)
+                    let durationFormatted = String(format: "%.0f", duration)
+                    print("📊 PlexProgress: Reported \(timeFormatted)s/\(durationFormatted)s (\(state)) for \(ratingKey)")
+                } else {
+                    print("📊 PlexProgress: Timeline report failed with status \(httpResponse.statusCode)")
+                }
             }
         } catch {
-            print("PlexProgressReporter: Failed to report progress: \(error)")
+            print("📊 PlexProgress: Failed to report progress: \(error)")
         }
     }
 
@@ -93,13 +99,13 @@ actor PlexProgressReporter {
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 200 {
-                    print("PlexProgressReporter: Marked \(ratingKey) as watched")
+                    print("📊 PlexProgress: ✅ Marked \(ratingKey) as watched")
                 } else {
-                    print("PlexProgressReporter: Scrobble failed with status \(httpResponse.statusCode)")
+                    print("📊 PlexProgress: Scrobble failed with status \(httpResponse.statusCode)")
                 }
             }
         } catch {
-            print("PlexProgressReporter: Failed to mark as watched: \(error)")
+            print("📊 PlexProgress: Failed to mark as watched: \(error)")
         }
     }
 
@@ -118,9 +124,9 @@ actor PlexProgressReporter {
             request.httpMethod = "GET"
 
             let (_, _) = try await URLSession.shared.data(for: request)
-            print("PlexProgressReporter: Marked \(ratingKey) as unwatched")
+            print("📊 PlexProgress: Marked \(ratingKey) as unwatched")
         } catch {
-            print("PlexProgressReporter: Failed to mark as unwatched: \(error)")
+            print("📊 PlexProgress: Failed to mark as unwatched: \(error)")
         }
     }
 

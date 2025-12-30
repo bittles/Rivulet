@@ -324,6 +324,9 @@ final class MultiStreamViewModel: ObservableObject {
         guard index >= 0, index < streams.count else { return }
         guard !activeChannelIds.contains(channel.id) else { return }
 
+        // Close the picker immediately for responsiveness
+        showChannelPicker = false
+
         let oldSlot = streams[index]
 
         // Stop and cleanup old player

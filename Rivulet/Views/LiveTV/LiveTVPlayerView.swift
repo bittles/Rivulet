@@ -895,17 +895,10 @@ struct LiveTVPlayerView: View {
     }
 
     private func forceExitPlayer() {
-        // Capture viewModel reference before dismissing
-        let vm = viewModel
-
-        // Dismiss UI immediately for responsiveness
+        // Dismiss UI immediately
         onDismiss()
-
-        // Delay stream cleanup until dismiss animation completes (~350ms)
-        // MPV/Vulkan cleanup blocks main thread, so we need UI fully dismissed first
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            vm.stopAllStreams()
-        }
+        // Stop streams - MPV cleanup now runs on background thread
+        viewModel.stopAllStreams()
     }
 }
 

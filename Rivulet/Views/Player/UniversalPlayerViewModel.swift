@@ -126,6 +126,25 @@ enum VideoFrameState: Equatable {
     }
 }
 
+/// Seek indicator shown briefly when user taps left/right to skip
+enum SeekIndicator: Equatable {
+    case forward(Int)   // seconds skipped forward
+    case backward(Int)  // seconds skipped backward
+
+    var systemImage: String {
+        switch self {
+        case .forward: return "goforward.10"
+        case .backward: return "gobackward.10"
+        }
+    }
+
+    var seconds: Int {
+        switch self {
+        case .forward(let s), .backward(let s): return s
+        }
+    }
+}
+
 @MainActor
 final class UniversalPlayerViewModel: ObservableObject {
 
@@ -140,6 +159,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published var showControls = true
     @Published var showInfoPanel = false
     @Published var isScrubbing = false
+
+    // MARK: - Seek Indicator State
+    /// Shows a brief indicator when user taps left/right to skip 10 seconds
+    @Published var seekIndicator: SeekIndicator?
 
     // MARK: - Skip Marker State
     @Published private(set) var activeMarker: PlexMarker?
@@ -264,6 +287,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private let controlsHideDelay: TimeInterval = 5
     private var scrubTimer: Timer?
     private let scrubUpdateInterval: TimeInterval = 0.1  // 100ms updates for smooth scrubbing
+    private var seekIndicatorTimer: Timer?
 
     // MARK: - Playback Context
 
@@ -464,9 +488,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             // Update track lists
             updateTrackLists()
 
-            // TODO: Re-enable after fixing - may cause Metal crash in simulator
             // Preload thumbnails for scrubbing
-            // preloadThumbnails()
+            preloadThumbnails()
 
             startControlsHideTimer()
         } catch {
@@ -525,6 +548,25 @@ final class UniversalPlayerViewModel: ObservableObject {
     func seekRelative(by seconds: TimeInterval) async {
         await mpvPlayerWrapper.seekRelative(by: seconds)
         showControlsTemporarily()
+
+        // Show seek indicator for tap-to-skip
+        let intSeconds = Int(abs(seconds))
+        showSeekIndicator(seconds >= 0 ? .forward(intSeconds) : .backward(intSeconds))
+    }
+
+    /// Show seek indicator briefly (1.5 seconds)
+    private func showSeekIndicator(_ indicator: SeekIndicator) {
+        seekIndicatorTimer?.invalidate()
+        withAnimation(.easeOut(duration: 0.15)) {
+            seekIndicator = indicator
+        }
+        seekIndicatorTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                withAnimation(.easeOut(duration: 0.25)) {
+                    self?.seekIndicator = nil
+                }
+            }
+        }
     }
 
     // MARK: - Scrubbing
@@ -649,12 +691,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     private func loadThumbnail(for time: TimeInterval) {
-        // TODO: Thumbnail loading disabled - causes Metal crash in simulator
-        // The URLSession with custom SSL delegate appears to interfere with
-        // MoltenVK's Metal command buffer lifecycle
-        return
-
-        /*
         guard let partId = metadata.Media?.first?.Part?.first?.id else {
             print("⚠️ No part ID available for thumbnails")
             return
@@ -667,15 +703,33 @@ final class UniversalPlayerViewModel: ObservableObject {
                 serverURL: serverURL,
                 authToken: authToken
             )
-            await MainActor.run {
-                self.scrubThumbnail = thumbnail
+            if let thumb = thumbnail {
+                print("🖼️ [THUMB] Got thumbnail for \(Int(time))s: \(thumb.size)")
             }
+            self.scrubThumbnail = thumbnail
         }
-        */
     }
 
     /// Preload thumbnails when playback starts
     func preloadThumbnails() {
+        // Debug: Log metadata structure
+        if let media = metadata.Media {
+            print("🖼️ [THUMB] Media count: \(media.count)")
+            if let firstMedia = media.first {
+                print("🖼️ [THUMB] First media id: \(firstMedia.id)")
+                if let parts = firstMedia.Part {
+                    print("🖼️ [THUMB] Part count: \(parts.count)")
+                    if let firstPart = parts.first {
+                        print("🖼️ [THUMB] First part id: \(firstPart.id)")
+                    }
+                } else {
+                    print("⚠️ [THUMB] No Part array in media")
+                }
+            }
+        } else {
+            print("⚠️ [THUMB] No Media array in metadata")
+        }
+
         guard let partId = metadata.Media?.first?.Part?.first?.id else {
             print("⚠️ No part ID available for thumbnail preload")
             return
@@ -1247,6 +1301,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         controlsTimer?.invalidate()
         scrubTimer?.invalidate()
         countdownTimer?.invalidate()
+        seekIndicatorTimer?.invalidate()
         // Ensure screensaver is re-enabled when player is deallocated
         Task { @MainActor in
             UIApplication.shared.isIdleTimerDisabled = false
@@ -1260,4 +1315,8 @@ extension Notification.Name {
     /// Posted when player requests navigation to a specific content item
     /// userInfo contains: "ratingKey" (String), "type" (String: "show", "season", "movie")
     static let navigateToContent = Notification.Name("navigateToContent")
+
+    /// Posted when Plex data needs to be refreshed (e.g., after playback ends)
+    /// Views showing Plex content should refresh their data when receiving this
+    static let plexDataNeedsRefresh = Notification.Name("plexDataNeedsRefresh")
 }

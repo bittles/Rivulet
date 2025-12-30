@@ -535,67 +535,30 @@ private struct TransportProgressBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            // Thumbnail preview when scrubbing
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    // Thumbnail positioned above progress bar
-                    if isScrubbing {
-                        let thumbnailX = max(80, min(geometry.size.width - 80, geometry.size.width * progress))
+            // Thumbnail preview (above progress bar when scrubbing)
+            if isScrubbing, let thumbnail = scrubThumbnail {
+                VStack(spacing: 4) {
+                    Image(uiImage: thumbnail)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 240, height: 135)
+                        .background(Color.gray.opacity(0.3))  // Debug: see actual image bounds
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(.white.opacity(0.3), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.5), radius: 10, y: 5)
 
-                        VStack(spacing: 8) {
-                            // Thumbnail image (only show if available)
-                            if let thumbnail = scrubThumbnail {
-                                Image(uiImage: thumbnail)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 240, height: 135)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .strokeBorder(.white.opacity(0.3), lineWidth: 1)
-                                    )
-                                    .shadow(color: .black.opacity(0.5), radius: 10, y: 5)
-                            }
-                            // No placeholder - just skip thumbnail if not available
-
-                            // Speed indicator
-                            if let speed = speedLabel {
-                                Text(speed)
-                                    .font(.title3)
-                                    .fontWeight(.bold)
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .background(
-                                        Capsule()
-                                            .fill(.blue)
-                                    )
-                            }
-
-                            // Time label
-                            Text(formatTime(scrubTime))
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .monospacedDigit()
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                                .background(
-                                    Capsule()
-                                        .fill(.black.opacity(0.8))
-                                )
-
-                            // Arrow pointing to playhead
-                            Triangle()
-                                .fill(.white)
-                                .frame(width: 12, height: 8)
-                        }
-                        .position(x: thumbnailX, y: scrubThumbnail != nil ? -120 : -60)
-                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                    }
+                    Triangle()
+                        .fill(.white.opacity(0.8))
+                        .frame(width: 12, height: 8)
                 }
+                .frame(maxWidth: .infinity)
+                // Position horizontally based on progress
+                .offset(x: (progress - 0.5) * (UIScreen.main.bounds.width - 320))
             }
-            .frame(height: isScrubbing ? 0 : 0)  // Reserve no height, positioned above
 
             // Progress track
             GeometryReader { geometry in
@@ -648,13 +611,31 @@ private struct TransportProgressBar: View {
             .frame(height: isScrubbing ? 10 : 6)
             .animation(.easeOut(duration: 0.15), value: isScrubbing)
 
-            // Time labels
+            // Time labels (with scrub time and speed below bar when scrubbing)
             HStack {
-                Text(formatTime(displayTime))
-                    .font(.caption)
-                    .fontWeight(isScrubbing ? .bold : .medium)
-                    .monospacedDigit()
-                    .foregroundStyle(isScrubbing ? .blue : .white)
+                if isScrubbing {
+                    // Scrub time and speed indicator
+                    HStack(spacing: 16) {
+                        Text(formatTime(scrubTime))
+                            .font(.body)
+                            .fontWeight(.semibold)
+                            .monospacedDigit()
+                            .foregroundStyle(.blue)
+
+                        if let speed = speedLabel {
+                            Text(speed)
+                                .font(.callout)
+                                .fontWeight(.medium)
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                    }
+                } else {
+                    Text(formatTime(displayTime))
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                }
 
                 Spacer()
 

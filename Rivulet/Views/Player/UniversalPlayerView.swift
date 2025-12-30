@@ -14,15 +14,8 @@ struct UniversalPlayerView: View {
 
     @State private var hasStartedPlayback = false
     @State private var playerController: MPVMetalViewController?
+    @State private var lastReportedTime: TimeInterval = 0
     @FocusState private var isSkipButtonFocused: Bool
-
-    // Tap vs hold detection for left/right d-pad
-    // Since Siri Remote onMoveCommand fires once per click (no begin/end events),
-    // we use rapid repeated clicks to detect "hold" behavior
-    @State private var lastArrowDirection: MoveCommandDirection?
-    @State private var arrowClickCount = 0
-    @State private var arrowHoldTimer: Timer?
-    private let holdDetectionWindow: TimeInterval = 0.35  // Time window to detect rapid clicks as "hold"
 
     /// Initialize with metadata (creates viewModel internally)
     init(
@@ -64,6 +57,12 @@ struct UniversalPlayerView: View {
                 bufferingIndicator
             }
 
+            // Seek Indicator (10s skip)
+            if let indicator = viewModel.seekIndicator {
+                seekIndicatorView(indicator)
+                    .transition(.scale.combined(with: .opacity))
+            }
+
             // Error State
             if case .failed(let error) = viewModel.playbackState {
                 errorView(message: error.localizedDescription)
@@ -76,7 +75,8 @@ struct UniversalPlayerView: View {
             }
 
             // Controls Overlay (transport bar at bottom)
-            if viewModel.showControls && viewModel.playbackState.isActive {
+            // Always show when scrubbing so user can see the progress bar
+            if (viewModel.showControls || viewModel.isScrubbing) && viewModel.playbackState.isActive {
                 PlayerControlsOverlay(viewModel: viewModel, showInfoPanel: false)
                     .transition(.opacity.animation(.easeInOut(duration: 0.25)))
             }
@@ -97,6 +97,7 @@ struct UniversalPlayerView: View {
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
         .animation(.spring(response: 0.25, dampingFraction: 0.9), value: viewModel.showInfoPanel)
         .animation(.easeInOut(duration: 0.3), value: viewModel.showSkipButton)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: viewModel.seekIndicator)
         // Focusable when skip button is not focused (let button take focus when visible)
         .focusable(!isSkipButtonFocused)
         .contentShape(Rectangle())
@@ -189,6 +190,11 @@ struct UniversalPlayerView: View {
             reportFinalProgress()
             // Deactivate player scope when leaving
             focusScopeManager.deactivate()
+            // Notify that Plex data should be refreshed (watch progress may have changed)
+            // Delay slightly to let Plex server process the progress update before we request fresh hubs
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
+            }
         }
         .onChange(of: viewModel.currentTime) { _, newTime in
             // Report progress periodically
@@ -275,6 +281,24 @@ struct UniversalPlayerView: View {
             )
     }
 
+    // MARK: - Seek Indicator View
+
+    private func seekIndicatorView(_ indicator: SeekIndicator) -> some View {
+        Image(systemName: indicator.systemImage)
+            .font(.system(size: 48, weight: .medium))
+            .foregroundStyle(.white)
+            .frame(width: 88, height: 88)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(.black.opacity(0.6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+                    )
+            )
+            .shadow(color: .black.opacity(0.4), radius: 12, x: 0, y: 4)
+    }
+
     // MARK: - Error View
 
     private func errorView(message: String) -> some View {
@@ -358,12 +382,12 @@ struct UniversalPlayerView: View {
 
     #if os(tvOS)
     private func handleMoveCommand(_ direction: MoveCommandDirection) {
-        print("🎮 [handleMoveCommand] direction: \(direction), isScrubbing: \(viewModel.isScrubbing), infoPanel: \(viewModel.showInfoPanel)")
         switch direction {
-        case .left:
-            handleArrowInput(forward: false)
-        case .right:
-            handleArrowInput(forward: true)
+        case .left, .right:
+            // Left/right are handled by PlayerContainerViewController via pressesBegan/pressesEnded
+            // which properly detects tap vs hold using Siri Remote touchpad press types (2079/2080)
+            // We ignore onMoveCommand for these to avoid duplicate handling
+            break
         case .down:
             if isSkipButtonFocused {
                 // Down from skip button: unfocus skip button, show controls
@@ -396,61 +420,6 @@ struct UniversalPlayerView: View {
         }
     }
 
-    /// Handle left/right arrow input with tap vs hold detection.
-    /// Since Siri Remote doesn't provide press duration, we detect "hold" by rapid repeated clicks.
-    /// - First click: Wait briefly, then execute 10s skip if no follow-up
-    /// - Rapid clicks (within holdDetectionWindow): Start/continue scrubbing
-    private func handleArrowInput(forward: Bool) {
-        let currentDirection: MoveCommandDirection = forward ? .right : .left
-
-        // If already scrubbing, each arrow press changes direction or increases speed
-        if viewModel.isScrubbing {
-            print("🎮 [ARROW] Already scrubbing, adjusting direction/speed")
-            viewModel.scrubInDirection(forward: forward)
-            viewModel.showControlsTemporarily()
-            return
-        }
-
-        // Check if this is a rapid follow-up click (same direction within window)
-        if lastArrowDirection == currentDirection {
-            arrowClickCount += 1
-            print("🎮 [ARROW] Rapid click #\(arrowClickCount) detected")
-
-            // Cancel the pending tap action
-            arrowHoldTimer?.invalidate()
-
-            if arrowClickCount >= 2 {
-                // Multiple rapid clicks = user wants to scrub
-                print("🎮 [ARROW] Hold detected via rapid clicks - starting scrub")
-                viewModel.scrubInDirection(forward: forward)
-                viewModel.showControlsTemporarily()
-                // Reset for next interaction
-                arrowClickCount = 0
-                lastArrowDirection = nil
-                return
-            }
-        } else {
-            // Different direction or first click - reset tracking
-            arrowClickCount = 1
-            lastArrowDirection = currentDirection
-        }
-
-        // Cancel any existing timer
-        arrowHoldTimer?.invalidate()
-
-        // Start timer - if no follow-up click within window, execute tap action (10s skip)
-        arrowHoldTimer = Timer.scheduledTimer(withTimeInterval: holdDetectionWindow, repeats: false) { [self] _ in
-            print("🎮 [ARROW] Tap confirmed - skipping \(forward ? "forward" : "backward") 10s")
-            Task { @MainActor in
-                await viewModel.seekRelative(by: forward ? 10 : -10)
-                viewModel.showControlsTemporarily()
-            }
-            // Reset tracking
-            arrowClickCount = 0
-            lastArrowDirection = nil
-        }
-    }
-
     private func handleSelectCommand() {
         if isSkipButtonFocused {
             // Skip button is focused - trigger skip
@@ -470,12 +439,12 @@ struct UniversalPlayerView: View {
 
     // MARK: - Progress Reporting
 
-    private var lastReportedTime: TimeInterval = 0
     private let reportingInterval: TimeInterval = 10
 
     private func reportProgress(time: TimeInterval) {
         // Report every 10 seconds
         guard abs(time - lastReportedTime) >= reportingInterval else { return }
+        lastReportedTime = time
 
         Task {
             await PlexProgressReporter.shared.reportProgress(

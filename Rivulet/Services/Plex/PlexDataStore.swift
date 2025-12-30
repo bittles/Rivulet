@@ -21,6 +21,10 @@ class PlexDataStore: ObservableObject {
     @Published var hubsError: String?
     @Published var librariesError: String?
 
+    /// Increments whenever hubs content changes (not just count)
+    /// Views should watch this to trigger UI updates when items change
+    @Published private(set) var hubsVersion: UUID = UUID()
+
     // MARK: - Hero Cache (per library)
 
     /// Cached hero items per library key - persists across navigation
@@ -122,6 +126,7 @@ class PlexDataStore: ObservableObject {
                 print("📦 PlexDataStore: Found \(cached.count) cached hubs")
                 await MainActor.run {
                     self.hubs = cached
+                    self.hubsVersion = UUID()
                     self.isLoadingHubs = false
                 }
                 // Background refresh
@@ -146,6 +151,7 @@ class PlexDataStore: ObservableObject {
             // Only update if hubs actually changed (prevents unnecessary re-renders)
             if !hubsAreEqual(self.hubs, fetchedHubs) {
                 self.hubs = fetchedHubs
+                self.hubsVersion = UUID()  // Signal that content changed
                 print("📦 PlexDataStore: Hubs updated (changed)")
             } else {
                 print("📦 PlexDataStore: Hubs unchanged, skipping update")
@@ -308,6 +314,7 @@ class PlexDataStore: ObservableObject {
     /// Update an item's watch status locally (optimistic update)
     /// This immediately reflects the change in UI before the server refresh completes
     func updateItemWatchStatus(ratingKey: String, watched: Bool) {
+        var didUpdate = false
         // Update in hubs
         for hubIndex in hubs.indices {
             if var metadata = hubs[hubIndex].Metadata {
@@ -321,10 +328,15 @@ class PlexDataStore: ObservableObject {
                             metadata[itemIndex].viewOffset = nil
                         }
                         hubs[hubIndex].Metadata = metadata
+                        didUpdate = true
                         print("📦 PlexDataStore: Optimistically updated \(ratingKey) watched=\(watched) in hub \(hubs[hubIndex].title ?? "unknown")")
                     }
                 }
             }
+        }
+        // Bump version so views recompute their derived state
+        if didUpdate {
+            hubsVersion = UUID()
         }
     }
 

@@ -122,6 +122,13 @@ final class PlexThumbnailService {
 
                 if let bifData = BIFData(data: data) {
                     print("✅ Loaded BIF thumbnails (\(quality)): \(bifData.frameCount) frames, interval: \(bifData.intervalMs)ms")
+                    // Debug: Check first 5 frames and a few later ones
+                    for i in [0, 1, 2, 3, 4, 10, 50, 100] {
+                        if i < bifData.frames.count {
+                            let frame = bifData.frames[i]
+                            print("🖼️ Frame[\(i)]: timestamp=\(frame.timestamp)ms, size=\(frame.imageData.count) bytes")
+                        }
+                    }
                     return bifData
                 } else {
                     print("⚠️ Failed to parse BIF data (size: \(data.count) bytes)")
@@ -212,8 +219,13 @@ struct BIFData {
             ptr.load(fromByteOffset: 12, as: UInt32.self).littleEndian
         }
 
-        let interval = data.withUnsafeBytes { ptr -> UInt32 in
+        var interval = data.withUnsafeBytes { ptr -> UInt32 in
             ptr.load(fromByteOffset: 16, as: UInt32.self).littleEndian
+        }
+
+        // BIF spec: timestamp multiplier of 0 means use default of 1000ms
+        if interval == 0 {
+            interval = 1000
         }
 
         self.intervalMs = interval
@@ -264,18 +276,24 @@ struct BIFData {
         let timeMs = UInt32(time * 1000)
 
         // Find the closest frame
+        // BIF timestamps must be multiplied by intervalMs to get real time
         var bestFrame: BIFFrame?
         var bestDiff = UInt32.max
 
         for frame in frames {
-            let diff = timeMs > frame.timestamp ? timeMs - frame.timestamp : frame.timestamp - timeMs
+            // Calculate the real timestamp for this frame
+            let frameRealTimeMs = frame.timestamp * intervalMs
+            let diff = timeMs > frameRealTimeMs ? timeMs - frameRealTimeMs : frameRealTimeMs - timeMs
             if diff < bestDiff {
                 bestDiff = diff
                 bestFrame = frame
             }
         }
 
-        guard let frame = bestFrame else { return nil }
+        guard let frame = bestFrame else {
+            return nil
+        }
+
         return UIImage(data: frame.imageData)
     }
 }

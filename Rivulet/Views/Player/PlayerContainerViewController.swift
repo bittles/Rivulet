@@ -97,51 +97,91 @@ class PlayerContainerViewController: UIViewController {
 
     // MARK: - Button Interception
 
-    /// Track if we're currently consuming a Menu press
+    /// Track if we're currently consuming presses
     private var isHandlingMenuPress = false
     private var isHandlingSelectPress = false
+    private var isHandlingLeftArrow = false
+    private var isHandlingRightArrow = false
+    private var arrowHoldTimer: Timer?
+    private var didStartScrubbing = false
+    private let holdThreshold: TimeInterval = 0.4
+
+    /// Siri Remote touchpad click types (undocumented but discovered via logging)
+    /// These are different from standard UIPress.PressType arrow values
+    private let siriRemoteTouchpadRight: Int = 2079
+    private let siriRemoteTouchpadLeft: Int = 2080
+
+    /// Check if a press is a left arrow (standard or Siri Remote touchpad)
+    private func isLeftArrowPress(_ press: UIPress) -> Bool {
+        return press.type == .leftArrow || press.type.rawValue == siriRemoteTouchpadLeft
+    }
+
+    /// Check if a press is a right arrow (standard or Siri Remote touchpad)
+    private func isRightArrowPress(_ press: UIPress) -> Bool {
+        return press.type == .rightArrow || press.type.rawValue == siriRemoteTouchpadRight
+    }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses {
             if press.type == .menu {
-                print("🎮 [MENU] PlayerContainerViewController received Menu press (began)")
                 isHandlingMenuPress = true
                 handleMenuButton()
-                return  // Consume the event - don't pass to super
+                return
             }
             if press.type == .select {
                 if let vm = viewModel {
                     if vm.isScrubbing {
-                        // Commit scrub when select is pressed during scrubbing
                         print("🎮 [SELECT] Committing scrub")
                         isHandlingSelectPress = true
                         Task { await vm.commitScrub() }
-                        return  // Consume the event
+                        return
                     } else if vm.showInfoPanel {
-                        // Handle select when info panel is open
-                        print("🎮 [SELECT] PlayerContainerViewController received Select press")
                         isHandlingSelectPress = true
                         handleSelectButton()
-                        return  // Consume the event
+                        return
                     }
                 }
             }
-            // Left/right arrows are handled by SwiftUI's onMoveCommand
-            // Siri Remote touchpad clicks don't generate UIPress events with arrow types
+            // Handle left arrow (standard or Siri Remote touchpad type 2080)
+            if isLeftArrowPress(press) {
+                if let vm = viewModel, !vm.showInfoPanel {
+                    print("🎮 [LEFT] Press began - starting hold detection")
+                    handleArrowBegan(forward: false)
+                    return
+                }
+            }
+            // Handle right arrow (standard or Siri Remote touchpad type 2079)
+            if isRightArrowPress(press) {
+                if let vm = viewModel, !vm.showInfoPanel {
+                    print("🎮 [RIGHT] Press began - starting hold detection")
+                    handleArrowBegan(forward: true)
+                    return
+                }
+            }
         }
-        // Pass presses to SwiftUI for focus handling etc.
         super.pressesBegan(presses, with: event)
     }
 
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses {
             if press.type == .menu && isHandlingMenuPress {
-                print("🎮 [MENU] PlayerContainerViewController consumed Menu press (ended)")
                 isHandlingMenuPress = false
-                return  // Consume the event - don't pass to super
+                return
             }
             if press.type == .select && isHandlingSelectPress {
                 isHandlingSelectPress = false
+                return
+            }
+            // Handle left arrow end (standard or Siri Remote touchpad)
+            if isLeftArrowPress(press) && isHandlingLeftArrow {
+                print("🎮 [LEFT] Press ended")
+                handleArrowEnded(forward: false)
+                return
+            }
+            // Handle right arrow end (standard or Siri Remote touchpad)
+            if isRightArrowPress(press) && isHandlingRightArrow {
+                print("🎮 [RIGHT] Press ended")
+                handleArrowEnded(forward: true)
                 return
             }
         }
@@ -158,8 +198,81 @@ class PlayerContainerViewController: UIViewController {
                 isHandlingSelectPress = false
                 return
             }
+            if isLeftArrowPress(press) && isHandlingLeftArrow {
+                cancelArrowHandling()
+                return
+            }
+            if isRightArrowPress(press) && isHandlingRightArrow {
+                cancelArrowHandling()
+                return
+            }
         }
         super.pressesCancelled(presses, with: event)
+    }
+
+    // MARK: - Arrow Key Tap vs Hold Detection
+
+    private func handleArrowBegan(forward: Bool) {
+        guard let vm = viewModel else { return }
+
+        // If already scrubbing, adjust speed/direction
+        if vm.isScrubbing {
+            print("🎮 [ARROW] Already scrubbing - adjusting")
+            vm.scrubInDirection(forward: forward)
+            vm.showControlsTemporarily()
+            return
+        }
+
+        // Track this press
+        if forward {
+            isHandlingRightArrow = true
+        } else {
+            isHandlingLeftArrow = true
+        }
+        didStartScrubbing = false
+
+        // Start hold timer
+        arrowHoldTimer?.invalidate()
+        arrowHoldTimer = Timer.scheduledTimer(withTimeInterval: holdThreshold, repeats: false) { [weak self] _ in
+            guard let self = self, let vm = self.viewModel else { return }
+            print("🎮 [ARROW HOLD] Timer fired after \(self.holdThreshold)s - starting scrub")
+            self.didStartScrubbing = true
+            Task { @MainActor in
+                vm.scrubInDirection(forward: forward)
+                vm.showControlsTemporarily()
+            }
+        }
+        print("🎮 [ARROW] Started hold timer (\(holdThreshold)s)")
+    }
+
+    private func handleArrowEnded(forward: Bool) {
+        arrowHoldTimer?.invalidate()
+        arrowHoldTimer = nil
+
+        if forward {
+            isHandlingRightArrow = false
+        } else {
+            isHandlingLeftArrow = false
+        }
+
+        guard let vm = viewModel else { return }
+
+        if didStartScrubbing {
+            print("🎮 [ARROW] Was a hold - scrubbing is active")
+            didStartScrubbing = false
+        } else {
+            print("🎮 [ARROW] Was a tap - seeking \(forward ? "+10s" : "-10s")")
+            Task { await vm.seekRelative(by: forward ? 10 : -10) }
+            vm.showControlsTemporarily()
+        }
+    }
+
+    private func cancelArrowHandling() {
+        arrowHoldTimer?.invalidate()
+        arrowHoldTimer = nil
+        isHandlingLeftArrow = false
+        isHandlingRightArrow = false
+        didStartScrubbing = false
     }
 
     /// Handle Menu button press with priority:

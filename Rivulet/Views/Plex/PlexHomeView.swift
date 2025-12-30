@@ -121,8 +121,8 @@ struct PlexHomeView: View {
                     selectHeroItem()
                 }
             }
-            .onChange(of: dataStore.hubs.count) { _, _ in
-                // Recompute cached hubs when source data changes
+            .onChange(of: dataStore.hubsVersion) { _, _ in
+                // Recompute cached hubs when source data changes (including item properties like viewCount)
                 cachedProcessedHubs = computeProcessedHubs(from: dataStore.hubs)
                 // Only reselect hero if we don't have one yet (avoid redundant selection)
                 if heroItem == nil {
@@ -133,6 +133,12 @@ struct PlexHomeView: View {
                 // Recompute hubs when music library visibility changes
                 // This ensures music hubs appear/disappear when library is pinned/unpinned
                 cachedProcessedHubs = computeProcessedHubs(from: dataStore.hubs)
+            }
+            // Refresh hubs when notified (e.g., after playback ends, watch status changes)
+            .onReceive(NotificationCenter.default.publisher(for: .plexDataNeedsRefresh)) { _ in
+                Task {
+                    await dataStore.refreshHubs()
+                }
             }
             .navigationDestination(item: $selectedItem) { item in
                 PlexDetailView(item: item)
