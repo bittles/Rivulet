@@ -115,7 +115,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A700F81A2EFBA1610042C07D /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
-				A71F816E2EFBA6DD00AAC4F6 /* XCRemoteSwiftPackageReference "MPVKit" */,
+				A71F816E2EFBA6DD00AAC4F6 /* XCLocalSwiftPackageReference "../../MPVKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A72E03DB2EDA297D003A73DA /* Products */;
@@ -154,7 +154,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = ZHB786H6YN;
 				ENABLE_APP_SANDBOX = YES;
@@ -202,7 +202,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = ZHB786H6YN;
 				ENABLE_APP_SANDBOX = YES;
@@ -387,6 +387,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		A71F816E2EFBA6DD00AAC4F6 /* XCLocalSwiftPackageReference "../../MPVKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../MPVKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		A700F81A2EFBA1610042C07D /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -396,20 +403,12 @@
 				minimumVersion = 9.1.0;
 			};
 		};
-		A71F816E2EFBA6DD00AAC4F6 /* XCRemoteSwiftPackageReference "MPVKit" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/mpvkit/MPVKit.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.40.0;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		A71F816F2EFBA6DD00AAC4F6 /* MPVKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = A71F816E2EFBA6DD00AAC4F6 /* XCRemoteSwiftPackageReference "MPVKit" */;
+			package = A71F816E2EFBA6DD00AAC4F6 /* XCLocalSwiftPackageReference "../../MPVKit" */;
 			productName = MPVKit;
 		};
 /* End XCSwiftPackageProductDependency section */

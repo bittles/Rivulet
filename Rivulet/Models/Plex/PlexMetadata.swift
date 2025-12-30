@@ -443,7 +443,49 @@ extension PlexMetadata {
         let channels = media.audioChannels ?? 2
         let codec = media.audioCodec?.lowercased() ?? ""
 
-        // Check for Atmos/DTS:X (typically 8 channels with specific codecs)
+        // Get primary audio stream for additional metadata (title, profile)
+        let audioStream = media.Part?.first?.Stream?.first(where: { $0.isAudio && ($0.default == true || $0.selected == true) })
+            ?? media.Part?.first?.Stream?.first(where: { $0.isAudio })
+
+        let streamTitle = (audioStream?.title ?? "").lowercased()
+        let streamDisplayTitle = (audioStream?.displayTitle ?? "").lowercased()
+        let streamProfile = (audioStream?.profile ?? "").lowercased()
+
+        // Check for explicit Atmos indicator in stream metadata
+        let hasAtmosIndicator = streamTitle.contains("atmos") ||
+                                streamDisplayTitle.contains("atmos") ||
+                                streamProfile.contains("atmos")
+
+        // Check for DTS:X indicators
+        let hasDTSXIndicator = streamTitle.contains("dts:x") ||
+                               streamTitle.contains("dts-x") ||
+                               streamDisplayTitle.contains("dts:x") ||
+                               streamDisplayTitle.contains("dts-x")
+
+        // Check for 7.1 in title when Plex reports fewer channels (Atmos with 5.1 bed)
+        let has71InTitle = streamTitle.contains("7.1") || streamDisplayTitle.contains("7.1")
+
+        if hasAtmosIndicator {
+            return "Atmos"
+        }
+
+        if hasDTSXIndicator {
+            return "DTS:X"
+        }
+
+        // If title says 7.1 but Plex reports 6 channels, trust the title
+        if has71InTitle && channels < 8 {
+            if codec == "eac3" {
+                return "DDP 7.1"
+            } else if codec.contains("truehd") {
+                return "TrueHD 7.1"
+            } else if codec.contains("dts") {
+                return "DTS 7.1"
+            }
+            return "7.1"
+        }
+
+        // Fall back to channel-based detection
         if channels >= 8 {
             if codec.contains("truehd") || codec.contains("atmos") {
                 return "Atmos"

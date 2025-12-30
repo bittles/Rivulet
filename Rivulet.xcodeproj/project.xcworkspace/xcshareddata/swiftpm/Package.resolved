@@ -1,15 +1,6 @@
 {
-  "originHash" : "58cc4fce9a53b57d5f3e4b93bce9f916e219db7b9aca2fa1e973a1ec93456a26",
+  "originHash" : "e77363e6328a4d2b23203a6f9af0385de4fce803c344db644a143e5c101ed585",
   "pins" : [
-    {
-      "identity" : "mpvkit",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/mpvkit/MPVKit.git",
-      "state" : {
-        "revision" : "613c0ccc3acf70e136aaff880a9b5fe8fdfaf5b8",
-        "version" : "0.41.0"
-      }
-    },
     {
       "identity" : "sentry-cocoa",
       "kind" : "remoteSourceControl",
