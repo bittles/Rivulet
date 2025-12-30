@@ -67,9 +67,11 @@ final class MultiStreamViewModel: ObservableObject {
     }
 
     var canAddStream: Bool {
-        // AVPlayer is more resource-efficient than MPV/Vulkan
-        // Allow up to 4 streams on all platforms
-        streams.count < 4
+        // MPV uses significant memory per stream
+        // Default to 2 streams, allow 4 with user opt-in (may cause crashes)
+        let allowFourStreams = UserDefaults.standard.bool(forKey: "allowFourStreams")
+        let maxStreams = allowFourStreams ? 4 : 2
+        return streams.count < maxStreams
     }
 
     var activeChannelIds: Set<String> {

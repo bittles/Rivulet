@@ -43,10 +43,11 @@ struct SettingsView: View {
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
     @AppStorage("liveTVLayout") private var liveTVLayoutRaw = LiveTVLayout.channels.rawValue
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
+    @AppStorage("allowFourStreams") private var allowFourStreams = false
     @AppStorage("showSkipButton") private var showSkipButton = true
     @AppStorage("autoSkipIntro") private var autoSkipIntro = false
     @AppStorage("autoSkipCredits") private var autoSkipCredits = false
-    @AppStorage("useAirPlayAudio") private var useAirPlayAudio = false
+    @AppStorage("highQualityScaling") private var highQualityScaling = true
     @AppStorage("autoplayCountdown") private var autoplayCountdownRaw = AutoplayCountdown.fiveSeconds.rawValue
     @Environment(\.focusScopeManager) private var focusScopeManager
     @Environment(\.nestedNavigationState) private var nestedNavState
@@ -119,6 +120,14 @@ struct SettingsView: View {
                                 title: "Confirm Exit Multiview",
                                 subtitle: "Ask before closing multiple streams",
                                 isOn: $confirmExitMultiview
+                            )
+
+                            SettingsToggleRow(
+                                icon: "rectangle.split.2x2.fill",
+                                iconColor: .orange,
+                                title: "Allow 3 or 4 Streams",
+                                subtitle: "This will most likely crash the app, but go for it",
+                                isOn: $allowFourStreams
                             )
                         }
 
@@ -206,11 +215,11 @@ struct SettingsView: View {
                             )
 
                             SettingsToggleRow(
-                                icon: "homepod.2",
-                                iconColor: .indigo,
-                                title: "AirPlay Audio Output",
-                                subtitle: "Enable for HomePod or AirPlay speakers",
-                                isOn: $useAirPlayAudio
+                                icon: "sparkles.tv",
+                                iconColor: .pink,
+                                title: "High Quality Scaling",
+                                subtitle: "Sharper upscaling for 720p/1080p content",
+                                isOn: $highQualityScaling
                             )
                         }
 

@@ -8,6 +8,7 @@
 import Foundation
 import UIKit
 import Libmpv
+import AVFoundation
 
 final class MPVMetalViewController: UIViewController {
 
@@ -265,9 +266,34 @@ final class MPVMetalViewController: UIViewController {
         mpv = nil
     }
 
+    // MARK: - Audio Session Configuration
+
+    private func configureAudioSession() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            // Set playback category with movie mode for best audio quality
+            try session.setCategory(.playback, mode: .moviePlayback)
+
+            // Request maximum available channels (up to 8 for 7.1 support)
+            // Note: Requires patched MPVKit to fix tvOS kAudioChannelLabel_Unknown bug
+            let maxChannels = session.maximumOutputNumberOfChannels
+            try session.setPreferredOutputNumberOfChannels(maxChannels)
+
+            try session.setActive(true)
+
+            print("🎬 AVAudioSession: Configured for \(maxChannels) channels (actual: \(session.outputNumberOfChannels))")
+        } catch {
+            print("🎬 AVAudioSession: Configuration failed - \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - MPV Setup
 
     private func setupMpv() {
+        // Configure AVAudioSession BEFORE mpv creates its AudioUnit
+        // Request max channels (up to 8 for 7.1) - requires patched MPVKit for tvOS
+        configureAudioSession()
+
         mpv = mpv_create()
         guard mpv != nil else {
             print("Failed to create MPV context")
@@ -294,44 +320,29 @@ final class MPVMetalViewController: UIViewController {
             checkError(mpv_set_option_string(mpv, "vulkan-swap-mode", "fifo"))  // Sync mode for stability
             print("🎬 MPV: Using simulator-safe settings (gpu + software decode)")
         } else {
-            // Real device: Use gpu-next with native Metal backend (avoid MoltenVK on device)
+            // Real device: Use gpu-next with Vulkan (via MoltenVK) for HDR support
+            // Note: gpu-next uses libplacebo which requires Vulkan; there's no native Metal path
             checkError(mpv_set_option_string(mpv, "vo", "gpu-next"))
-            checkError(mpv_set_option_string(mpv, "gpu-api", "metal"))
+            checkError(mpv_set_option_string(mpv, "gpu-api", "vulkan"))
             checkError(mpv_set_option_string(mpv, "hwdec", "videotoolbox"))  // Zero-copy hardware decode
             checkError(mpv_set_option_string(mpv, "target-colorspace-hint", "yes"))  // HDR passthrough
 
             // GPU optimizations - minimize CPU work
             checkError(mpv_set_option_string(mpv, "gpu-hwdec-interop", "videotoolbox"))  // Keep frames on GPU
-            checkError(mpv_set_option_string(mpv, "opengl-pbo", "yes"))  // Async texture upload
 
-            print("🎬 MPV: Using device settings (gpu-next + Metal + VideoToolbox + HDR)")
+            print("🎬 MPV: Using device settings (gpu-next + Vulkan/MoltenVK + VideoToolbox + HDR)")
         }
 
         // Audio configuration
-        // Force 5.1 max to avoid audiounit sp255-sp255 bug with 8-channel layouts
-        // This affects PCM output; passthrough codecs bypass this entirely
-        checkError(mpv_set_option_string(mpv, "audio-channels", "5.1"))
-
-        // Force downmix of 7.1 to 5.1 to avoid audiounit crash with 8 channels
-        checkError(mpv_set_option_string(mpv, "af", "lavfi=[aformat=channel_layouts=5.1|stereo]"))
+        // Whitelist 7.1, 5.1, and stereo layouts - mpv will pick the best match for the content
+        // Note: 7.1 requires patched MPVKit to fix tvOS kAudioChannelLabel_Unknown bug for channels 7-8
+        checkError(mpv_set_option_string(mpv, "audio-channels", "7.1,5.1,stereo"))
+        print("🎬 MPV: Audio channels whitelisted to 7.1,5.1,stereo")
 
         // Audio buffer for smoother playback (default ~0.2s can cause stuttering with high-bitrate 4K content)
-        // 1 second buffer provides headroom for 4K HDR streams at 100+ Mbps
-        // Note: This option may not be available in all MPV builds - fail silently
         let audioBufferResult = mpv_set_option_string(mpv, "audio-buffer", "1.0")
         if audioBufferResult < 0 {
             print("🎬 MPV: audio-buffer option not available (error \(audioBufferResult)), using default")
-        }
-
-        let useAirPlayAudio = UserDefaults.standard.bool(forKey: "useAirPlayAudio")
-        if useAirPlayAudio {
-            // AirPlay/HomePod: 5.1 is already set, no passthrough possible
-            print("🎬 MPV: Using AirPlay audio mode (5.1 channels)")
-        } else {
-            // HDMI receiver: Enable passthrough for compressed surround formats
-            // These bypass the channel limit and go directly to receiver
-            checkError(mpv_set_option_string(mpv, "audio-spdif", "ac3,eac3,dts-hd,truehd"))
-            print("🎬 MPV: Using HDMI mode (5.1 PCM, passthrough for AC3/DTS/TrueHD)")
         }
 
         // Subtitles - use standard MPV options
@@ -373,6 +384,15 @@ final class MPVMetalViewController: UIViewController {
             checkError(mpv_set_option_string(mpv, "demuxer-max-back-bytes", "100MiB"))
             checkError(mpv_set_option_string(mpv, "cache-secs", "30"))
             checkError(mpv_set_option_string(mpv, "demuxer-readahead-secs", "30"))
+
+            // High quality scaling for 720p/1080p content upscaled to 4K
+            let highQualityScaling = UserDefaults.standard.bool(forKey: "highQualityScaling")
+            if highQualityScaling {
+                checkError(mpv_set_option_string(mpv, "scale", "ewa_lanczossharp"))  // Best quality upscaling
+                checkError(mpv_set_option_string(mpv, "dscale", "mitchell"))         // Quality downscaling
+                checkError(mpv_set_option_string(mpv, "cscale", "ewa_lanczossharp")) // Best chroma upscaling
+                print("🎬 MPV: High quality scaling enabled (ewa_lanczossharp/mitchell)")
+            }
         }
 
         checkError(mpv_initialize(mpv))

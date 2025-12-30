@@ -1,10 +1,12 @@
 {
   "images" : [
     {
+      "filename" : "Artboard6.png",
       "idiom" : "tv",
       "scale" : "1x"
     },
     {
+      "filename" : "appicon x2.png",
       "idiom" : "tv",
       "scale" : "2x"
     }

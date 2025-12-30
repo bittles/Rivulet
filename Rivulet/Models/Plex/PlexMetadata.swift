@@ -411,6 +411,60 @@ extension PlexMetadata {
         Media?.first?.Part?.first?.key
     }
 
+    /// Video resolution display (e.g., "4K", "1080p", "720p")
+    var videoQualityDisplay: String? {
+        guard let resolution = Media?.first?.videoResolution else { return nil }
+        switch resolution.lowercased() {
+        case "4k", "2160": return "4K"
+        case "1080": return "1080p"
+        case "720": return "720p"
+        case "480", "sd": return "SD"
+        default: return resolution.uppercased()
+        }
+    }
+
+    /// HDR format display (e.g., "Dolby Vision", "HDR10", nil if SDR)
+    var hdrFormatDisplay: String? {
+        guard let videoStream = Media?.first?.Part?.first?.Stream?.first(where: { $0.isVideo }) else {
+            return nil
+        }
+
+        if videoStream.isDolbyVision {
+            return "Dolby Vision"
+        } else if videoStream.isHDR {
+            return "HDR"
+        }
+        return nil
+    }
+
+    /// Audio format display (e.g., "Atmos", "5.1", "Stereo")
+    var audioFormatDisplay: String? {
+        guard let media = Media?.first else { return nil }
+        let channels = media.audioChannels ?? 2
+        let codec = media.audioCodec?.lowercased() ?? ""
+
+        // Check for Atmos/DTS:X (typically 8 channels with specific codecs)
+        if channels >= 8 {
+            if codec.contains("truehd") || codec.contains("atmos") {
+                return "Atmos"
+            } else if codec.contains("dts") {
+                return "DTS:X"
+            }
+            return "7.1"
+        } else if channels >= 6 {
+            if codec.contains("truehd") {
+                return "TrueHD 5.1"
+            } else if codec.contains("dts") && codec.contains("hd") {
+                return "DTS-HD 5.1"
+            }
+            return "5.1"
+        } else if channels >= 2 {
+            return "Stereo"
+        } else {
+            return "Mono"
+        }
+    }
+
     // MARK: - Cast & Crew Helpers
 
     /// All cast members

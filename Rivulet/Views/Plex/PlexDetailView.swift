@@ -68,7 +68,7 @@ struct PlexDetailView: View {
                 heroSection
 
                 // Content Section
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 32) {
                     // Title and metadata
                     headerSection
 
@@ -109,7 +109,7 @@ struct PlexDetailView: View {
                     }
                 }
                 .padding(.horizontal, 48)
-                .padding(.top, 24)
+                .padding(.top, 8)
 
                 // Cast & Crew Section
                 if let metadata = fullMetadata,
@@ -133,6 +133,7 @@ struct PlexDetailView: View {
                     .frame(height: 60)
             }
         }
+        .defaultScrollAnchor(.top)
         .ignoresSafeArea(edges: .top)
         .task {
             // Debug: log what item we're loading
@@ -304,8 +305,10 @@ struct PlexDetailView: View {
             )
             .padding(.horizontal, 48)
 
-            // Poster overlay - larger with squircle corners
+            // Poster overlay - right aligned, larger with squircle corners
             HStack(alignment: .bottom, spacing: 32) {
+                Spacer()
+
                 CachedAsyncImage(url: posterURL) { phase in
                     switch phase {
                     case .success(let image):
@@ -327,26 +330,24 @@ struct PlexDetailView: View {
                             )
                             .overlay {
                                 Image(systemName: iconForType)
-                                    .font(.system(size: 40, weight: .light))
+                                    .font(.system(size: 50, weight: .light))
                                     .foregroundStyle(.white.opacity(0.4))
                             }
                     }
                 }
-                .frame(width: 200, height: isMusicItem ? 200 : 300)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .frame(width: 400, height: isMusicItem ? 400 : 600)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 // GPU-accelerated shadow
                 .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .fill(.black)
-                        .blur(radius: 16)
-                        .offset(y: 8)
+                        .blur(radius: 20)
+                        .offset(y: 10)
                         .opacity(0.5)
                 )
-
-                Spacer()
             }
             .padding(.horizontal, 96) // Inset from hero edges
-            .padding(.bottom, isMusicItem ? -10 : -50) // Less overlap for square posters
+            .padding(.bottom, isMusicItem ? -40 : -140) // Overlap below hero section
         }
     }
 
@@ -405,10 +406,10 @@ struct PlexDetailView: View {
     // MARK: - Header Section
 
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Spacer for poster overlap (less for square music posters)
+        VStack(alignment: .leading, spacing: 20) {
+            // Spacer for poster overlap (minimal - just enough to clear poster bottom)
             Spacer()
-                .frame(height: isMusicItem ? 20 : 60)
+                .frame(height: isMusicItem ? 20 : 40)
 
             Text(item.title ?? "Unknown Title")
                 .font(.title2)
@@ -440,6 +441,19 @@ struct PlexDetailView: View {
                         Text(String(format: "%.1f", rating))
                     }
                 }
+
+                // Use fullMetadata for media info since hub items don't include Stream data
+                if let videoQuality = fullMetadata?.videoQualityDisplay ?? item.videoQualityDisplay {
+                    Text(videoQuality)
+                }
+
+                if let hdrFormat = fullMetadata?.hdrFormatDisplay ?? item.hdrFormatDisplay {
+                    Text(hdrFormat)
+                }
+
+                if let audioFormat = fullMetadata?.audioFormatDisplay ?? item.audioFormatDisplay {
+                    Text(audioFormat)
+                }
             }
             .font(.subheadline)
             .foregroundStyle(.secondary)
@@ -449,7 +463,6 @@ struct PlexDetailView: View {
                     .font(.subheadline)
                     .italic()
                     .foregroundStyle(.secondary)
-                    .padding(.top, 4)
             }
         }
     }
