@@ -31,6 +31,7 @@ final class MPVMetalViewController: UIViewController {
     private var isShuttingDown = false
     private var lastKnownSize: CGSize = .zero
     private var previousDrawableSize: CGSize = .zero
+    private var pendingDrawableSize: CGSize?  // Delayed shrink target
     private var resizeWorkItem: DispatchWorkItem?
 
     // MARK: - Simulator Detection
@@ -116,10 +117,10 @@ final class MPVMetalViewController: UIViewController {
         guard mpv != nil, !isShuttingDown else { return }
 
         let currentDrawable = metalLayer.drawableSize
-        let isGrowing = currentDrawable.width > previousDrawableSize.width ||
-                        currentDrawable.height > previousDrawableSize.height
+        let sizeChanged = currentDrawable != previousDrawableSize
+        let hasPendingShrink = pendingDrawableSize != nil
 
-        print("🎬 MPV: Forcing video resize to \(lastKnownSize), drawable: \(previousDrawableSize) -> \(currentDrawable), growing: \(isGrowing)")
+        print("🎬 MPV: Forcing video resize to \(lastKnownSize), drawable: \(previousDrawableSize) -> \(currentDrawable), changed: \(sizeChanged), pendingShrink: \(pendingDrawableSize?.debugDescription ?? "none")")
 
         // Force the Metal layer to redraw at new size
         CATransaction.begin()
@@ -127,13 +128,8 @@ final class MPVMetalViewController: UIViewController {
         metalLayer.setNeedsDisplay()
         CATransaction.commit()
 
-        // For live streams when shrinking, skip the aggressive reconfigure - GPU scaling is sufficient
-        // This prevents visual glitches when resizing in multiview
-        // But when GROWING, we must tell MPV to render at the new larger size
-        if isLiveStreamMode && !isGrowing {
-            previousDrawableSize = currentDrawable
-            return
-        }
+        // Skip if drawable size hasn't changed and no pending shrink
+        guard sizeChanged || hasPendingShrink else { return }
 
         previousDrawableSize = currentDrawable
 
@@ -145,8 +141,20 @@ final class MPVMetalViewController: UIViewController {
             let currentSync = self.getString("video-sync") ?? "audio"
             self.setString("video-sync", "display-resample")
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
                 guard let self, self.mpv != nil, !self.isShuttingDown else { return }
+
+                // Apply pending drawable shrink AFTER MPV has reconfigured
+                if let pendingSize = self.pendingDrawableSize {
+                    CATransaction.begin()
+                    CATransaction.setDisableActions(true)
+                    self.metalLayer.drawableSize = pendingSize
+                    CATransaction.commit()
+                    self.pendingDrawableSize = nil
+                    self.previousDrawableSize = pendingSize
+                    print("🎬 MPV: Applied delayed drawable shrink to \(pendingSize)")
+                }
+
                 self.queue.async {
                     self.setString("video-sync", currentSync)
                 }
@@ -167,43 +175,36 @@ final class MPVMetalViewController: UIViewController {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         metalLayer.frame = CGRect(origin: .zero, size: newSize)
-        // Pick a drawable size that matches the view aspect, is large enough for MPV blits,
-        // and never exceeds the screen's native size. We don't downscale below the view size
-        // to avoid triggering Metal validation on large copies.
+        // Pick a drawable size that matches the view aspect and is large enough for MPV blits.
         // Get screen from window scene, fallback to a reasonable default size for 4K
         let screenSize = view.window?.windowScene?.screen.nativeBounds.size ?? CGSize(width: 3840, height: 2160)
         let baseWidth = max(newSize.width * metalLayer.contentsScale, 1)
         let baseHeight = max(newSize.height * metalLayer.contentsScale, 1)
-        // Clamp strictly to screen to avoid oversized blits; no expansion beyond needed
+        // Clamp to screen to avoid oversized blits
         let targetSize = CGSize(
             width: min(screenSize.width, baseWidth),
             height: min(screenSize.height, baseHeight)
         )
 
-        // For live streams: only grow the drawable, never shrink it while rendering.
-        // Shrinking can cause Metal validation errors when MPV's render pass is still
-        // configured for the old larger size. The frame shrinks (for display) but the
-        // drawable stays at the max size to avoid renderTargetWidth > attachmentWidth.
         let currentDrawable = metalLayer.drawableSize
-        let safeTargetSize: CGSize
-        if isLiveStreamMode && hasSetupMpv {
-            safeTargetSize = CGSize(
-                width: max(currentDrawable.width, targetSize.width),
-                height: max(currentDrawable.height, targetSize.height)
-            )
-        } else {
-            safeTargetSize = targetSize
-        }
+        let isShrinking = targetSize.width < currentDrawable.width || targetSize.height < currentDrawable.height
 
-        if metalLayer.drawableSize != safeTargetSize {
-            metalLayer.drawableSize = safeTargetSize
+        // When GROWING: Apply immediately (safe - old render pass fits in new larger drawable)
+        // When SHRINKING: Keep old size temporarily to avoid Metal validation errors.
+        // MPV's render pass needs to reconfigure first, then we shrink via delayed callback.
+        if !isShrinking && metalLayer.drawableSize != targetSize {
+            metalLayer.drawableSize = targetSize
         }
         CATransaction.commit()
+
+        // Store target for delayed shrink
+        pendingDrawableSize = isShrinking ? targetSize : nil
 
         view.setNeedsLayout()
         view.layoutIfNeeded()
 
-        print("🎬 MPV: updateForContainerSize new=\(newSize), bounds=\(view.bounds.size), frame=\(view.frame.size), layer=\(metalLayer.frame.size), drawable=\(metalLayer.drawableSize), scale=\(metalLayer.contentsScale), screen=\(screenSize)")
+        let shrinkInfo = isShrinking ? ", pendingShrink=\(targetSize)" : ""
+        print("🎬 MPV: updateForContainerSize new=\(newSize), drawable=\(metalLayer.drawableSize), target=\(targetSize)\(shrinkInfo)")
 
         lastKnownSize = newSize
 
@@ -319,8 +320,17 @@ final class MPVMetalViewController: UIViewController {
             checkError(mpv_set_option_string(mpv, "hwdec", "no"))  // No hardware decode in simulator
             checkError(mpv_set_option_string(mpv, "vulkan-swap-mode", "fifo"))  // Sync mode for stability
             print("🎬 MPV: Using simulator-safe settings (gpu + software decode)")
+        } else if isLiveStreamMode {
+            // Live TV: Use 'gpu' with OpenGL - lighter weight, no HDR needed
+            // Skips Vulkan/MoltenVK translation layer for lower resource usage
+            checkError(mpv_set_option_string(mpv, "vo", "gpu"))
+            checkError(mpv_set_option_string(mpv, "gpu-api", "opengl"))
+            checkError(mpv_set_option_string(mpv, "hwdec", "videotoolbox"))  // Still use hardware decode
+            checkError(mpv_set_option_string(mpv, "gpu-hwdec-interop", "videotoolbox"))
+
+            print("🎬 MPV: Using live stream settings (gpu + OpenGL + VideoToolbox)")
         } else {
-            // Real device: Use gpu-next with Vulkan (via MoltenVK) for HDR support
+            // VOD: Use gpu-next with Vulkan (via MoltenVK) for HDR support
             // Note: gpu-next uses libplacebo which requires Vulkan; there's no native Metal path
             checkError(mpv_set_option_string(mpv, "vo", "gpu-next"))
             checkError(mpv_set_option_string(mpv, "gpu-api", "vulkan"))
@@ -330,7 +340,7 @@ final class MPVMetalViewController: UIViewController {
             // GPU optimizations - minimize CPU work
             checkError(mpv_set_option_string(mpv, "gpu-hwdec-interop", "videotoolbox"))  // Keep frames on GPU
 
-            print("🎬 MPV: Using device settings (gpu-next + Vulkan/MoltenVK + VideoToolbox + HDR)")
+            print("🎬 MPV: Using VOD settings (gpu-next + Vulkan/MoltenVK + VideoToolbox + HDR)")
         }
 
         // Audio configuration
@@ -386,12 +396,15 @@ final class MPVMetalViewController: UIViewController {
             checkError(mpv_set_option_string(mpv, "demuxer-readahead-secs", "30"))
 
             // High quality scaling for 720p/1080p content upscaled to 4K
+            // Skip for Live TV - use fast bilinear to reduce GPU load for multiview
             let highQualityScaling = UserDefaults.standard.bool(forKey: "highQualityScaling")
-            if highQualityScaling {
+            if highQualityScaling && !isLiveStreamMode {
                 checkError(mpv_set_option_string(mpv, "scale", "ewa_lanczossharp"))  // Best quality upscaling
                 checkError(mpv_set_option_string(mpv, "dscale", "mitchell"))         // Quality downscaling
                 checkError(mpv_set_option_string(mpv, "cscale", "ewa_lanczossharp")) // Best chroma upscaling
                 print("🎬 MPV: High quality scaling enabled (ewa_lanczossharp/mitchell)")
+            } else if isLiveStreamMode {
+                print("🎬 MPV: Live TV mode - using fast bilinear scaling")
             }
         }
 

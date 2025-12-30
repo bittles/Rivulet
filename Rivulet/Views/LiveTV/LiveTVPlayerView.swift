@@ -197,6 +197,7 @@ struct LiveTVPlayerView: View {
                             isFocused: viewModel.focusedSlotIndex == index && !viewModel.showControls,
                             showBorder: viewModel.streamCount > 1,
                             showChannelBadge: showChannelBadges,
+                            containerSize: CGSize(width: rect.width, height: rect.height),
                             onControllerReady: { controller in
                                 viewModel.setPlayerController(controller, for: slot.id)
                             }
@@ -259,6 +260,8 @@ struct LiveTVPlayerView: View {
             let sideStreams = viewModel.streams.filter { $0.id != mainSlot?.id }
             let sideCount = max(sideStreams.count, 1)
 
+            print("📐 Focus layout: mainId=\(mainId), mainSlot=\(mainSlot?.id.uuidString.prefix(8) ?? "nil"), sideCount=\(sideCount)")
+
             // Main stream: 75% width, maintain 16:9 aspect ratio
             let mainWidth = size.width * 0.75
             let mainHeight = min(mainWidth / aspect, size.height)
@@ -278,12 +281,16 @@ struct LiveTVPlayerView: View {
             let startX = (size.width - totalWidth) / 2
 
             if let mainSlot {
-                frames[mainSlot.id] = CGRect(x: startX, y: mainY, width: actualMainWidth, height: mainHeight)
+                let mainFrame = CGRect(x: startX, y: mainY, width: actualMainWidth, height: mainHeight)
+                frames[mainSlot.id] = mainFrame
+                print("📐 Main frame: \(Int(mainFrame.width))x\(Int(mainFrame.height))")
             }
 
             var currentY = sideStartY
             for slot in sideStreams {
-                frames[slot.id] = CGRect(x: startX + actualMainWidth + spacing, y: currentY, width: sideWidth, height: sideSlotHeight)
+                let sideFrame = CGRect(x: startX + actualMainWidth + spacing, y: currentY, width: sideWidth, height: sideSlotHeight)
+                frames[slot.id] = sideFrame
+                print("📐 Side frame for \(slot.id.uuidString.prefix(8)): \(Int(sideFrame.width))x\(Int(sideFrame.height))")
                 currentY += sideSlotHeight + spacing
             }
         } else {
@@ -331,54 +338,108 @@ struct LiveTVPlayerView: View {
 
         // Multi-stream: d-pad navigates between streams
         if viewModel.streamCount > 1 {
-            let layout = gridLayout(for: viewModel.streamCount)
-            let currentIndex = viewModel.focusedSlotIndex
-            let row = currentIndex / layout.columns
-            let col = currentIndex % layout.columns
-
-            var newIndex = currentIndex
-
-            switch direction {
-            case .left:
-                if col > 0 {
-                    newIndex = currentIndex - 1
-                }
-                // At left edge - do nothing
-
-            case .right:
-                if col < layout.columns - 1 && currentIndex + 1 < viewModel.streamCount {
-                    newIndex = currentIndex + 1
-                }
-                // At right edge - do nothing
-
-            case .up:
-                if row > 0 {
-                    let upIndex = currentIndex - layout.columns
-                    if upIndex >= 0 {
-                        newIndex = upIndex
-                    }
-                }
-                // At top edge - do nothing (no controls popup from d-pad)
-
-            case .down:
-                if row < layout.rows - 1 {
-                    let downIndex = currentIndex + layout.columns
-                    if downIndex < viewModel.streamCount {
-                        newIndex = downIndex
-                    }
-                }
-                // At bottom edge - do nothing
-
-            @unknown default:
-                break
-            }
-
-            if newIndex != currentIndex {
-                viewModel.setFocus(to: newIndex)
+            // Handle focus layout mode differently - main stream on left, side streams stacked on right
+            if case .focus(let mainId) = viewModel.layoutMode {
+                handleFocusLayoutNavigation(direction, mainId: mainId)
+            } else {
+                handleGridLayoutNavigation(direction)
             }
         } else {
             // Single stream: any d-pad press shows controls
             showControlsWithFocus()
+        }
+    }
+
+    private func handleGridLayoutNavigation(_ direction: MoveCommandDirection) {
+        let layout = gridLayout(for: viewModel.streamCount)
+        let currentIndex = viewModel.focusedSlotIndex
+        let row = currentIndex / layout.columns
+        let col = currentIndex % layout.columns
+
+        var newIndex = currentIndex
+
+        switch direction {
+        case .left:
+            if col > 0 {
+                newIndex = currentIndex - 1
+            }
+        case .right:
+            if col < layout.columns - 1 && currentIndex + 1 < viewModel.streamCount {
+                newIndex = currentIndex + 1
+            }
+        case .up:
+            if row > 0 {
+                let upIndex = currentIndex - layout.columns
+                if upIndex >= 0 {
+                    newIndex = upIndex
+                }
+            }
+        case .down:
+            if row < layout.rows - 1 {
+                let downIndex = currentIndex + layout.columns
+                if downIndex < viewModel.streamCount {
+                    newIndex = downIndex
+                }
+            }
+        @unknown default:
+            break
+        }
+
+        if newIndex != currentIndex {
+            viewModel.setFocus(to: newIndex)
+        }
+    }
+
+    private func handleFocusLayoutNavigation(_ direction: MoveCommandDirection, mainId: UUID) {
+        let currentIndex = viewModel.focusedSlotIndex
+        guard let currentSlot = viewModel.focusedStream else { return }
+
+        let isOnMain = currentSlot.id == mainId
+        let sideStreams = viewModel.streams.filter { $0.id != mainId }
+
+        // Find current position in side streams if not on main
+        let sideIndex = sideStreams.firstIndex(where: { $0.id == currentSlot.id })
+
+        var newIndex: Int? = nil
+
+        switch direction {
+        case .left:
+            if !isOnMain {
+                // On side stream, go to main (which is on the left)
+                if let mainIndex = viewModel.streams.firstIndex(where: { $0.id == mainId }) {
+                    newIndex = mainIndex
+                }
+            }
+        case .right:
+            if isOnMain && !sideStreams.isEmpty {
+                // On main, go to first side stream (which is on the right)
+                if let firstSide = sideStreams.first,
+                   let idx = viewModel.streams.firstIndex(where: { $0.id == firstSide.id }) {
+                    newIndex = idx
+                }
+            }
+        case .up:
+            if !isOnMain, let sideIdx = sideIndex, sideIdx > 0 {
+                // On side stream, go up to previous side stream
+                let prevSide = sideStreams[sideIdx - 1]
+                if let idx = viewModel.streams.firstIndex(where: { $0.id == prevSide.id }) {
+                    newIndex = idx
+                }
+            }
+        case .down:
+            if !isOnMain, let sideIdx = sideIndex, sideIdx < sideStreams.count - 1 {
+                // On side stream, go down to next side stream
+                let nextSide = sideStreams[sideIdx + 1]
+                if let idx = viewModel.streams.firstIndex(where: { $0.id == nextSide.id }) {
+                    newIndex = idx
+                }
+            }
+        @unknown default:
+            break
+        }
+
+        if let newIndex, newIndex != currentIndex {
+            viewModel.setFocus(to: newIndex)
         }
     }
     #endif
@@ -479,8 +540,8 @@ struct LiveTVPlayerView: View {
                     .font(.system(size: 22))
                     .foregroundStyle(.white.opacity(0.6))
 
-                HStack(spacing: 32) {
-                    // Cancel button - standard glass styling
+                HStack(spacing: 24) {
+                    // Cancel button
                     Button {
                         showExitConfirmation = false
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -488,9 +549,10 @@ struct LiveTVPlayerView: View {
                         }
                     } label: {
                         Text("Cancel")
-                            .font(.system(size: 22, weight: .medium))
+                            .font(.system(size: 24, weight: .semibold))
                             .foregroundStyle(.white)
-                            .frame(width: 180, height: 58)
+                            .frame(width: 160)
+                            .padding(.vertical, 18)
                             .background(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                                     .fill(cancelFocused ? .white.opacity(0.18) : .white.opacity(0.08))
@@ -503,19 +565,20 @@ struct LiveTVPlayerView: View {
                                     )
                             )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(SettingsButtonStyle())
                     .focused($focusArea, equals: .exitConfirmButton(0))
                     .scaleEffect(cancelFocused ? 1.02 : 1.0)
                     .animation(.spring(response: 0.3, dampingFraction: 0.7), value: cancelFocused)
 
-                    // Exit button - destructive styling
+                    // Exit button - destructive
                     Button {
                         forceExitPlayer()
                     } label: {
                         Text("Exit")
-                            .font(.system(size: 22, weight: .medium))
+                            .font(.system(size: 24, weight: .semibold))
                             .foregroundStyle(.white)
-                            .frame(width: 180, height: 58)
+                            .frame(width: 160)
+                            .padding(.vertical, 18)
                             .background(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                                     .fill(exitFocused ? .red.opacity(0.25) : .white.opacity(0.08))
@@ -528,7 +591,7 @@ struct LiveTVPlayerView: View {
                                     )
                             )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(SettingsButtonStyle())
                     .focused($focusArea, equals: .exitConfirmButton(1))
                     .scaleEffect(exitFocused ? 1.02 : 1.0)
                     .animation(.spring(response: 0.3, dampingFraction: 0.7), value: exitFocused)
@@ -832,8 +895,17 @@ struct LiveTVPlayerView: View {
     }
 
     private func forceExitPlayer() {
-        viewModel.stopAllStreams()
+        // Capture viewModel reference before dismissing
+        let vm = viewModel
+
+        // Dismiss UI immediately for responsiveness
         onDismiss()
+
+        // Delay stream cleanup until dismiss animation completes (~350ms)
+        // MPV/Vulkan cleanup blocks main thread, so we need UI fully dismissed first
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            vm.stopAllStreams()
+        }
     }
 }
 

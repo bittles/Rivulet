@@ -16,6 +16,25 @@ enum SettingsDestination: Hashable {
     case cache
 }
 
+// MARK: - Live TV Player Engine
+
+enum LiveTVPlayerEngine: String, CaseIterable, CustomStringConvertible {
+    case mpv = "MPV"
+    case avplayer = "AVPlayer"
+
+    var description: String {
+        switch self {
+        case .mpv: return "MPV (Full Codec)"
+        case .avplayer: return "AVPlayer (Lightweight)"
+        }
+    }
+
+    static var current: LiveTVPlayerEngine {
+        let value = UserDefaults.standard.string(forKey: "liveTVPlayerEngine") ?? "MPV"
+        return LiveTVPlayerEngine(rawValue: value) ?? .mpv
+    }
+}
+
 // MARK: - Autoplay Countdown
 
 enum AutoplayCountdown: Int, CaseIterable, CustomStringConvertible {
@@ -42,6 +61,7 @@ struct SettingsView: View {
     @AppStorage("showLibraryHero") private var showLibraryHero = true
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
     @AppStorage("liveTVLayout") private var liveTVLayoutRaw = LiveTVLayout.channels.rawValue
+    @AppStorage("liveTVPlayerEngine") private var liveTVPlayerEngineRaw = LiveTVPlayerEngine.mpv.rawValue
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
     @AppStorage("allowFourStreams") private var allowFourStreams = false
     @AppStorage("showSkipButton") private var showSkipButton = true
@@ -49,8 +69,13 @@ struct SettingsView: View {
     @AppStorage("autoSkipCredits") private var autoSkipCredits = false
     @AppStorage("highQualityScaling") private var highQualityScaling = true
     @AppStorage("autoplayCountdown") private var autoplayCountdownRaw = AutoplayCountdown.fiveSeconds.rawValue
+    @AppStorage("showMarkersOnScrubber") private var showMarkersOnScrubber = true
     @Environment(\.focusScopeManager) private var focusScopeManager
     @Environment(\.nestedNavigationState) private var nestedNavState
+    #if os(tvOS)
+    @Environment(\.openSidebar) private var openSidebar
+    @Environment(\.isSidebarVisible) private var isSidebarVisible
+    #endif
     @State private var focusTrigger = 0  // Increment to trigger first row focus
 
     private var liveTVLayout: Binding<LiveTVLayout> {
@@ -67,6 +92,19 @@ struct SettingsView: View {
         )
     }
 
+    private var liveTVPlayerEngine: Binding<LiveTVPlayerEngine> {
+        Binding(
+            get: { LiveTVPlayerEngine(rawValue: liveTVPlayerEngineRaw) ?? .mpv },
+            set: { liveTVPlayerEngineRaw = $0.rawValue }
+        )
+    }
+
+    private var appVersion: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(version) (\(build))"
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ScrollView(.vertical, showsIndicators: false) {
@@ -80,67 +118,18 @@ struct SettingsView: View {
 
                     // Settings categories
                     VStack(spacing: 24) {
-                        // Servers section
-                        SettingsSection(title: "Servers") {
-                            SettingsRow(
-                                icon: "server.rack",
-                                iconColor: .orange,
-                                title: "Plex Server",
-                                subtitle: "Media library connection",
-                                action: {
-                                    navigationPath.append(SettingsDestination.plex)
-                                },
-                                focusTrigger: focusTrigger  // First row gets focus
-                            )
-
-                            SettingsRow(
-                                icon: "tv.and.mediabox",
-                                iconColor: .blue,
-                                title: "Live TV Sources",
-                                subtitle: "Manage channel sources"
-                            ) {
-                                navigationPath.append(SettingsDestination.iptv)
-                            }
-                        }
-
-                        // Live TV section
-                        SettingsSection(title: "Live TV") {
-                            SettingsPickerRow(
-                                icon: "tv",
-                                iconColor: .green,
-                                title: "Default Layout",
-                                subtitle: "Choose channel grid or TV guide view",
-                                selection: liveTVLayout,
-                                options: LiveTVLayout.allCases
-                            )
-
-                            SettingsToggleRow(
-                                icon: "rectangle.split.2x2",
-                                iconColor: .blue,
-                                title: "Confirm Exit Multiview",
-                                subtitle: "Ask before closing multiple streams",
-                                isOn: $confirmExitMultiview
-                            )
-
-                            SettingsToggleRow(
-                                icon: "rectangle.split.2x2.fill",
-                                iconColor: .orange,
-                                title: "Allow 3 or 4 Streams",
-                                subtitle: "This will most likely crash the app, but go for it",
-                                isOn: $allowFourStreams
-                            )
-                        }
-
                         // Appearance section
                         SettingsSection(title: "Appearance") {
                             SettingsRow(
                                 icon: "sidebar.squares.left",
                                 iconColor: .purple,
                                 title: "Sidebar Libraries",
-                                subtitle: "Show, hide, and reorder libraries"
-                            ) {
-                                navigationPath.append(SettingsDestination.libraries)
-                            }
+                                subtitle: "Show, hide, and reorder libraries",
+                                action: {
+                                    navigationPath.append(SettingsDestination.libraries)
+                                },
+                                focusTrigger: focusTrigger  // First row gets focus
+                            )
 
                             SettingsToggleRow(
                                 icon: "sparkles.rectangle.stack",
@@ -165,18 +154,6 @@ struct SettingsView: View {
                                 subtitle: "Top Rated, Rediscover, and similar",
                                 isOn: $showLibraryRecommendations
                             )
-                        }
-
-                        // Storage section
-                        SettingsSection(title: "Storage") {
-                            SettingsRow(
-                                icon: "internaldrive",
-                                iconColor: .gray,
-                                title: "Cache & Storage",
-                                subtitle: "Manage cached images and data"
-                            ) {
-                                navigationPath.append(SettingsDestination.cache)
-                            }
                         }
 
                         // Playback section
@@ -221,12 +198,92 @@ struct SettingsView: View {
                                 subtitle: "Sharper upscaling for 720p/1080p content",
                                 isOn: $highQualityScaling
                             )
+
+                            SettingsToggleRow(
+                                icon: "timeline.selection",
+                                iconColor: .yellow,
+                                title: "Show Markers on Scrubber",
+                                subtitle: "Highlight intro and credits on the progress bar",
+                                isOn: $showMarkersOnScrubber
+                            )
+                        }
+
+                        // Live TV section
+                        SettingsSection(title: "Live TV") {
+                            SettingsPickerRow(
+                                icon: "tv",
+                                iconColor: .green,
+                                title: "Default Layout",
+                                subtitle: "Choose channel grid or TV guide view",
+                                selection: liveTVLayout,
+                                options: LiveTVLayout.allCases
+                            )
+
+                            // TODO: Re-enable when AVPlayer supports more stream formats (needs HLS source)
+                            // Currently only works with proper HLS streams, not raw MPEG-TS from Dispatcharr
+                            // SettingsPickerRow(
+                            //     icon: "play.rectangle.on.rectangle",
+                            //     iconColor: .cyan,
+                            //     title: "Player Engine",
+                            //     subtitle: "AVPlayer uses less memory for multi-stream, but supports less video formats",
+                            //     selection: liveTVPlayerEngine,
+                            //     options: LiveTVPlayerEngine.allCases
+                            // )
+
+                            SettingsToggleRow(
+                                icon: "rectangle.split.2x2",
+                                iconColor: .blue,
+                                title: "Confirm Exit Multiview",
+                                subtitle: "Ask before closing multiple streams",
+                                isOn: $confirmExitMultiview
+                            )
+
+                            SettingsToggleRow(
+                                icon: "rectangle.split.2x2.fill",
+                                iconColor: .orange,
+                                title: "Allow 3 or 4 Streams",
+                                subtitle: "This may crash the app. Will probably crash the app. But go for it.",
+                                isOn: $allowFourStreams
+                            )
+                        }
+
+                        // Storage section
+                        SettingsSection(title: "Storage") {
+                            SettingsRow(
+                                icon: "internaldrive",
+                                iconColor: .gray,
+                                title: "Cache & Storage",
+                                subtitle: "Manage cached images and data"
+                            ) {
+                                navigationPath.append(SettingsDestination.cache)
+                            }
+                        }
+
+                        // Servers section
+                        SettingsSection(title: "Servers") {
+                            SettingsRow(
+                                icon: "server.rack",
+                                iconColor: .orange,
+                                title: "Plex Server",
+                                subtitle: "Media library connection"
+                            ) {
+                                navigationPath.append(SettingsDestination.plex)
+                            }
+
+                            SettingsRow(
+                                icon: "tv.and.mediabox",
+                                iconColor: .blue,
+                                title: "Live TV Sources",
+                                subtitle: "Manage channel sources"
+                            ) {
+                                navigationPath.append(SettingsDestination.iptv)
+                            }
                         }
 
                         // About section
                         SettingsSection(title: "About") {
                             SettingsInfoRow(title: "App", value: "Rivulet")
-                            SettingsInfoRow(title: "Version", value: "1.0.0")
+                            SettingsInfoRow(title: "Version", value: appVersion)
                         }
                     }
                     .padding(.horizontal, 80)
@@ -234,6 +291,15 @@ struct SettingsView: View {
                 }
             }
             .background(Color.black)
+            #if os(tvOS)
+            .onMoveCommand { direction in
+                // Open sidebar when pressing left at the edge
+                guard !isSidebarVisible else { return }
+                if direction == .left {
+                    openSidebar()
+                }
+            }
+            #endif
             .onAppear {
                 // Set initial focus when view first appears
                 DispatchQueue.main.async {
@@ -247,13 +313,13 @@ struct SettingsView: View {
             .navigationDestination(for: SettingsDestination.self) { destination in
                 switch destination {
                 case .plex:
-                    PlexSettingsView(goBack: { navigationPath.removeLast() })
+                    PlexSettingsView()
                 case .iptv:
-                    IPTVSettingsView(goBack: { navigationPath.removeLast() })
+                    IPTVSettingsView()
                 case .libraries:
-                    LibrarySettingsView(goBack: { navigationPath.removeLast() })
+                    LibrarySettingsView()
                 case .cache:
-                    CacheSettingsView(goBack: { navigationPath.removeLast() })
+                    CacheSettingsView()
                 }
             }
         }

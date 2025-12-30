@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 import UIKit
+import Sentry
 
 @MainActor
 final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
@@ -257,5 +258,18 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
 
     func mpvPlayerDidEncounterError(_ message: String) {
         errorSubject.send(.unknown(message))
+
+        // Capture playback error to Sentry with context
+        let event = Event(level: .error)
+        event.message = SentryMessage(formatted: "MPV Playback Error: \(message)")
+        event.extra = [
+            "error_message": message,
+            "pending_url": pendingURL?.absoluteString ?? "none",
+            "has_controller": playerController != nil,
+            "duration": _duration,
+            "current_time": playerController?.currentTime ?? 0
+        ]
+        event.tags = ["component": "mpv_player"]
+        SentrySDK.capture(event: event)
     }
 }

@@ -8,6 +8,7 @@
 import SwiftUI
 import Combine
 import UIKit
+import Sentry
 
 // MARK: - Subtitle Preference
 
@@ -471,6 +472,16 @@ final class UniversalPlayerViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
             playbackState = .failed(.loadFailed(error.localizedDescription))
+
+            // Capture playback load failure to Sentry
+            SentrySDK.capture(error: error) { scope in
+                scope.setTag(value: "playback", key: "component")
+                scope.setExtra(value: url.absoluteString, key: "stream_url")
+                scope.setExtra(value: self.metadata.title ?? "unknown", key: "media_title")
+                scope.setExtra(value: self.metadata.type ?? "unknown", key: "media_type")
+                scope.setExtra(value: self.metadata.ratingKey ?? "unknown", key: "rating_key")
+                scope.setExtra(value: self.startOffset ?? 0, key: "start_offset")
+            }
         }
     }
 

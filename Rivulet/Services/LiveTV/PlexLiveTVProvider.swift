@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Sentry
 
 /// LiveTVProvider implementation for Plex Live TV
 actor PlexLiveTVProvider: LiveTVProvider {
@@ -76,10 +77,22 @@ actor PlexLiveTVProvider: LiveTVProvider {
         print("📺 PlexLiveTVProvider: Fetching channels from Plex Live TV")
 
         // First check capabilities
-        let caps = try await networkManager.getLiveTVCapabilities(
-            serverURL: serverURL,
-            authToken: authToken
-        )
+        let caps: PlexLiveTVCapabilities
+        do {
+            caps = try await networkManager.getLiveTVCapabilities(
+                serverURL: serverURL,
+                authToken: authToken
+            )
+        } catch {
+            // Capture Plex Live TV capability check failure
+            let capturedServerURL = self.serverURL
+            SentrySDK.capture(error: error) { scope in
+                scope.setTag(value: "plex_livetv", key: "component")
+                scope.setTag(value: "capability_check", key: "operation")
+                scope.setExtra(value: capturedServerURL, key: "server_url")
+            }
+            throw error
+        }
         capabilities = caps
 
         guard caps.liveTVEnabled else {
@@ -87,10 +100,22 @@ actor PlexLiveTVProvider: LiveTVProvider {
         }
 
         // Fetch channels
-        let plexChannels = try await networkManager.getLiveTVChannels(
-            serverURL: serverURL,
-            authToken: authToken
-        )
+        let plexChannels: [PlexLiveTVChannel]
+        do {
+            plexChannels = try await networkManager.getLiveTVChannels(
+                serverURL: serverURL,
+                authToken: authToken
+            )
+        } catch {
+            // Capture Plex Live TV channel fetch failure
+            let capturedServerURL = self.serverURL
+            SentrySDK.capture(error: error) { scope in
+                scope.setTag(value: "plex_livetv", key: "component")
+                scope.setTag(value: "channel_fetch", key: "operation")
+                scope.setExtra(value: capturedServerURL, key: "server_url")
+            }
+            throw error
+        }
 
         print("📺 PlexLiveTVProvider: ✅ Fetched \(plexChannels.count) channels")
 
@@ -133,13 +158,27 @@ actor PlexLiveTVProvider: LiveTVProvider {
         }
 
         // Fetch guide data
-        let guideChannels = try await networkManager.getLiveTVGuide(
-            serverURL: serverURL,
-            authToken: authToken,
-            channelIds: channelRatingKeys.isEmpty ? nil : channelRatingKeys,
-            startTime: startDate,
-            endTime: endDate
-        )
+        let guideChannels: [PlexLiveTVGuideChannel]
+        do {
+            guideChannels = try await networkManager.getLiveTVGuide(
+                serverURL: serverURL,
+                authToken: authToken,
+                channelIds: channelRatingKeys.isEmpty ? nil : channelRatingKeys,
+                startTime: startDate,
+                endTime: endDate
+            )
+        } catch {
+            // Capture Plex Live TV EPG fetch failure
+            let capturedServerURL = self.serverURL
+            let capturedChannelCount = channels.count
+            SentrySDK.capture(error: error) { scope in
+                scope.setTag(value: "plex_livetv", key: "component")
+                scope.setTag(value: "epg_fetch", key: "operation")
+                scope.setExtra(value: capturedServerURL, key: "server_url")
+                scope.setExtra(value: capturedChannelCount, key: "channel_count")
+            }
+            throw error
+        }
 
         print("📺 PlexLiveTVProvider: ✅ Fetched EPG for \(guideChannels.count) channels")
 

@@ -13,6 +13,7 @@
 //
 
 import Foundation
+import Sentry
 
 // MARK: - Network Priority
 
@@ -80,7 +81,22 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             if let responseStr = String(data: data, encoding: .utf8) {
                 print("🌐 PlexNetwork: Response body: \(responseStr.prefix(500))")
             }
-            throw PlexAPIError.httpError(statusCode: httpResponse.statusCode, data: data)
+            let error = PlexAPIError.httpError(statusCode: httpResponse.statusCode, data: data)
+
+            // Capture HTTP errors to Sentry (skip 401/403 as those are expected auth errors)
+            if httpResponse.statusCode != 401 && httpResponse.statusCode != 403 {
+                SentrySDK.capture(error: error) { scope in
+                    scope.setTag(value: "plex_network", key: "component")
+                    scope.setExtra(value: url.absoluteString, key: "url")
+                    scope.setExtra(value: method, key: "method")
+                    scope.setExtra(value: httpResponse.statusCode, key: "status_code")
+                    if let responseStr = String(data: data, encoding: .utf8) {
+                        scope.setExtra(value: String(responseStr.prefix(500)), key: "response_body")
+                    }
+                }
+            }
+
+            throw error
         }
 
         // Debug: print first part of response
@@ -95,6 +111,18 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             if let responseStr = String(data: data, encoding: .utf8) {
                 print("🌐 PlexNetwork: Full response: \(responseStr)")
             }
+
+            // Capture JSON decode errors to Sentry
+            SentrySDK.capture(error: error) { scope in
+                scope.setTag(value: "plex_network", key: "component")
+                scope.setTag(value: "json_decode", key: "error_type")
+                scope.setExtra(value: url.absoluteString, key: "url")
+                scope.setExtra(value: String(describing: T.self), key: "expected_type")
+                if let responseStr = String(data: data, encoding: .utf8) {
+                    scope.setExtra(value: String(responseStr.prefix(1000)), key: "response_body")
+                }
+            }
+
             throw error
         }
     }

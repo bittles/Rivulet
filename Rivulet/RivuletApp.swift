@@ -7,21 +7,24 @@
 
 import SwiftUI
 import SwiftData
-// import Sentry  // TODO: Add Sentry package when SPM issue is resolved
+import Sentry
 
 @main
 struct RivuletApp: App {
 
-    // TODO: Uncomment when Sentry package is added
-    // init() {
-    //     SentrySDK.start { options in
-    //         options.dsn = "YOUR_SENTRY_DSN_HERE"
-    //         options.debug = false
-    //         options.tracesSampleRate = 1.0
-    //         options.attachStacktrace = true
-    //         options.enableAutoSessionTracking = true
-    //     }
-    // }
+    init() {
+        SentrySDK.start { options in
+            options.dsn = Secrets.sentryDSN
+            options.debug = false
+            options.tracesSampleRate = 1.0
+            options.attachStacktrace = true
+            options.enableAutoSessionTracking = true
+            options.enableCaptureFailedRequests = true
+            options.enableSwizzling = true
+            options.enableAppHangTracking = true
+            options.appHangTimeoutInterval = 2
+        }
+    }
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([

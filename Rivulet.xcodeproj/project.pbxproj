@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A71F81702EFBA6DD00AAC4F6 /* MPVKit in Frameworks */ = {isa = PBXBuildFile; productRef = A71F816F2EFBA6DD00AAC4F6 /* MPVKit */; };
+		A7F159552F04124A001B2177 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A7F159542F04124A001B2177 /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -41,6 +42,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A71F81702EFBA6DD00AAC4F6 /* MPVKit in Frameworks */,
+				A7F159552F04124A001B2177 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -51,6 +53,7 @@
 			isa = PBXGroup;
 			children = (
 				A72E03DC2EDA297D003A73DA /* Rivulet */,
+				A7F159532F04124A001B2177 /* Frameworks */,
 				A72E03DB2EDA297D003A73DA /* Products */,
 			);
 			sourceTree = "<group>";
@@ -61,6 +64,13 @@
 				A72E03DA2EDA297D003A73DA /* Rivulet.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A7F159532F04124A001B2177 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -84,6 +94,7 @@
 			name = Rivulet;
 			packageProductDependencies = (
 				A71F816F2EFBA6DD00AAC4F6 /* MPVKit */,
+				A7F159542F04124A001B2177 /* Sentry */,
 			);
 			productName = Rivulet;
 			productReference = A72E03DA2EDA297D003A73DA /* Rivulet.app */;
@@ -410,6 +421,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A71F816E2EFBA6DD00AAC4F6 /* XCLocalSwiftPackageReference "../../MPVKit" */;
 			productName = MPVKit;
+		};
+		A7F159542F04124A001B2177 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A700F81A2EFBA1610042C07D /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

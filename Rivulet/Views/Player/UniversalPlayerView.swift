@@ -16,6 +16,14 @@ struct UniversalPlayerView: View {
     @State private var playerController: MPVMetalViewController?
     @FocusState private var isSkipButtonFocused: Bool
 
+    // Tap vs hold detection for left/right d-pad
+    // Since Siri Remote onMoveCommand fires once per click (no begin/end events),
+    // we use rapid repeated clicks to detect "hold" behavior
+    @State private var lastArrowDirection: MoveCommandDirection?
+    @State private var arrowClickCount = 0
+    @State private var arrowHoldTimer: Timer?
+    private let holdDetectionWindow: TimeInterval = 0.35  // Time window to detect rapid clicks as "hold"
+
     /// Initialize with metadata (creates viewModel internally)
     init(
         metadata: PlexMetadata,
@@ -107,6 +115,7 @@ struct UniversalPlayerView: View {
         }
         #if os(tvOS)
         .onMoveCommand { direction in
+            print("🎮 [SwiftUI onMoveCommand] direction: \(direction), showInfoPanel: \(viewModel.showInfoPanel)")
             if viewModel.showInfoPanel {
                 // Settings panel navigation - 3 column layout
                 switch direction {
@@ -125,6 +134,8 @@ struct UniversalPlayerView: View {
                     break
                 }
             } else {
+                // Left/right are handled by gesture recognizers in PlayerContainerViewController
+                // for tap vs hold detection. Only handle up/down here.
                 handleMoveCommand(direction)
             }
         }
@@ -192,9 +203,9 @@ struct UniversalPlayerView: View {
                 focusScopeManager.deactivate()
             }
         }
-        // Auto-focus skip button when it appears (if controls not showing)
+        // Auto-focus skip button when it appears
         .onChange(of: viewModel.showSkipButton) { _, showButton in
-            if showButton && !viewModel.showControls && !viewModel.showInfoPanel {
+            if showButton && !viewModel.showInfoPanel {
                 // Brief delay to ensure button is rendered
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     isSkipButtonFocused = true
@@ -306,21 +317,27 @@ struct UniversalPlayerView: View {
                         Text(viewModel.skipButtonLabel)
                             .font(.system(size: 24, weight: .semibold))
                     }
-                    .foregroundStyle(.white)
+                    .foregroundStyle(isSkipButtonFocused ? .white : .white.opacity(0.9))
                     .padding(.horizontal, 32)
                     .padding(.vertical, 16)
                     .background(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(isSkipButtonFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                            .fill(isSkipButtonFocused ? .white.opacity(0.25) : .white.opacity(0.08))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                                     .strokeBorder(
-                                        isSkipButtonFocused ? .white.opacity(0.25) : .white.opacity(0.08),
-                                        lineWidth: 1
+                                        isSkipButtonFocused ? .white.opacity(0.4) : .white.opacity(0.08),
+                                        lineWidth: isSkipButtonFocused ? 2 : 1
                                     )
                             )
                     )
-                    .scaleEffect(isSkipButtonFocused ? 1.02 : 1.0)
+                    .shadow(
+                        color: isSkipButtonFocused ? .white.opacity(0.3) : .clear,
+                        radius: 12,
+                        x: 0,
+                        y: 0
+                    )
+                    .scaleEffect(isSkipButtonFocused ? 1.04 : 1.0)
                     .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSkipButtonFocused)
                 }
                 #if os(tvOS)
@@ -341,33 +358,12 @@ struct UniversalPlayerView: View {
 
     #if os(tvOS)
     private func handleMoveCommand(_ direction: MoveCommandDirection) {
+        print("🎮 [handleMoveCommand] direction: \(direction), isScrubbing: \(viewModel.isScrubbing), infoPanel: \(viewModel.showInfoPanel)")
         switch direction {
         case .left:
-            if isSkipButtonFocused {
-                // When skip button focused, left does nothing (skip button is on right)
-                return
-            }
-            if viewModel.showControls || viewModel.isScrubbing {
-                // Controls visible: enter or continue scrubbing
-                viewModel.showControlsTemporarily()
-                viewModel.scrubInDirection(forward: false)
-            } else {
-                // Controls hidden: quick 10-second jump
-                Task { await viewModel.seekRelative(by: -10) }
-            }
+            handleArrowInput(forward: false)
         case .right:
-            if isSkipButtonFocused {
-                // When skip button focused, right does nothing
-                return
-            }
-            if viewModel.showControls || viewModel.isScrubbing {
-                // Controls visible: enter or continue scrubbing
-                viewModel.showControlsTemporarily()
-                viewModel.scrubInDirection(forward: true)
-            } else {
-                // Controls hidden: quick 10-second jump
-                Task { await viewModel.seekRelative(by: 10) }
-            }
+            handleArrowInput(forward: true)
         case .down:
             if isSkipButtonFocused {
                 // Down from skip button: unfocus skip button, show controls
@@ -397,6 +393,61 @@ struct UniversalPlayerView: View {
             }
         @unknown default:
             break
+        }
+    }
+
+    /// Handle left/right arrow input with tap vs hold detection.
+    /// Since Siri Remote doesn't provide press duration, we detect "hold" by rapid repeated clicks.
+    /// - First click: Wait briefly, then execute 10s skip if no follow-up
+    /// - Rapid clicks (within holdDetectionWindow): Start/continue scrubbing
+    private func handleArrowInput(forward: Bool) {
+        let currentDirection: MoveCommandDirection = forward ? .right : .left
+
+        // If already scrubbing, each arrow press changes direction or increases speed
+        if viewModel.isScrubbing {
+            print("🎮 [ARROW] Already scrubbing, adjusting direction/speed")
+            viewModel.scrubInDirection(forward: forward)
+            viewModel.showControlsTemporarily()
+            return
+        }
+
+        // Check if this is a rapid follow-up click (same direction within window)
+        if lastArrowDirection == currentDirection {
+            arrowClickCount += 1
+            print("🎮 [ARROW] Rapid click #\(arrowClickCount) detected")
+
+            // Cancel the pending tap action
+            arrowHoldTimer?.invalidate()
+
+            if arrowClickCount >= 2 {
+                // Multiple rapid clicks = user wants to scrub
+                print("🎮 [ARROW] Hold detected via rapid clicks - starting scrub")
+                viewModel.scrubInDirection(forward: forward)
+                viewModel.showControlsTemporarily()
+                // Reset for next interaction
+                arrowClickCount = 0
+                lastArrowDirection = nil
+                return
+            }
+        } else {
+            // Different direction or first click - reset tracking
+            arrowClickCount = 1
+            lastArrowDirection = currentDirection
+        }
+
+        // Cancel any existing timer
+        arrowHoldTimer?.invalidate()
+
+        // Start timer - if no follow-up click within window, execute tap action (10s skip)
+        arrowHoldTimer = Timer.scheduledTimer(withTimeInterval: holdDetectionWindow, repeats: false) { [self] _ in
+            print("🎮 [ARROW] Tap confirmed - skipping \(forward ? "forward" : "backward") 10s")
+            Task { @MainActor in
+                await viewModel.seekRelative(by: forward ? 10 : -10)
+                viewModel.showControlsTemporarily()
+            }
+            // Reset tracking
+            arrowClickCount = 0
+            lastArrowDirection = nil
         }
     }
 

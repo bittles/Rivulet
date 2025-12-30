@@ -20,12 +20,43 @@ struct PlexSearchView: View {
     @State private var searchTask: Task<Void, Never>?
     @State private var searchToken = 0
     @State private var lastSubmittedQuery = ""
+    @AppStorage("recentSearches") private var recentSearchesData: Data = Data()
 
     @FocusState private var isSearchFieldFocused: Bool
 
     private let networkManager = PlexNetworkManager.shared
     private let minQueryLength = 2
     private let debounceIntervalNs: UInt64 = 350_000_000
+    private let maxRecentSearches = 10
+
+    private var recentSearches: [String] {
+        get {
+            (try? JSONDecoder().decode([String].self, from: recentSearchesData)) ?? []
+        }
+    }
+
+    private func saveRecentSearch(_ query: String) {
+        var searches = recentSearches
+        // Remove if already exists (to move to front)
+        searches.removeAll { $0.lowercased() == query.lowercased() }
+        // Add to front
+        searches.insert(query, at: 0)
+        // Limit to max
+        if searches.count > maxRecentSearches {
+            searches = Array(searches.prefix(maxRecentSearches))
+        }
+        recentSearchesData = (try? JSONEncoder().encode(searches)) ?? Data()
+    }
+
+    private func removeRecentSearch(_ query: String) {
+        var searches = recentSearches
+        searches.removeAll { $0 == query }
+        recentSearchesData = (try? JSONEncoder().encode(searches)) ?? Data()
+    }
+
+    private func clearRecentSearches() {
+        recentSearchesData = Data()
+    }
 
     var body: some View {
         NavigationStack {
@@ -268,29 +299,77 @@ struct PlexSearchView: View {
     // MARK: - State Views
 
     private var searchPromptView: some View {
-        let message: String
-        if trimmedQuery.isEmpty {
-            message = "Search your libraries."
-        } else {
-            message = "Type at least \(minQueryLength) characters to search."
-        }
+        VStack(spacing: 32) {
+            // Main prompt
+            VStack(spacing: 16) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 48, weight: .light))
+                    .foregroundStyle(.secondary)
 
-        return VStack(spacing: 24) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 48, weight: .light))
-                .foregroundStyle(.secondary)
+                Text("Search Your Libraries")
+                    .font(.title2)
+                    .fontWeight(.medium)
+            }
 
-            Text("Search Plex")
-                .font(.title2)
-                .fontWeight(.medium)
-
-            Text(message)
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 520)
+            // Recent searches
+            if !recentSearches.isEmpty {
+                recentSearchesView
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var recentSearchesView: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            // Header (non-focusable label + Clear button at end)
+            Text("Recent")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .tracking(1)
+                .padding(.horizontal, 4)
+
+            #if os(tvOS)
+            // Horizontal scroll for tvOS - searches first, then Clear button
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    ForEach(recentSearches, id: \.self) { search in
+                        RecentSearchButton(text: search) {
+                            query = search
+                            submitSearch()
+                        }
+                    }
+
+                    // Clear button at the end of the row
+                    ClearRecentSearchesButton {
+                        clearRecentSearches()
+                    }
+                }
+                .padding(.horizontal, 8)   // Room for scale effect on edges
+                .padding(.vertical, 12)    // Room for scale effect top/bottom
+            }
+            .scrollClipDisabled()  // Allow scale overflow
+            #else
+            // Wrap layout for other platforms
+            FlowLayout(spacing: 10) {
+                ForEach(recentSearches, id: \.self) { search in
+                    RecentSearchButton(text: search) {
+                        query = search
+                        submitSearch()
+                    }
+                }
+            }
+
+            Button("Clear All") {
+                clearRecentSearches()
+            }
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(.secondary)
+            .buttonStyle(.plain)
+            #endif
+        }
+        .frame(maxWidth: 800)
+        .padding(.top, 32)
     }
 
     private var loadingView: some View {
@@ -461,6 +540,10 @@ struct PlexSearchView: View {
                 isLoading = false
                 errorMessage = nil
                 lastSubmittedQuery = query
+                // Save to recent searches if we got results
+                if !items.isEmpty {
+                    saveRecentSearch(query)
+                }
             }
         } catch {
             await MainActor.run {
@@ -484,6 +567,145 @@ private struct SearchableModifier: ViewModifier {
             content.searchable(text: $query, prompt: "Search movies, shows, and episodes")
         } else {
             content
+        }
+    }
+}
+#endif
+
+// MARK: - Recent Search Button
+
+private struct RecentSearchButton: View {
+    let text: String
+    let action: () -> Void
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: "clock.arrow.circlepath")
+                    #if os(tvOS)
+                    .font(.system(size: 22, weight: .medium))
+                    #else
+                    .font(.system(size: 14, weight: .medium))
+                    #endif
+                Text(text)
+                    #if os(tvOS)
+                    .font(.system(size: 26, weight: .medium))
+                    #else
+                    .font(.system(size: 17, weight: .medium))
+                    #endif
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.white)
+            #if os(tvOS)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 18)
+            #else
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            #endif
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(
+                                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                lineWidth: 1
+                            )
+                    )
+            )
+        }
+        #if os(tvOS)
+        .buttonStyle(SettingsButtonStyle())
+        .focused($isFocused)
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+        #else
+        .buttonStyle(.plain)
+        #endif
+    }
+}
+
+#if os(tvOS)
+private struct ClearRecentSearchesButton: View {
+    let action: () -> Void
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 20, weight: .medium))
+                Text("Clear")
+                    .font(.system(size: 24, weight: .medium))
+            }
+            .foregroundStyle(.white.opacity(isFocused ? 1.0 : 0.6))
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(
+                                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                lineWidth: 1
+                            )
+                    )
+            )
+        }
+        .buttonStyle(SettingsButtonStyle())
+        .focused($isFocused)
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+    }
+}
+#endif
+
+#if !os(tvOS)
+// Simple flow layout for non-tvOS platforms
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 10
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var height: CGFloat = 0
+        var x: CGFloat = 0
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > width && x > 0 {
+                height += rowHeight + spacing
+                x = 0
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        height += rowHeight
+
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX && x > bounds.minX {
+                y += rowHeight + spacing
+                x = bounds.minX
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
         }
     }
 }

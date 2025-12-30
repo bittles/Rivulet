@@ -16,7 +16,6 @@ struct IPTVSettingsView: View {
     @State private var isCheckingPlexDVR: Bool = false
     @State private var isAddingPlexLiveTV: Bool = false
     @State private var plexAddError: String?
-    var goBack: () -> Void = {}
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {

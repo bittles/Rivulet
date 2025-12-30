@@ -9,6 +9,7 @@ import SwiftUI
 
 struct PlayerControlsOverlay: View {
     @ObservedObject var viewModel: UniversalPlayerViewModel
+    @AppStorage("showMarkersOnScrubber") private var showMarkersOnScrubber = true
 
     /// When true, shows only the info panel. When false, shows only the transport bar.
     var showInfoPanel: Bool = false
@@ -66,7 +67,9 @@ struct PlayerControlsOverlay: View {
                 isScrubbing: viewModel.isScrubbing,
                 scrubTime: viewModel.scrubTime,
                 scrubSpeed: viewModel.scrubSpeed,
-                scrubThumbnail: viewModel.scrubThumbnail
+                scrubThumbnail: viewModel.scrubThumbnail,
+                markers: viewModel.metadata.allMarkers,
+                showMarkers: showMarkersOnScrubber
             )
             .padding(.horizontal, 80)
             .padding(.bottom, 50)
@@ -500,6 +503,8 @@ private struct TransportProgressBar: View {
     var scrubTime: TimeInterval = 0
     var scrubSpeed: Int = 0
     var scrubThumbnail: UIImage?
+    var markers: [PlexMarker] = []
+    var showMarkers: Bool = true
 
     private var displayTime: TimeInterval {
         isScrubbing ? scrubTime : currentTime
@@ -515,6 +520,17 @@ private struct TransportProgressBar: View {
         let magnitude = abs(scrubSpeed)
         let arrow = scrubSpeed > 0 ? "▶▶" : "◀◀"
         return "\(arrow) \(magnitude)×"
+    }
+
+    /// Color for a marker type
+    private func markerColor(for marker: PlexMarker) -> Color {
+        if marker.isIntro {
+            return .blue
+        } else if marker.isCredits {
+            return .purple
+        } else {
+            return .yellow  // commercial
+        }
     }
 
     var body: some View {
@@ -601,6 +617,24 @@ private struct TransportProgressBar: View {
                     Capsule()
                         .fill(isScrubbing ? .blue : .white)
                         .frame(width: max(0, geometry.size.width * progress))
+
+                    // Marker highlights (on top of progress bar, only show unplayed portion)
+                    if showMarkers && duration > 0 {
+                        ForEach(markers) { marker in
+                            let startProgress = max(0, marker.startTimeSeconds / duration)
+                            let endProgress = min(1, marker.endTimeSeconds / duration)
+                            // Only show if marker has valid range
+                            if endProgress > startProgress {
+                                let markerWidth = max(4, geometry.size.width * (endProgress - startProgress))
+                                let markerX = geometry.size.width * startProgress
+
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(markerColor(for: marker).opacity(0.85))
+                                    .frame(width: markerWidth, height: geometry.size.height)
+                                    .offset(x: markerX)
+                            }
+                        }
+                    }
 
                     // Playhead
                     Circle()

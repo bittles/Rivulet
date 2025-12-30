@@ -35,53 +35,28 @@ struct AddLiveTVSourceSheet: View {
                 }
             }
         }
+        #if os(tvOS)
+        .onExitCommand {
+            // Navigate back within sheet before dismissing
+            if selectedSourceType != nil {
+                selectedSourceType = nil
+            } else {
+                dismiss()
+            }
+        }
+        #endif
     }
 
     // MARK: - Header Bar
 
     private var headerBar: some View {
-        HStack {
-            Button {
-                if selectedSourceType != nil {
-                    selectedSourceType = nil
-                } else {
-                    dismiss()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: selectedSourceType != nil ? "chevron.left" : "xmark")
-                        .font(.system(size: 18, weight: .semibold))
-                    Text(selectedSourceType != nil ? "Back" : "Cancel")
-                        .font(.system(size: 24, weight: .medium))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 14)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(.white.opacity(0.1))
-                )
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            Text(headerTitle)
-                .font(.system(size: 32, weight: .bold))
-                .foregroundStyle(.white)
-
-            Spacer()
-
-            // Invisible spacer for balance
-            Text("Cancel")
-                .font(.system(size: 24, weight: .medium))
-                .padding(.horizontal, 24)
-                .padding(.vertical, 14)
-                .opacity(0)
-        }
-        .padding(.horizontal, 60)
-        .padding(.top, 40)
-        .padding(.bottom, 24)
+        Text(headerTitle)
+            .font(.system(size: 32, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 60)
+            .padding(.top, 50)
+            .padding(.bottom, 24)
     }
 
     private var headerTitle: String {
@@ -188,11 +163,11 @@ struct AddLiveTVSourceSheet: View {
     private func configurationView(for sourceType: LiveTVSourceType) -> some View {
         switch sourceType {
         case .plex:
-            PlexLiveTVConfigForm(onComplete: { dismiss() })
+            PlexLiveTVConfigForm(onBack: { selectedSourceType = nil }, onComplete: { dismiss() })
         case .dispatcharr:
-            DispatcharrConfigForm(onComplete: { dismiss() })
+            DispatcharrConfigForm(onBack: { selectedSourceType = nil }, onComplete: { dismiss() })
         case .genericM3U:
-            M3UConfigForm(onComplete: { dismiss() })
+            M3UConfigForm(onBack: { selectedSourceType = nil }, onComplete: { dismiss() })
         }
     }
 
@@ -295,6 +270,7 @@ private struct SourceTypeCard: View {
 // MARK: - Plex Live TV Config Form
 
 private struct PlexLiveTVConfigForm: View {
+    let onBack: () -> Void
     let onComplete: () -> Void
 
     @StateObject private var authManager = PlexAuthManager.shared
@@ -377,6 +353,11 @@ private struct PlexLiveTVConfigForm: View {
             }
             .padding(.horizontal, 80)
         }
+        #if os(tvOS)
+        .onExitCommand {
+            onBack()
+        }
+        #endif
     }
 
     private func addPlexLiveTV() {
@@ -411,6 +392,7 @@ private struct PlexLiveTVConfigForm: View {
 // MARK: - M3U Server Config Form
 
 private struct DispatcharrConfigForm: View {
+    let onBack: () -> Void
     let onComplete: () -> Void
 
     @StateObject private var dataStore = LiveTVDataStore.shared
@@ -537,6 +519,11 @@ private struct DispatcharrConfigForm: View {
         .onAppear {
             focusedField = .url
         }
+        #if os(tvOS)
+        .onExitCommand {
+            onBack()
+        }
+        #endif
     }
 
     @ViewBuilder
@@ -636,6 +623,7 @@ private struct DispatcharrConfigForm: View {
 // MARK: - M3U Playlist Config Form
 
 private struct M3UConfigForm: View {
+    let onBack: () -> Void
     let onComplete: () -> Void
 
     @StateObject private var dataStore = LiveTVDataStore.shared
@@ -733,6 +721,11 @@ private struct M3UConfigForm: View {
         .onAppear {
             focusedField = .m3u
         }
+        #if os(tvOS)
+        .onExitCommand {
+            onBack()
+        }
+        #endif
     }
 
     private func addM3U() {

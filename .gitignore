@@ -48,3 +48,6 @@ playground.xcworkspace
 # Provisioning Profiles
 *.mobileprovision
 *.provisionprofile
+
+# Secrets (do not commit)
+Rivulet/Config/Secrets.swift

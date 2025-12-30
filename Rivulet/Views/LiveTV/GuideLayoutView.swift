@@ -156,6 +156,14 @@ struct GuideLayoutView: View {
         .onChange(of: focusScopeManager.isScopeActive(.sidebar)) { _, active in
             if !active && selectedChannel == nil { hasFocus = true }
         }
+        .onChange(of: selectedChannel) { oldChannel, newChannel in
+            // Restore focus when player is dismissed
+            if oldChannel != nil && newChannel == nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    hasFocus = true
+                }
+            }
+        }
     }
 
     private func handleNav(_ dir: MoveCommandDirection) {

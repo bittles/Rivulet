@@ -9,7 +9,61 @@ import SwiftUI
 
 #if os(tvOS)
 
-// MARK: - Sidebar Row (non-focusable, for use with single-focus sidebar)
+// MARK: - Focusable Sidebar Row
+
+struct FocusableSidebarRow: View {
+    let id: String
+    let icon: String
+    let title: String
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    @FocusState.Binding var focusedItem: String?
+
+    var body: some View {
+        Button {
+            onSelect()
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.system(size: 22, weight: .medium))
+                    .frame(width: 26)
+
+                Text(title)
+                    .font(.system(size: 21, weight: isSelected ? .semibold : .regular))
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                if isSelected {
+                    Circle()
+                        .fill(.white)
+                        .frame(width: 6, height: 6)
+                }
+            }
+            .foregroundStyle(.white.opacity(focusedItem == id || isSelected ? 1.0 : 0.6))
+            .padding(.leading, 16)
+            .padding(.trailing, 12)
+            .padding(.vertical, 13)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(focusedItem == id ? .white.opacity(0.15) : .clear)
+            )
+            .padding(.horizontal, 16)
+        }
+        .buttonStyle(SidebarRowButtonStyle())
+        .focused($focusedItem, equals: id)
+    }
+}
+
+/// Button style for sidebar rows - removes default focus ring
+struct SidebarRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+    }
+}
+
+// MARK: - Sidebar Row (non-focusable, legacy)
 
 struct SidebarRow: View {
     let icon: String

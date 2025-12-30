@@ -8,8 +8,6 @@
 import SwiftUI
 
 struct CacheSettingsView: View {
-    let goBack: () -> Void
-
     @State private var imageCacheSize: Int64 = 0
     @State private var metadataCacheSize: Int64 = 0
     @State private var isLoadingSizes = true
@@ -22,28 +20,12 @@ struct CacheSettingsView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 32) {
-                // Header with back button
-                HStack(spacing: 20) {
-                    Button(action: goBack) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 20, weight: .semibold))
-                            Text("Settings")
-                                .font(.system(size: 21, weight: .medium))
-                        }
-                        .foregroundStyle(.white.opacity(0.6))
-                    }
-                    .buttonStyle(.plain)
-
-                    Spacer()
-                }
-                .padding(.horizontal, 80)
-                .padding(.top, 40)
-
+                // Header
                 Text("Cache & Storage")
                     .font(.system(size: 48, weight: .bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 80)
+                    .padding(.top, 60)
 
                 // Cache sizes
                 VStack(spacing: 24) {
@@ -227,5 +209,5 @@ struct CacheSettingsView: View {
 }
 
 #Preview {
-    CacheSettingsView(goBack: {})
+    CacheSettingsView()
 }

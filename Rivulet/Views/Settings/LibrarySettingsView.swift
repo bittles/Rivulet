@@ -11,7 +11,6 @@ struct LibrarySettingsView: View {
     @StateObject private var dataStore = PlexDataStore.shared
     @StateObject private var librarySettings = LibrarySettingsManager.shared
     @State private var reorderingLibrary: PlexLibrary?  // Library currently being reordered
-    var goBack: () -> Void = {}
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -23,7 +22,7 @@ struct LibrarySettingsView: View {
                     .padding(.horizontal, 80)
                     .padding(.top, 60)
 
-                Text("Choose which libraries appear in the sidebar. Click to toggle, long press for more options.")
+                Text("Choose which libraries appear in the sidebar. Click to toggle, long press to move up and donwn.")
                     .font(.system(size: 24))
                     .foregroundStyle(.white.opacity(0.5))
                     .padding(.horizontal, 80)
@@ -201,15 +200,23 @@ struct LibraryVisibilityRow: View {
         .padding(.vertical, 20)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(isFocused ? .white.opacity(0.15) : .clear)
+                .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(
+                            isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                            lineWidth: 1
+                        )
+                )
         )
         .focusable()
         .focused($isFocused)
+        .scaleEffect(isFocused ? 1.02 : 1.0)
         .onTapGesture { onToggle() }
         .onLongPressGesture(minimumDuration: 0.5) {
             onLongPress()
         }
-        .animation(.easeOut(duration: 0.15), value: isFocused)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
         .animation(.easeOut(duration: 0.2), value: isVisible)
     }
 }
@@ -322,15 +329,25 @@ struct LibraryReorderSheet: View {
                         Text("Move Up")
                             .font(.system(size: 28, weight: .medium))
                     }
+                    .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 20)
                     .background(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(focusedButton == .up ? .white.opacity(0.2) : .white.opacity(0.08))
+                            .fill(focusedButton == .up ? .white.opacity(0.18) : .white.opacity(0.08))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .strokeBorder(
+                                        focusedButton == .up ? .white.opacity(0.25) : .white.opacity(0.08),
+                                        lineWidth: 1
+                                    )
+                            )
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsButtonStyle())
                 .focused($focusedButton, equals: .up)
+                .scaleEffect(focusedButton == .up ? 1.02 : 1.0)
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: focusedButton)
                 .disabled(!canMoveUp)
                 .opacity(canMoveUp ? 1.0 : 0.4)
 
@@ -344,15 +361,25 @@ struct LibraryReorderSheet: View {
                         Text("Move Down")
                             .font(.system(size: 28, weight: .medium))
                     }
+                    .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 20)
                     .background(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(focusedButton == .down ? .white.opacity(0.2) : .white.opacity(0.08))
+                            .fill(focusedButton == .down ? .white.opacity(0.18) : .white.opacity(0.08))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .strokeBorder(
+                                        focusedButton == .down ? .white.opacity(0.25) : .white.opacity(0.08),
+                                        lineWidth: 1
+                                    )
+                            )
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsButtonStyle())
                 .focused($focusedButton, equals: .down)
+                .scaleEffect(focusedButton == .down ? 1.02 : 1.0)
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: focusedButton)
                 .disabled(!canMoveDown)
                 .opacity(canMoveDown ? 1.0 : 0.4)
             }
@@ -366,29 +393,45 @@ struct LibraryReorderSheet: View {
             } label: {
                 Text("Done")
                     .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 20)
                     .background(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .fill(focusedButton == .done ? .blue : .blue.opacity(0.8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .strokeBorder(
+                                        focusedButton == .done ? .white.opacity(0.3) : .clear,
+                                        lineWidth: 1
+                                    )
+                            )
                     )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(SettingsButtonStyle())
             .focused($focusedButton, equals: .done)
+            .scaleEffect(focusedButton == .done ? 1.02 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: focusedButton)
             .padding(.horizontal, 56)
             .padding(.bottom, 48)
         }
         .frame(width: 480)
-        .background(Color.black.opacity(0.95))
+        .background(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .fill(.black.opacity(0.3))
+        )
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
         .foregroundStyle(.white)
         .onAppear {
-            // Focus on first available button
-            if canMoveUp {
-                focusedButton = .up
-            } else if canMoveDown {
-                focusedButton = .down
-            } else {
-                focusedButton = .done
+            // Focus on first available button (delay needed for FocusState to be ready)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                if canMoveUp {
+                    focusedButton = .up
+                } else if canMoveDown {
+                    focusedButton = .down
+                } else {
+                    focusedButton = .done
+                }
             }
         }
     }

@@ -17,9 +17,7 @@ struct TVSidebarView: View {
     @StateObject private var focusScopeManager = FocusScopeManager()
     @State private var selectedDestination: TVDestination = .home
     @State private var selectedLibraryKey: String?
-    @FocusState private var focusedItem: String?
-    @State private var highlightedItem: String = "home"  // Tracks which item is currently highlighted
-    @State private var sidebarOpenTime: CFAbsoluteTime = 0  // Track when sidebar opened to ignore stale input
+    @FocusState private var sidebarFocusedItem: String?  // Track focused item in sidebar
 
     /// Computed property for sidebar visibility based on active scope
     private var isSidebarVisible: Bool {
@@ -27,18 +25,6 @@ struct TVSidebarView: View {
     }
 
     private let sidebarWidth: CGFloat = 340
-
-    /// All focusable sidebar item keys in order
-    private var allSidebarItems: [String] {
-        var items = ["search", "home"]
-        items.append(contentsOf: dataStore.visibleMediaLibraries.map { $0.key })
-        // Only show Live TV in sidebar if sources are configured
-        if liveTVDataStore.hasConfiguredSources {
-            items.append("liveTV")
-        }
-        items.append("settings")
-        return items
-    }
 
     var body: some View {
         ZStack {
@@ -116,11 +102,12 @@ struct TVSidebarView: View {
         }
         .task(id: authManager.hasCredentials) {
             if authManager.authToken != nil {
-                // Try to verify connection, but load cached data regardless
-                async let connectionCheck: () = authManager.verifyAndFixConnection()
+                // Verify connection first to avoid 500 errors from stale/invalid server URLs
+                await authManager.verifyAndFixConnection()
+                // Then load data (will use cache first, then background refresh)
                 async let hubsLoad: () = dataStore.loadHubsIfNeeded()
                 async let librariesLoad: () = dataStore.loadLibrariesIfNeeded()
-                _ = await (connectionCheck, hubsLoad, librariesLoad)
+                _ = await (hubsLoad, librariesLoad)
             }
         }
         .task {
@@ -145,116 +132,106 @@ struct TVSidebarView: View {
             .padding(.horizontal, 32)
             .padding(.bottom, 36)
 
-            // Navigation - Button-based container that captures focus
+            // Navigation with individually focusable items (enables native hold-to-scroll)
             ScrollViewReader { proxy in
-                Button {
-                    // Select/Enter navigates to highlighted item
-                    selectHighlightedItem()
-                } label: {
-                    ScrollView(.vertical, showsIndicators: false) {
-                        GlassEffectContainer {
-                            VStack(alignment: .leading, spacing: 4) {
-                                // Search
-                                SidebarRow(
-                                    icon: "magnifyingglass",
-                                    title: "Search",
-                                    isHighlighted: highlightedItem == "search",
-                                    isSelected: selectedDestination == .search
-                                )
-                                .id("search")
+                ScrollView(.vertical, showsIndicators: false) {
+                    GlassEffectContainer {
+                        VStack(alignment: .leading, spacing: 4) {
+                            // Search
+                            FocusableSidebarRow(
+                                id: "search",
+                                icon: "magnifyingglass",
+                                title: "Search",
+                                isSelected: selectedDestination == .search,
+                                onSelect: { navigateToSearch(); closeSidebar() },
+                                focusedItem: $sidebarFocusedItem
+                            )
 
-                                // Home
-                                SidebarRow(
-                                    icon: "house.fill",
-                                    title: "Home",
-                                    isHighlighted: highlightedItem == "home",
-                                    isSelected: selectedDestination == .home && selectedLibraryKey == nil
-                                )
-                                .id("home")
+                            // Home
+                            FocusableSidebarRow(
+                                id: "home",
+                                icon: "house.fill",
+                                title: "Home",
+                                isSelected: selectedDestination == .home && selectedLibraryKey == nil,
+                                onSelect: { navigateToHome(); closeSidebar() },
+                                focusedItem: $sidebarFocusedItem
+                            )
 
-                                // Libraries section (filtered by visibility, sorted by user order)
-                                // Show libraries if user has credentials (even if currently disconnected)
-                                if authManager.hasCredentials && !dataStore.visibleMediaLibraries.isEmpty {
-                                    sectionHeader(authManager.savedServerName?.uppercased() ?? "LIBRARY")
+                            // Libraries section
+                            if authManager.hasCredentials && !dataStore.visibleMediaLibraries.isEmpty {
+                                sectionHeader(authManager.savedServerName?.uppercased() ?? "LIBRARY")
 
-                                    ForEach(dataStore.visibleMediaLibraries, id: \.key) { library in
-                                        SidebarRow(
-                                            icon: iconForLibrary(library),
-                                            title: library.title,
-                                            isHighlighted: highlightedItem == library.key,
-                                            isSelected: selectedLibraryKey == library.key
-                                        )
-                                        .id(library.key)
-                                    }
-                                }
-
-                                if dataStore.isLoadingLibraries {
-                                    HStack(spacing: 12) {
-                                        ProgressView()
-                                            .tint(.white.opacity(0.5))
-                                        Text("Loading...")
-                                            .font(.system(size: 17))
-                                            .foregroundStyle(.white.opacity(0.5))
-                                    }
-                                    .padding(.horizontal, 32)
-                                    .padding(.vertical, 16)
-                                }
-
-                                // Live TV section (only if sources configured)
-                                if liveTVDataStore.hasConfiguredSources {
-                                    sectionHeader("LIVE TV")
-
-                                    SidebarRow(
-                                        icon: "tv.and.mediabox",
-                                        title: "Channels",
-                                        isHighlighted: highlightedItem == "liveTV",
-                                        isSelected: selectedDestination == .liveTV
+                                ForEach(dataStore.visibleMediaLibraries, id: \.key) { library in
+                                    FocusableSidebarRow(
+                                        id: library.key,
+                                        icon: iconForLibrary(library),
+                                        title: library.title,
+                                        isSelected: selectedLibraryKey == library.key,
+                                        onSelect: { navigateToLibrary(library); closeSidebar() },
+                                        focusedItem: $sidebarFocusedItem
                                     )
-                                    .id("liveTV")
                                 }
-
-                                Spacer(minLength: 60)
-
-                                // Settings
-                                Divider()
-                                    .background(.white.opacity(0.2))
-                                    .padding(.horizontal, 24)
-                                    .padding(.vertical, 20)
-
-                                SidebarRow(
-                                    icon: "gearshape.fill",
-                                    title: "Settings",
-                                    isHighlighted: highlightedItem == "settings",
-                                    isSelected: selectedDestination == .settings
-                                )
-                                .id("settings")
                             }
-                            .padding(.bottom, 50)
+
+                            if dataStore.isLoadingLibraries {
+                                HStack(spacing: 12) {
+                                    ProgressView()
+                                        .tint(.white.opacity(0.5))
+                                    Text("Loading...")
+                                        .font(.system(size: 17))
+                                        .foregroundStyle(.white.opacity(0.5))
+                                }
+                                .padding(.horizontal, 32)
+                                .padding(.vertical, 16)
+                            }
+
+                            // Live TV section
+                            if liveTVDataStore.hasConfiguredSources {
+                                sectionHeader("LIVE TV")
+
+                                FocusableSidebarRow(
+                                    id: "liveTV",
+                                    icon: "tv.and.mediabox",
+                                    title: "Channels",
+                                    isSelected: selectedDestination == .liveTV,
+                                    onSelect: { navigateToLiveTV(); closeSidebar() },
+                                    focusedItem: $sidebarFocusedItem
+                                )
+                            }
+
+                            Spacer(minLength: 60)
+
+                            // Settings
+                            Divider()
+                                .background(.white.opacity(0.2))
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 20)
+
+                            FocusableSidebarRow(
+                                id: "settings",
+                                icon: "gearshape.fill",
+                                title: "Settings",
+                                isSelected: selectedDestination == .settings,
+                                onSelect: { navigateToSettings(); closeSidebar() },
+                                focusedItem: $sidebarFocusedItem
+                            )
                         }
+                        .padding(.bottom, 50)
                     }
                 }
-                .buttonStyle(SidebarContainerButtonStyle())  // Custom style to prevent white focus
-                .focused($focusedItem, equals: "sidebar")
-                .disabled(!focusScopeManager.isScopeActive(.sidebar))  // Disable when not active (prevents focus escape)
-                .focusSection()  // Contain focus within sidebar, prevent escape to content
-                .onMoveCommand { direction in
-                    handleSidebarNavigation(direction: direction, proxy: proxy)
-                }
+                .focusSection()
+                .disabled(!focusScopeManager.isScopeActive(.sidebar))
                 .onExitCommand {
                     closeSidebar()
                 }
                 .onChange(of: isSidebarVisible) { _, isVisible in
                     if isVisible {
-                        focusedItem = "sidebar"
-                        proxy.scrollTo(highlightedItem, anchor: .center)
-                    }
-                }
-                // Monitor focus changes to ensure sidebar keeps focus when visible
-                .onChange(of: focusedItem) { _, newValue in
-                    print("🔷 [FOCUS] focusedItem changed to: \(String(describing: newValue)), isSidebarVisible=\(isSidebarVisible)")
-                    if isSidebarVisible && newValue != "sidebar" {
-                        print("🔷 [FOCUS] ⚠️ Focus escaped sidebar! Re-asserting...")
-                        focusedItem = "sidebar"
+                        // Focus the currently selected item when sidebar opens
+                        let itemToFocus = currentSidebarItemId
+                        sidebarFocusedItem = itemToFocus
+                        proxy.scrollTo(itemToFocus, anchor: .center)
+                    } else {
+                        sidebarFocusedItem = nil
                     }
                 }
             }
@@ -262,6 +239,19 @@ struct TVSidebarView: View {
         .padding(.top, 20)
         .padding(.bottom, 24)
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    /// Returns the ID of the currently selected sidebar item
+    private var currentSidebarItemId: String {
+        if let libraryKey = selectedLibraryKey {
+            return libraryKey
+        }
+        switch selectedDestination {
+        case .search: return "search"
+        case .home: return "home"
+        case .liveTV: return "liveTV"
+        case .settings: return "settings"
+        }
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -327,22 +317,6 @@ struct TVSidebarView: View {
     // MARK: - Navigation Actions
 
     private func openSidebar() {
-        // Set highlighted item to current selection
-        if let libraryKey = selectedLibraryKey {
-            highlightedItem = libraryKey
-        } else if selectedDestination == .search {
-            highlightedItem = "search"
-        } else if selectedDestination == .settings {
-            highlightedItem = "settings"
-        } else if selectedDestination == .liveTV {
-            highlightedItem = "liveTV"
-        } else {
-            highlightedItem = "home"
-        }
-
-        // Record open time to ignore stale input that triggered the open
-        sidebarOpenTime = CFAbsoluteTimeGetCurrent()
-
         // Activate sidebar scope (saves content focus automatically)
         focusScopeManager.activate(.sidebar)
     }
@@ -350,11 +324,6 @@ struct TVSidebarView: View {
     private func closeSidebar() {
         // Deactivate sidebar scope (restores content focus automatically)
         focusScopeManager.deactivate()
-
-        // Delay releasing sidebar focus so content can claim it first
-        DispatchQueue.main.async {
-            focusedItem = nil
-        }
     }
 
     private func handleExitCommand() {
@@ -376,89 +345,6 @@ struct TVSidebarView: View {
         }
     }
 
-    // MARK: - Sidebar Navigation Handler
-
-    private func handleSidebarNavigation(direction: MoveCommandDirection, proxy: ScrollViewProxy) {
-        print("🔷 [SIDEBAR NAV] direction=\(direction), isSidebarVisible=\(isSidebarVisible), focusedItem=\(String(describing: focusedItem))")
-
-        // Ignore move commands when sidebar isn't shown
-        guard isSidebarVisible else {
-            print("🔷 [SIDEBAR NAV] ❌ Ignored - sidebar not visible")
-            return
-        }
-
-        // Ignore stale input from the gesture that opened the sidebar (within 200ms)
-        let timeSinceOpen = CFAbsoluteTimeGetCurrent() - sidebarOpenTime
-        if timeSinceOpen < 0.2 {
-            print("🔷 [SIDEBAR NAV] ❌ Ignored - stale input")
-            return
-        }
-
-        let items = allSidebarItems
-        guard let currentIndex = items.firstIndex(of: highlightedItem) else {
-            print("🔷 [SIDEBAR NAV] ❌ Ignored - highlightedItem not found")
-            return
-        }
-
-        print("🔷 [SIDEBAR NAV] ✓ Processing: currentIndex=\(currentIndex), highlightedItem=\(highlightedItem)")
-
-        switch direction {
-        case .up:
-            // Prevent going above first item
-            if currentIndex > 0 {
-                let newIndex = currentIndex - 1
-                highlightedItem = items[newIndex]
-                withAnimation(.easeOut(duration: 0.15)) {
-                    proxy.scrollTo(items[newIndex], anchor: .center)
-                }
-            }
-            // If already at top, do nothing (prevents going off sidebar)
-            // Re-assert focus on sidebar to prevent SwiftUI from moving it
-            focusedItem = "sidebar"
-
-        case .down:
-            // Prevent going below last item
-            if currentIndex < items.count - 1 {
-                let newIndex = currentIndex + 1
-                highlightedItem = items[newIndex]
-                withAnimation(.easeOut(duration: 0.15)) {
-                    proxy.scrollTo(items[newIndex], anchor: .center)
-                }
-            }
-            // If already at bottom, do nothing (prevents going off sidebar)
-            // Re-assert focus on sidebar to prevent SwiftUI from moving it
-            focusedItem = "sidebar"
-
-        case .right:
-            // Navigate to the highlighted item (same as pressing Select)
-            selectHighlightedItem()
-
-        case .left:
-            // Just close sidebar without navigation
-            closeSidebar()
-
-        @unknown default:
-            break
-        }
-    }
-
-    /// Select/navigate to the currently highlighted sidebar item
-    private func selectHighlightedItem() {
-        // Close first so focus returns to content immediately
-        closeSidebar()
-
-        if let library = dataStore.visibleMediaLibraries.first(where: { $0.key == highlightedItem }) {
-            navigateToLibrary(library)
-        } else if highlightedItem == "search" {
-            navigateToSearch()
-        } else if highlightedItem == "home" {
-            navigateToHome()
-        } else if highlightedItem == "liveTV" {
-            navigateToLiveTV()
-        } else if highlightedItem == "settings" {
-            navigateToSettings()
-        }
-    }
 
     // MARK: - Explicit Navigation (on button press or right arrow)
 

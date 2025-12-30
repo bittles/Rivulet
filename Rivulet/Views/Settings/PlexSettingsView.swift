@@ -10,7 +10,6 @@ import SwiftUI
 struct PlexSettingsView: View {
     @StateObject private var authManager = PlexAuthManager.shared
     @State private var showAuthSheet = false
-    var goBack: () -> Void = {}
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {

@@ -70,16 +70,24 @@ Remember: users view this on a TV from across the room. Design for:
 All focusable list rows use this consistent styling:
 
 ```swift
+// Button style - CRITICAL: removes tvOS default focus ring
+.buttonStyle(SettingsButtonStyle())
+
 // Background
-RoundedRectangle(cornerRadius: 16, style: .continuous)
-    .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
-    .overlay(
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .strokeBorder(
-                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
-                lineWidth: 1
-            )
-    )
+.background(
+    RoundedRectangle(cornerRadius: 16, style: .continuous)
+        .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(
+                    isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                    lineWidth: 1
+                )
+        )
+)
+
+// Focus binding
+.focused($isFocused)
 
 // Scale
 .scaleEffect(isFocused ? 1.02 : 1.0)
@@ -87,6 +95,8 @@ RoundedRectangle(cornerRadius: 16, style: .continuous)
 // Animation
 .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
 ```
+
+**Note:** Using `.buttonStyle(.plain)` on tvOS will NOT work correctly - it still shows the default white focus glow. You MUST use `SettingsButtonStyle()` from `SettingsComponents.swift`.
 
 ### Focus States
 
@@ -307,10 +317,13 @@ Settings sections use `.glassEffect(.regular, in: RoundedRectangle(...))` for th
 
 | Style | Use Case |
 |-------|----------|
-| `CardButtonStyle()` | Poster cards, list rows (removes focus ring) |
+| `SettingsButtonStyle()` | **tvOS glass rows and buttons** - removes default focus ring |
+| `CardButtonStyle()` | Poster cards (removes focus ring) |
 | `.borderedProminent` | Primary action buttons |
 | `.bordered` | Secondary action buttons |
-| `.plain` | Non-tvOS buttons, custom styling |
+| `.plain` | Non-tvOS buttons only |
+
+**IMPORTANT:** On tvOS, always use `SettingsButtonStyle()` (from `SettingsComponents.swift`) instead of `.buttonStyle(.plain)` for custom-styled buttons. The `.plain` style still shows tvOS's default focus effects (white glow), which conflicts with our glass styling. `SettingsButtonStyle()` completely removes the default focus ring, allowing our custom `isFocused` background styling to work correctly.
 
 ### Image Loading
 
@@ -409,9 +422,10 @@ Always wrap tvOS-specific code:
 
 // In views:
 #if os(tvOS)
-.buttonStyle(CardButtonStyle())
+.buttonStyle(SettingsButtonStyle())  // NOT .plain - removes tvOS focus ring
 .focused($isFocused)
 .scaleEffect(isFocused ? 1.02 : 1.0)
+.animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
 #else
 .buttonStyle(.plain)
 #endif
@@ -671,13 +685,26 @@ The FocusMemory pattern is simpler: let tvOS focus engine handle scrolling autom
 
 ## Quick Reference: Adding a New List Row
 
-1. Create the row view with `isFocused` parameter (tvOS)
-2. Apply glass background with focus-aware styling
-3. Wrap in Button with `CardButtonStyle()`
-4. Add `.focused()` binding
+1. Create the row view with `@FocusState private var isFocused: Bool`
+2. Apply glass background with focus-aware styling:
+   ```swift
+   .background(
+       RoundedRectangle(cornerRadius: 16, style: .continuous)
+           .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+           .overlay(
+               RoundedRectangle(cornerRadius: 16, style: .continuous)
+                   .strokeBorder(
+                       isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                       lineWidth: 1
+                   )
+           )
+   )
+   ```
+3. Wrap in Button with `SettingsButtonStyle()` (NOT `.plain`)
+4. Add `.focused($isFocused)`
 5. Add `.scaleEffect(isFocused ? 1.02 : 1.0)`
 6. Add `.animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)`
-7. Add `.padding(.horizontal, 8)` to parent container
+7. Add `.padding(.horizontal, 8)` to parent container for scale room
 
 ---
 

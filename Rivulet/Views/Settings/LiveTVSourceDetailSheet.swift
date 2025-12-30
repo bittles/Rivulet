@@ -69,48 +69,26 @@ struct LiveTVSourceDetailSheet: View {
                 deleteConfirmationOverlay
             }
         }
+        #if os(tvOS)
+        .onExitCommand {
+            if showDeleteConfirmation {
+                showDeleteConfirmation = false
+            } else {
+                dismiss()
+            }
+        }
+        #endif
     }
 
     // MARK: - Header Bar
 
     private var headerBar: some View {
-        HStack {
-            Button {
-                dismiss()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 18, weight: .semibold))
-                    Text("Done")
-                        .font(.system(size: 24, weight: .medium))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 14)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(.white.opacity(0.1))
-                )
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            Text("Source Details")
-                .font(.system(size: 32, weight: .bold))
-                .foregroundStyle(.white)
-
-            Spacer()
-
-            // Invisible spacer for balance
-            Text("Done")
-                .font(.system(size: 24, weight: .medium))
-                .padding(.horizontal, 24)
-                .padding(.vertical, 14)
-                .opacity(0)
-        }
-        .padding(.horizontal, 60)
-        .padding(.top, 40)
+        Text("Source Details")
+            .font(.system(size: 32, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 60)
+            .padding(.top, 50)
         .padding(.bottom, 24)
     }
 

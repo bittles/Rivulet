@@ -65,6 +65,10 @@ class PlayerContainerViewController: UIViewController {
         let menuTapRecognizer = UITapGestureRecognizer(target: self, action: #selector(menuTapped))
         menuTapRecognizer.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
         view.addGestureRecognizer(menuTapRecognizer)
+
+        // Left/right arrow tap vs hold is handled via pressesBegan/pressesEnded
+        // This gives us precise timing control without gesture recognizer delays
+        print("🎮 [SETUP] PlayerContainerViewController configured for arrow key handling via pressesBegan/pressesEnded")
     }
 
     @objc private func menuTapped() {
@@ -106,16 +110,26 @@ class PlayerContainerViewController: UIViewController {
                 return  // Consume the event - don't pass to super
             }
             if press.type == .select {
-                // Only handle select when info panel is open
-                if let vm = viewModel, vm.showInfoPanel {
-                    print("🎮 [SELECT] PlayerContainerViewController received Select press")
-                    isHandlingSelectPress = true
-                    handleSelectButton()
-                    return  // Consume the event
+                if let vm = viewModel {
+                    if vm.isScrubbing {
+                        // Commit scrub when select is pressed during scrubbing
+                        print("🎮 [SELECT] Committing scrub")
+                        isHandlingSelectPress = true
+                        Task { await vm.commitScrub() }
+                        return  // Consume the event
+                    } else if vm.showInfoPanel {
+                        // Handle select when info panel is open
+                        print("🎮 [SELECT] PlayerContainerViewController received Select press")
+                        isHandlingSelectPress = true
+                        handleSelectButton()
+                        return  // Consume the event
+                    }
                 }
             }
+            // Left/right arrows are handled by SwiftUI's onMoveCommand
+            // Siri Remote touchpad clicks don't generate UIPress events with arrow types
         }
-        // Pass other presses to SwiftUI
+        // Pass presses to SwiftUI for focus handling etc.
         super.pressesBegan(presses, with: event)
     }
 

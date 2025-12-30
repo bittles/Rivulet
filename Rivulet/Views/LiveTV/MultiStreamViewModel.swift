@@ -22,11 +22,53 @@ final class MultiStreamViewModel: ObservableObject {
     struct StreamSlot: Identifiable {
         let id = UUID()
         let channel: UnifiedChannel
-        let playerWrapper: MPVPlayerWrapper
-        var playerController: MPVMetalViewController?
-        var playbackState: UniversalPlaybackState = .idle
+
+        // Player wrappers - only one will be non-nil based on engine selection
+        let mpvWrapper: MPVPlayerWrapper?
+        let avWrapper: AVPlayerWrapper?
+        var playerController: MPVMetalViewController?  // Only used for MPV
+
+        var playbackState: UniversalPlaybackState
         var currentProgram: UnifiedProgram?
         var isMuted: Bool
+
+        // MARK: - Convenience Accessors
+
+        var isPlaying: Bool {
+            mpvWrapper?.isPlaying ?? avWrapper?.isPlaying ?? false
+        }
+
+        var playbackStatePublisher: AnyPublisher<UniversalPlaybackState, Never> {
+            mpvWrapper?.playbackStatePublisher ?? avWrapper?.playbackStatePublisher ?? Just(.idle).eraseToAnyPublisher()
+        }
+
+        func play() {
+            mpvWrapper?.play()
+            avWrapper?.play()
+        }
+
+        func pause() {
+            mpvWrapper?.pause()
+            avWrapper?.pause()
+        }
+
+        func stop() {
+            mpvWrapper?.stop()
+            avWrapper?.stop()
+        }
+
+        func setMuted(_ muted: Bool) {
+            mpvWrapper?.setMuted(muted)
+            avWrapper?.setMuted(muted)
+        }
+
+        func load(url: URL, headers: [String: String]?) async throws {
+            if let mpv = mpvWrapper {
+                try await mpv.load(url: url, headers: headers, startTime: nil)
+            } else if let av = avWrapper {
+                try await av.load(url: url, headers: headers)
+            }
+        }
     }
 
     // MARK: - Published State
@@ -59,6 +101,9 @@ final class MultiStreamViewModel: ObservableObject {
     private var controlsTimer: Timer?
     private let controlsHideDelay: TimeInterval = 5
 
+    /// The player engine selected at initialization (doesn't change during session)
+    let playerEngine: LiveTVPlayerEngine
+
     // MARK: - Computed Properties
 
     var focusedStream: StreamSlot? {
@@ -67,10 +112,16 @@ final class MultiStreamViewModel: ObservableObject {
     }
 
     var canAddStream: Bool {
-        // MPV uses significant memory per stream
-        // Default to 2 streams, allow 4 with user opt-in (may cause crashes)
-        let allowFourStreams = UserDefaults.standard.bool(forKey: "allowFourStreams")
-        let maxStreams = allowFourStreams ? 4 : 2
+        let maxStreams: Int
+        if playerEngine == .avplayer {
+            // AVPlayer is lightweight - allow 4 streams by default
+            maxStreams = 4
+        } else {
+            // MPV uses significant memory per stream
+            // Default to 2 streams, allow 4 with user opt-in (may cause crashes)
+            let allowFourStreams = UserDefaults.standard.bool(forKey: "allowFourStreams")
+            maxStreams = allowFourStreams ? 4 : 2
+        }
         return streams.count < maxStreams
     }
 
@@ -98,8 +149,13 @@ final class MultiStreamViewModel: ObservableObject {
     // MARK: - Initialization
 
     init(initialChannel: UnifiedChannel) {
+        // Capture engine selection at initialization time
+        self.playerEngine = LiveTVPlayerEngine.current
+
         // Prevent screensaver during Live TV playback
         UIApplication.shared.isIdleTimerDisabled = true
+
+        print("📺 MultiStream: Using \(playerEngine.rawValue) player engine")
 
         // Add the initial channel (unmuted since it's first)
         Task {
@@ -116,12 +172,25 @@ final class MultiStreamViewModel: ObservableObject {
         // Close the picker immediately for responsiveness
         showChannelPicker = false
 
-        let wrapper = MPVPlayerWrapper()
         let isMuted = !streams.isEmpty  // First stream unmuted, others muted
+
+        // Create the appropriate wrapper based on engine
+        let mpvWrapper: MPVPlayerWrapper?
+        let avWrapper: AVPlayerWrapper?
+
+        if playerEngine == .mpv {
+            mpvWrapper = MPVPlayerWrapper()
+            avWrapper = nil
+        } else {
+            mpvWrapper = nil
+            avWrapper = AVPlayerWrapper()
+        }
 
         var slot = StreamSlot(
             channel: channel,
-            playerWrapper: wrapper,
+            mpvWrapper: mpvWrapper,
+            avWrapper: avWrapper,
+            playbackState: .loading,  // Start in loading state
             isMuted: isMuted
         )
 
@@ -142,10 +211,10 @@ final class MultiStreamViewModel: ObservableObject {
         // Start playback
         if let url = LiveTVDataStore.shared.buildStreamURL(for: channel) {
             do {
-                try await wrapper.load(url: url, headers: [:], startTime: nil)
-                wrapper.setMuted(isMuted)
-                wrapper.play()
-                print("📺 MultiStream: Added channel '\(channel.name)' at slot \(slotIndex), muted: \(isMuted)")
+                try await slot.load(url: url, headers: [:])
+                slot.setMuted(isMuted)
+                slot.play()
+                print("📺 MultiStream: Added channel '\(channel.name)' at slot \(slotIndex), muted: \(isMuted), engine: \(playerEngine.rawValue)")
 
                 // Focus the newly added stream
                 setFocus(to: slotIndex)
@@ -161,7 +230,7 @@ final class MultiStreamViewModel: ObservableObject {
         let slot = streams[index]
 
         // Stop and cleanup player
-        slot.playerWrapper.stop()
+        slot.stop()
 
         // Remove subscriptions
         cancellables.removeValue(forKey: slot.id)
@@ -191,7 +260,7 @@ final class MultiStreamViewModel: ObservableObject {
 
     func stopAllStreams() {
         for slot in streams {
-            slot.playerWrapper.stop()
+            slot.stop()
         }
         cancellables.removeAll()
         streams.removeAll()
@@ -209,12 +278,12 @@ final class MultiStreamViewModel: ObservableObject {
 
         // Mute previously focused stream
         if focusedSlotIndex >= 0, focusedSlotIndex < streams.count {
-            streams[focusedSlotIndex].playerWrapper.setMuted(true)
+            streams[focusedSlotIndex].setMuted(true)
             streams[focusedSlotIndex].isMuted = true
         }
 
         // Unmute newly focused stream
-        streams[newIndex].playerWrapper.setMuted(false)
+        streams[newIndex].setMuted(false)
         streams[newIndex].isMuted = false
 
         focusedSlotIndex = newIndex
@@ -228,6 +297,10 @@ final class MultiStreamViewModel: ObservableObject {
 
     func setFocusedLayout(on slotId: UUID) {
         guard streams.count > 1 else { return }
+        print("📺 setFocusedLayout: setting mainId to \(slotId.uuidString.prefix(8))")
+        for (idx, stream) in streams.enumerated() {
+            print("📺   stream[\(idx)]: \(stream.id.uuidString.prefix(8)) - \(stream.channel.name)")
+        }
         layoutMode = .focus(mainId: slotId)
         if let index = streams.firstIndex(where: { $0.id == slotId }) {
             setFocus(to: index)
@@ -254,16 +327,28 @@ final class MultiStreamViewModel: ObservableObject {
         let oldSlot = streams[index]
 
         // Stop and cleanup old player
-        oldSlot.playerWrapper.stop()
+        oldSlot.stop()
         cancellables.removeValue(forKey: oldSlot.id)
 
-        // Create new slot
-        let wrapper = MPVPlayerWrapper()
+        // Create the appropriate wrapper based on engine
+        let mpvWrapper: MPVPlayerWrapper?
+        let avWrapper: AVPlayerWrapper?
+
+        if playerEngine == .mpv {
+            mpvWrapper = MPVPlayerWrapper()
+            avWrapper = nil
+        } else {
+            mpvWrapper = nil
+            avWrapper = AVPlayerWrapper()
+        }
+
         let isMuted = index != focusedSlotIndex  // Mute if not focused
 
         var newSlot = StreamSlot(
             channel: channel,
-            playerWrapper: wrapper,
+            mpvWrapper: mpvWrapper,
+            avWrapper: avWrapper,
+            playbackState: .loading,  // Start in loading state
             isMuted: isMuted
         )
         newSlot.currentProgram = LiveTVDataStore.shared.getCurrentProgram(for: channel)
@@ -282,9 +367,9 @@ final class MultiStreamViewModel: ObservableObject {
         // Start playback
         if let url = LiveTVDataStore.shared.buildStreamURL(for: channel) {
             do {
-                try await wrapper.load(url: url, headers: [:], startTime: nil)
-                wrapper.setMuted(isMuted)
-                wrapper.play()
+                try await newSlot.load(url: url, headers: [:])
+                newSlot.setMuted(isMuted)
+                newSlot.play()
                 print("📺 MultiStream: Replaced stream at slot \(index) with '\(channel.name)'")
             } catch {
                 print("📺 MultiStream: Failed to load replacement '\(channel.name)': \(error)")
@@ -299,10 +384,10 @@ final class MultiStreamViewModel: ObservableObject {
     func togglePlayPauseOnFocused() {
         guard let slot = focusedStream else { return }
 
-        if slot.playerWrapper.isPlaying {
-            slot.playerWrapper.pause()
+        if slot.isPlaying {
+            slot.pause()
         } else {
-            slot.playerWrapper.play()
+            slot.play()
         }
 
         showControlsTemporarily()
@@ -310,22 +395,24 @@ final class MultiStreamViewModel: ObservableObject {
 
     func playAll() {
         for slot in streams {
-            slot.playerWrapper.play()
+            slot.play()
         }
     }
 
     func pauseAll() {
         for slot in streams {
-            slot.playerWrapper.pause()
+            slot.pause()
         }
     }
 
-    // MARK: - Controller Binding
+    // MARK: - Controller Binding (MPV only)
 
     func setPlayerController(_ controller: MPVMetalViewController, for slotId: UUID) {
+        guard playerEngine == .mpv else { return }  // Only applies to MPV
         guard let index = streams.firstIndex(where: { $0.id == slotId }) else { return }
+
         streams[index].playerController = controller
-        streams[index].playerWrapper.setPlayerController(controller)
+        streams[index].mpvWrapper?.setPlayerController(controller)
 
         // Apply mute state
         controller.setMuted(streams[index].isMuted)
@@ -367,12 +454,14 @@ final class MultiStreamViewModel: ObservableObject {
         let slot = streams[index]
         var slotCancellables = Set<AnyCancellable>()
 
-        slot.playerWrapper.playbackStatePublisher
+        slot.playbackStatePublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
                 guard let self else { return }
+                print("📺 MultiStream: Received playback state: \(state) for slot \(index)")
                 if let idx = self.streams.firstIndex(where: { $0.id == slot.id }) {
                     self.streams[idx].playbackState = state
+                    print("📺 MultiStream: Updated slot \(idx) playbackState to \(state)")
                 }
             }
             .store(in: &slotCancellables)

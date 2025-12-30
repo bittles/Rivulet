@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Sentry
 
 /// LiveTVProvider implementation for IPTV sources
 actor IPTVProvider: LiveTVProvider {
@@ -103,10 +104,23 @@ actor IPTVProvider: LiveTVProvider {
         let parser = M3UParser()
         let parsedChannels: [M3UParser.ParsedChannel]
 
-        if let dispatcharr = dispatcharrService {
-            parsedChannels = try await dispatcharr.fetchChannels()
-        } else {
-            parsedChannels = try await parser.parse(from: url)
+        do {
+            if let dispatcharr = dispatcharrService {
+                parsedChannels = try await dispatcharr.fetchChannels()
+            } else {
+                parsedChannels = try await parser.parse(from: url)
+            }
+        } catch {
+            // Capture IPTV channel fetch failure to Sentry
+            let capturedSourceType = self.sourceType
+            let capturedDisplayName = self.displayName
+            SentrySDK.capture(error: error) { scope in
+                scope.setTag(value: "iptv", key: "component")
+                scope.setTag(value: String(describing: capturedSourceType), key: "source_type")
+                scope.setExtra(value: capturedDisplayName, key: "source_name")
+                scope.setExtra(value: url.absoluteString, key: "m3u_url")
+            }
+            throw error
         }
 
         print("📺 IPTVProvider [\(displayName)]: ✅ Parsed \(parsedChannels.count) channels")
@@ -145,10 +159,22 @@ actor IPTVProvider: LiveTVProvider {
         let xmltvParser = XMLTVParser()
         let parseResult: XMLTVParser.ParseResult
 
-        if let dispatcharr = dispatcharrService {
-            parseResult = try await dispatcharr.fetchParsedEPG()
-        } else {
-            parseResult = try await xmltvParser.parse(from: epgURL)
+        do {
+            if let dispatcharr = dispatcharrService {
+                parseResult = try await dispatcharr.fetchParsedEPG()
+            } else {
+                parseResult = try await xmltvParser.parse(from: epgURL)
+            }
+        } catch {
+            // Capture EPG fetch failure to Sentry
+            let capturedDisplayName = self.displayName
+            SentrySDK.capture(error: error) { scope in
+                scope.setTag(value: "iptv", key: "component")
+                scope.setTag(value: "epg_fetch", key: "operation")
+                scope.setExtra(value: capturedDisplayName, key: "source_name")
+                scope.setExtra(value: epgURL.absoluteString, key: "epg_url")
+            }
+            throw error
         }
 
         print("📺 IPTVProvider [\(displayName)]: ✅ Parsed EPG with \(parseResult.programs.count) channel schedules")

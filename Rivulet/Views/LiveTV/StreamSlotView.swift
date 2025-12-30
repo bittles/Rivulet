@@ -13,6 +13,7 @@ struct StreamSlotView: View {
     let isFocused: Bool
     var showBorder: Bool = true
     var showChannelBadge: Bool = true
+    var containerSize: CGSize = .zero  // Passed from parent for explicit size updates
     let onControllerReady: (MPVMetalViewController) -> Void
 
     @State private var playerController: MPVMetalViewController?
@@ -22,35 +23,26 @@ struct StreamSlotView: View {
         LiveTVDataStore.shared.buildStreamURL(for: slot.channel)
     }
 
+    /// Determines which player engine is being used for this slot
+    private var isMPVPlayer: Bool {
+        slot.mpvWrapper != nil
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             // Background
             Color.black
 
-            // MPV Player - use GeometryReader to ensure it fills and updates with container size
-            if let url = streamURL {
-                GeometryReader { geo in
-                    MPVPlayerView(
-                        url: url,
-                        headers: [:],
-                        startTime: nil,
-                        delegate: slot.playerWrapper,
-                        isLiveStream: true,
-                        playerController: $playerController
-                    )
-                    .frame(width: geo.size.width, height: geo.size.height)
+            // Player view - either MPV or AVPlayer based on slot configuration
+            // Size is managed by parent via containerSize prop, not GeometryReader
+            if let _ = streamURL {
+                playerView
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
-                    .onAppear {
-                        updatePlayerSize(geo.size)
+                    .transaction { transaction in
+                        // Disable animations for the player to prevent layout issues during resize
+                        transaction.animation = nil
                     }
-                    .onChange(of: geo.size) { _, newSize in
-                        updatePlayerSize(newSize)
-                    }
-                }
-                .transaction { transaction in
-                    // Disable animations for the player to prevent layout issues during resize
-                    transaction.animation = nil
-                }
             }
 
             // Focus border (only in grid mode)
@@ -100,14 +92,56 @@ struct StreamSlotView: View {
         .onChange(of: playerController) { _, controller in
             if let controller = controller {
                 onControllerReady(controller)
-                if lastContainerSize != .zero {
-                    controller.updateForContainerSize(lastContainerSize)
+                // Apply size - prefer containerSize (parent-driven), fallback to lastContainerSize
+                let sizeToApply = containerSize != .zero ? containerSize : lastContainerSize
+                if sizeToApply != .zero {
+                    print("🧩 StreamSlot \(index): playerController ready, applying size \(sizeToApply)")
+                    controller.updateForContainerSize(sizeToApply)
                 }
+            }
+        }
+        .onChange(of: containerSize) { _, newSize in
+            // Parent-driven size update (for layout mode changes)
+            // Force update by resetting lastContainerSize - this is an intentional layout change
+            if newSize != .zero && newSize != lastContainerSize {
+                print("🧩 StreamSlot \(index): containerSize changed to \(newSize) (was \(lastContainerSize))")
+                lastContainerSize = .zero  // Reset to force update past threshold
+                updatePlayerSize(newSize)
+            }
+        }
+        .onAppear {
+            // Apply initial containerSize if provided
+            if containerSize != .zero {
+                print("🧩 StreamSlot \(index): onAppear with containerSize \(containerSize)")
+                updatePlayerSize(containerSize)
             }
         }
     }
 
+    // MARK: - Player View
+
+    @ViewBuilder
+    private var playerView: some View {
+        if let mpvWrapper = slot.mpvWrapper, let url = streamURL {
+            // MPV Player - pass containerSize for explicit size updates
+            MPVPlayerView(
+                url: url,
+                headers: [:],
+                startTime: nil,
+                delegate: mpvWrapper,
+                isLiveStream: true,
+                containerSize: containerSize,
+                playerController: $playerController
+            )
+        } else if let avWrapper = slot.avWrapper {
+            // AVPlayer - lightweight native player
+            AVPlayerView(playerWrapper: avWrapper)
+        }
+    }
+
     private func updatePlayerSize(_ newSize: CGSize) {
+        // Only applies to MPV player - AVPlayer handles sizing automatically
+        guard isMPVPlayer else { return }
         guard newSize != .zero else { return }
 
         // Only resize if the change is significant (more than 5 pixels)
@@ -117,8 +151,15 @@ struct StreamSlotView: View {
         guard widthDiff > 5 || heightDiff > 5 || lastContainerSize == .zero else { return }
 
         lastContainerSize = newSize
-        print("🧩 StreamSlot \(index): container size -> \(newSize)")
-        playerController?.updateForContainerSize(newSize)
+        print("🧩 StreamSlot \(index): container size -> \(newSize), playerController=\(playerController != nil ? "set" : "nil")")
+
+        if let controller = playerController {
+            controller.updateForContainerSize(newSize)
+        } else {
+            // Controller not ready yet - it will pick up the size when it becomes available
+            // via onChange(of: playerController)
+            print("🧩 StreamSlot \(index): playerController nil, will apply size when ready")
+        }
     }
 
     // MARK: - Mini Channel Badge
@@ -209,18 +250,48 @@ struct StreamSlotView: View {
 
     private var errorOverlay: some View {
         ZStack {
-            Color.black.opacity(0.7)
+            Color.black.opacity(0.8)
 
-            VStack(spacing: 8) {
+            VStack(spacing: 20) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 28))
+                    .font(.system(size: 64))
                     .foregroundStyle(.yellow)
 
                 Text("Stream Error")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: 28, weight: .semibold))
                     .foregroundStyle(.white)
+
+                // Show error details if available
+                if let errorMessage = extractErrorMessage() {
+                    Text(errorMessage)
+                        .font(.system(size: 22))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                        .lineLimit(4)
+                }
+            }
+            .padding(24)
+        }
+    }
+
+    /// Extracts error message from the playback state
+    private func extractErrorMessage() -> String? {
+        if case .failed(let error) = slot.playbackState {
+            switch error {
+            case .invalidURL:
+                return "Invalid stream URL"
+            case .loadFailed(let message):
+                return message
+            case .networkError(let message):
+                return message
+            case .codecUnsupported(let message):
+                return message
+            case .unknown(let message):
+                return message
             }
         }
+        return nil
     }
 }
 
@@ -240,7 +311,9 @@ struct StreamSlotView: View {
                 groupTitle: "Entertainment",
                 isHD: true
             ),
-            playerWrapper: MPVPlayerWrapper(),
+            mpvWrapper: MPVPlayerWrapper(),
+            avWrapper: nil,
+            playbackState: .loading,
             isMuted: false
         ),
         index: 0,
