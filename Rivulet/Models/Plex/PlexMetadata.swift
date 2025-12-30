@@ -357,14 +357,20 @@ extension PlexMetadata {
         return Double(offset) / Double(total)
     }
 
-    /// Check if item has been partially watched
+    /// Check if item has been partially watched (has active playback progress)
     var isInProgress: Bool {
         guard let progress = watchProgress else { return false }
         return progress > 0.02 && progress < 0.9
     }
 
-    /// Check if item has been fully watched
+    /// Check if item should show as "watched" (completed, no active re-watch in progress)
+    /// An item with viewCount > 0 but also isInProgress should show as "in progress", not "watched"
     var isWatched: Bool {
+        // If currently in progress (re-watching), don't show as watched
+        if isInProgress {
+            return false
+        }
+        // Show as watched if progress >= 90% or has been watched before
         if let progress = watchProgress, progress >= 0.9 {
             return true
         }

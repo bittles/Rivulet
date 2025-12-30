@@ -53,6 +53,12 @@ struct FocusableSidebarRow: View {
         }
         .buttonStyle(SidebarRowButtonStyle())
         .focused($focusedItem, equals: id)
+        .onMoveCommand { direction in
+            // Right arrow acts as select (navigates and closes sidebar)
+            if direction == .right {
+                onSelect()
+            }
+        }
     }
 }
 

@@ -776,6 +776,12 @@ struct InfiniteContentRow: View {
     private let networkManager = PlexNetworkManager.shared
     private let pageSize = 24
 
+    /// Check if this row contains music items (uses square posters)
+    private var isMusicRow: Bool {
+        guard let firstItem = items.first ?? initialItems.first else { return false }
+        return firstItem.type == "album" || firstItem.type == "artist" || firstItem.type == "track"
+    }
+
     /// Hash that changes when items or their watch status changes
     /// Note: Excludes viewOffset as it changes during playback and would cause unnecessary resets
     private var initialItemsHash: Int {
@@ -902,25 +908,42 @@ struct InfiniteContentRow: View {
         #endif
     }
 
+    /// Skeleton placeholder card shown while loading more items
     private var loadingIndicator: some View {
-        VStack {
-            ProgressView()
-                .scaleEffect(1.2)
-                .tint(.white.opacity(0.5))
+        skeletonPosterCard
+    }
+
+    /// Single skeleton poster card matching MediaPosterCard dimensions
+    private var skeletonPosterCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Poster placeholder - square for music, rectangle for video
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.white.opacity(0.08))
+                #if os(tvOS)
+                .frame(width: 220, height: isMusicRow ? 220 : 330)
+                #else
+                .frame(width: 180, height: isMusicRow ? 180 : 270)
+                #endif
+
+            // Title placeholder
+            VStack(alignment: .leading, spacing: 6) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.white.opacity(0.06))
+                    .frame(width: 160, height: 14)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.white.opacity(0.04))
+                    .frame(width: 100, height: 12)
+            }
+            #if os(tvOS)
+            .frame(height: 52, alignment: .top)
+            #else
+            .frame(height: 44, alignment: .top)
+            #endif
         }
-        .frame(width: 100, height: 150)
     }
 
     private var endIndicator: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 24))
-                .foregroundStyle(.white.opacity(0.3))
-            Text("All loaded")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.3))
-        }
-        .frame(width: 100, height: 150)
+        EmptyView()
     }
 
     private func loadMoreIfNeeded() async {

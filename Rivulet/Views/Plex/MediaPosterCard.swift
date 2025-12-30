@@ -335,6 +335,11 @@ struct MediaRow: View {
     var onItemSelected: ((PlexMetadata) -> Void)?
     var onRefreshNeeded: MediaItemRefreshCallback?
 
+    #if os(tvOS)
+    @Environment(\.openSidebar) private var openSidebar
+    @Environment(\.isSidebarVisible) private var isSidebarVisible
+    #endif
+
     // Track focused item for proper initial focus
     @FocusState private var focusedItemId: String?
 
@@ -347,7 +352,7 @@ struct MediaRow: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 24) {
-                    ForEach(items, id: \.ratingKey) { item in
+                    ForEach(Array(items.enumerated()), id: \.element.ratingKey) { index, item in
                         Button {
                             onItemSelected?(item)
                         } label: {
@@ -360,6 +365,12 @@ struct MediaRow: View {
                         #if os(tvOS)
                         .buttonStyle(CardButtonStyle())
                         .focused($focusedItemId, equals: item.ratingKey)
+                        .onMoveCommand { direction in
+                            guard !isSidebarVisible else { return }
+                            if direction == .left && index == 0 {
+                                openSidebar()
+                            }
+                        }
                         #else
                         .buttonStyle(.plain)
                         #endif

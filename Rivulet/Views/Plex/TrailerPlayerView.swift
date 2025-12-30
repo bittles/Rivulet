@@ -39,8 +39,18 @@ struct TrailerPlayerView: View {
 
             // Loading overlay
             if isLoading {
-                ProgressView("Loading trailer...")
-                    .tint(.white)
+                VStack(spacing: 20) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .scaleEffect(2.0)
+                        .tint(.white)
+
+                    Text("Loading Trailer...")
+                        .font(.headline)
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
             }
 
             // Simple controls overlay
@@ -189,16 +199,35 @@ struct TrailerPlayerView: View {
             let response = try decoder.decode(PlexMediaContainerWrapper.self, from: data)
 
             guard let metadata = response.MediaContainer.Metadata?.first,
-                  let media = metadata.Media?.first,
-                  let part = media.Part?.first else {
-                print("🎬 [Trailer] No media part found in metadata")
-                // Fall back to direct stream
+                  let allMedia = metadata.Media, !allMedia.isEmpty else {
+                print("🎬 [Trailer] No media found in metadata")
+                await fallbackToDirectStream(ratingKey: ratingKey)
+                return
+            }
+
+            // Log all available media options
+            print("🎬 [Trailer] Available media options: \(allMedia.count)")
+            for (index, media) in allMedia.enumerated() {
+                print("🎬 [Trailer]   [\(index)] \(media.videoResolution ?? "?")p, \(media.bitrate ?? 0) kbps, \(media.width ?? 0)x\(media.height ?? 0)")
+            }
+
+            // Select highest quality media (by bitrate, then resolution)
+            let bestMedia = allMedia.max { a, b in
+                let aBitrate = a.bitrate ?? 0
+                let bBitrate = b.bitrate ?? 0
+                if aBitrate != bBitrate { return aBitrate < bBitrate }
+                return (a.height ?? 0) < (b.height ?? 0)
+            } ?? allMedia.first!
+
+            guard let part = bestMedia.Part?.first else {
+                print("🎬 [Trailer] No part found in best media")
                 await fallbackToDirectStream(ratingKey: ratingKey)
                 return
             }
 
             let partKey = part.key
-            print("🎬 [Trailer] Found part key: \(partKey)")
+            print("🎬 [Trailer] Selected: \(bestMedia.videoResolution ?? "?")p, \(bestMedia.bitrate ?? 0) kbps")
+            print("🎬 [Trailer] Part key: \(partKey)")
 
             // Build direct play URL with the part key
             guard let streamUrl = networkManager.buildStreamURL(

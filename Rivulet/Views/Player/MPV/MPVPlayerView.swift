@@ -14,7 +14,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let startTime: Double?
     let delegate: MPVPlayerDelegate?
     var isLiveStream: Bool = false
-    var containerSize: CGSize = .zero  // Explicit size from parent
+    var containerSize: CGSize = .zero  // Explicit size from parent (for multi-stream)
 
     @Binding var playerController: MPVMetalViewController?
 
@@ -26,6 +26,11 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         controller.delegate = delegate
         controller.isLiveStreamMode = isLiveStream
 
+        // Set explicit size if provided (for multi-stream layout)
+        if containerSize != .zero {
+            controller.setExplicitSize(containerSize)
+        }
+
         DispatchQueue.main.async {
             self.playerController = controller
         }
@@ -34,8 +39,9 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: MPVMetalViewController, context: Context) {
-        // Size updates are handled explicitly via StreamSlotView's onChange(of: containerSize)
-        // Do NOT update size here - SwiftUI may call this with stale containerSize values
-        // during intermediate render passes, causing incorrect sizing
+        // Update explicit size when container size changes
+        if containerSize != .zero {
+            uiViewController.setExplicitSize(containerSize)
+        }
     }
 }

@@ -1106,6 +1106,13 @@ final class UniversalPlayerViewModel: ObservableObject {
         print("🎬 [PostVideo] seasonKey (parentRatingKey): \(metadata.parentRatingKey ?? "nil")")
         print("🎬 [PostVideo] currentIndex: \(metadata.index ?? -1)")
 
+        // Check if next episode was prefetched
+        if let ratingKey = metadata.ratingKey,
+           let cached = await PlexDataStore.shared.getCachedNextEpisode(for: ratingKey) {
+            print("🎬 [PostVideo] Using prefetched next episode: \(cached.episodeString ?? "?") - \(cached.title ?? "?")")
+            return cached
+        }
+
         guard let seasonKey = metadata.parentRatingKey,
               let currentIndex = metadata.index else {
             print("🎬 [PostVideo] FAILED: No season key or episode index")

@@ -243,6 +243,20 @@ actor CacheManager {
         return decodedCache(for: hubsCacheFile, as: [PlexHub].self)
     }
 
+    // MARK: - Library Hubs Cache (for individual library screens)
+
+    private let libraryHubsCachePrefix = "library_hubs_"
+
+    func cacheLibraryHubs(_ hubs: [PlexHub], forLibrary libraryKey: String) {
+        let fileName = "\(libraryHubsCachePrefix)\(libraryKey).json"
+        cacheData(hubs, fileName: fileName)
+    }
+
+    func getCachedLibraryHubs(forLibrary libraryKey: String) -> [PlexHub]? {
+        let fileName = "\(libraryHubsCachePrefix)\(libraryKey).json"
+        return decodedCache(for: fileName, as: [PlexHub].self)
+    }
+
     // MARK: - Clear Cache
 
     func clearAllCache() {

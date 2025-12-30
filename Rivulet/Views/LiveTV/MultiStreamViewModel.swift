@@ -297,26 +297,115 @@ final class MultiStreamViewModel: ObservableObject {
 
     func setFocusedLayout(on slotId: UUID) {
         guard streams.count > 1 else { return }
-        print("📺 setFocusedLayout: setting mainId to \(slotId.uuidString.prefix(8))")
-        for (idx, stream) in streams.enumerated() {
-            print("📺   stream[\(idx)]: \(stream.id.uuidString.prefix(8)) - \(stream.channel.name)")
-        }
+        guard let channel = streams.first(where: { $0.id == slotId })?.channel else { return }
+
+        print("📺 setFocusedLayout: setting mainId for channel '\(channel.name)'")
+
+        // Change layout mode first, then restart streams so they initialize at correct size
         layoutMode = .focus(mainId: slotId)
-        if let index = streams.firstIndex(where: { $0.id == slotId }) {
-            setFocus(to: index)
+
+        Task {
+            await restartAllStreams(focusChannelId: channel.id)
         }
     }
 
     func resetLayout() {
+        guard case .focus = layoutMode else { return }  // Already in grid
+
+        let currentFocusChannelId = focusedStream?.channel.id
         layoutMode = .grid
+
+        Task {
+            await restartAllStreams(focusChannelId: currentFocusChannelId)
+        }
     }
 
     /// Expands the currently focused sidebar stream to be the main stream
     func expandFocusedStream() {
-        guard let focusedId = focusedStream?.id else { return }
-        // Simply make the focused stream the new main - keeps focus on it
-        layoutMode = .focus(mainId: focusedId)
-        print("📺 MultiStream: Expanded focused stream to main")
+        guard let focusedStream = focusedStream else { return }
+
+        print("📺 MultiStream: Expanding '\(focusedStream.channel.name)' to main")
+
+        // Change layout mode, then restart
+        layoutMode = .focus(mainId: focusedStream.id)
+
+        Task {
+            await restartAllStreams(focusChannelId: focusedStream.channel.id)
+        }
+    }
+
+    /// Restart all streams to force them to initialize at new sizes
+    /// This is a workaround for MPV not handling dynamic resize properly
+    private func restartAllStreams(focusChannelId: String?) async {
+        guard !streams.isEmpty else { return }
+
+        // Capture current state
+        let channels = streams.map { $0.channel }
+        let focusIndex = focusChannelId.flatMap { id in channels.firstIndex(where: { $0.id == id }) } ?? 0
+
+        print("📺 MultiStream: Restarting \(channels.count) streams for layout change")
+
+        // Stop and remove all streams
+        for slot in streams {
+            slot.stop()
+            cancellables.removeValue(forKey: slot.id)
+        }
+        streams.removeAll()
+        focusedSlotIndex = 0
+
+        // Small delay to let layout settle before recreating players
+        try? await Task.sleep(nanoseconds: 100_000_000)  // 100ms
+
+        // Re-add streams in order
+        for (index, channel) in channels.enumerated() {
+            let isMuted = index != focusIndex
+
+            let mpvWrapper: MPVPlayerWrapper?
+            let avWrapper: AVPlayerWrapper?
+
+            if playerEngine == .mpv {
+                mpvWrapper = MPVPlayerWrapper()
+                avWrapper = nil
+            } else {
+                mpvWrapper = nil
+                avWrapper = AVPlayerWrapper()
+            }
+
+            var slot = StreamSlot(
+                channel: channel,
+                mpvWrapper: mpvWrapper,
+                avWrapper: avWrapper,
+                playbackState: .loading,
+                isMuted: isMuted
+            )
+            slot.currentProgram = LiveTVDataStore.shared.getCurrentProgram(for: channel)
+
+            streams.append(slot)
+            subscribeToSlot(at: streams.count - 1)
+
+            // Update focus layout mainId to match new slot id
+            if case .focus = layoutMode, index == focusIndex {
+                layoutMode = .focus(mainId: slot.id)
+            }
+
+            if let url = LiveTVDataStore.shared.buildStreamURL(for: channel) {
+                do {
+                    try await slot.load(url: url, headers: [:])
+                    slot.setMuted(isMuted)
+                    slot.play()
+                    print("📺 MultiStream: Restarted '\(channel.name)' at slot \(index), muted: \(isMuted)")
+                } catch {
+                    print("📺 MultiStream: Failed to restart '\(channel.name)': \(error)")
+                }
+            }
+        }
+
+        // Restore focus
+        if focusIndex < streams.count {
+            setFocus(to: focusIndex)
+        }
+
+        print("📺 MultiStream: Restart complete")
     }
 
     /// Replaces the stream at the given index with a new channel

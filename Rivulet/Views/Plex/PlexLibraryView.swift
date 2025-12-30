@@ -48,6 +48,11 @@ struct PlexLibraryView: View {
     private let networkManager = PlexNetworkManager.shared
     private let cacheManager = CacheManager.shared
 
+    /// Check if this is a music library (uses square posters)
+    private var isMusicLibrary: Bool {
+        dataStore.libraries.first(where: { $0.key == libraryKey })?.isMusicLibrary ?? false
+    }
+
     #if os(tvOS)
     private let columns = [
         GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 32)
@@ -180,24 +185,39 @@ struct PlexLibraryView: View {
 
                 if authManager.isAuthenticated {
                     if isNewLibrary {
-                        // IMMEDIATELY update hero and clear hubs to prevent stale content flash
-                        hubs = []  // Clear hubs first so essentialHubs is empty
-                        heroItem = dataStore.getCachedHero(forLibrary: libraryKey)  // Load cached hero immediately (sync)
+                        // IMMEDIATELY clear stale data and show skeleton
+                        items = []
+                        hubs = []
+                        cachedProcessedHubs = []
+                        isLoading = true
+                        lastLoadedLibraryKey = libraryKey
+
+                        // Load cached hero synchronously (fast, in-memory)
+                        heroItem = dataStore.getCachedHero(forLibrary: libraryKey)
 
                         // Reset state for new library
                         hasPrefetched = false
                         hasMoreItems = true
                         totalItemCount = 0
 
-                        // Load cached data FIRST before clearing anything
-                        let cachedItems = await getCachedItems()
+                        // Load cache in background to avoid main thread JSON decoding jank
+                        let libKey = libraryKey
+                        let (cachedItems, cachedHubs) = await Task.detached(priority: .userInitiated) {
+                            async let itemsTask = self.getCachedItems()
+                            async let hubsTask = self.cacheManager.getCachedLibraryHubs(forLibrary: libKey)
+                            return await (itemsTask, hubsTask)
+                        }.value
+
+                        // Update UI with cached data
+                        if let cachedHubs = cachedHubs, !cachedHubs.isEmpty {
+                            hubs = cachedHubs
+                            cachedProcessedHubs = computeProcessedHubs(from: cachedHubs)
+                        }
 
                         if !cachedItems.isEmpty {
-                            // Atomic swap: replace items and select new hero in one go
                             items = cachedItems
-                            lastLoadedLibraryKey = libraryKey
+                            isLoading = false
 
-                            // Only select hero if we don't have a cached one
                             if heroItem == nil {
                                 selectHeroItemFromCurrentData()
                             }
@@ -205,11 +225,8 @@ struct PlexLibraryView: View {
                             // Refresh in background silently
                             await loadItemsInBackground()
                         } else {
-                            // No cache - need to show loading state
-                            items = []
-                            lastLoadedLibraryKey = libraryKey
+                            // No cache - fetch from server (skeleton still showing)
                             await loadItems()
-
                         }
                     } else {
                         // Same library - just refresh in background
@@ -219,8 +236,10 @@ struct PlexLibraryView: View {
                     // Not authenticated - clear everything
                     items = []
                     hubs = []
+                    cachedProcessedHubs = []
                     heroItem = nil
                     lastLoadedLibraryKey = nil
+                    isLoading = false
                 }
             }
             .refreshable {
@@ -395,9 +414,10 @@ struct PlexLibraryView: View {
                     if let hubItems = hub.Metadata, !hubItems.isEmpty {
                         let isContinueWatching = hub.hubIdentifier?.lowercased().contains("continuewatching") == true ||
                                                  hub.title?.lowercased().contains("continue watching") == true
-                        MediaRow(
+                        InfiniteContentRow(
                             title: hub.title ?? "Untitled",
-                            items: hubItems,
+                            initialItems: hubItems,
+                            hubKey: hub.key ?? hub.hubKey,
                             serverURL: authManager.selectedServerURL ?? "",
                             authToken: authManager.authToken ?? "",
                             contextMenuSource: isContinueWatching ? .continueWatching : .library,
@@ -429,9 +449,10 @@ struct PlexLibraryView: View {
             VStack(alignment: .leading, spacing: 40) {
                 ForEach(discoveryHubs, id: \.hubIdentifier) { hub in
                     if let hubItems = hub.Metadata, !hubItems.isEmpty {
-                        MediaRow(
+                        InfiniteContentRow(
                             title: hub.title ?? "Untitled",
-                            items: hubItems,
+                            initialItems: hubItems,
+                            hubKey: hub.key ?? hub.hubKey,
                             serverURL: authManager.selectedServerURL ?? "",
                             authToken: authManager.authToken ?? "",
                             contextMenuSource: .library,
@@ -543,18 +564,80 @@ struct PlexLibraryView: View {
         )
     }
 
-    // MARK: - Loading View
+    // MARK: - Loading View (Skeleton Placeholders)
 
     private var loadingView: some View {
-        VStack(spacing: 24) {
-            ProgressView()
-                .scaleEffect(1.5)
-            Text("Loading")
-                .font(.title3)
-                .fontWeight(.medium)
-                .foregroundStyle(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                // Skeleton header
+                skeletonHeader
+
+                // Skeleton grid
+                LazyVGrid(columns: columns, spacing: 40) {
+                    ForEach(0..<18, id: \.self) { _ in
+                        skeletonPosterCard
+                    }
+                }
+                #if os(tvOS)
+                .padding(.horizontal, 80)
+                .padding(.vertical, 28)
+                #else
+                .padding(.horizontal, 40)
+                .padding(.bottom, 40)
+                #endif
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var skeletonHeader: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Title placeholder
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.white.opacity(0.08))
+                .frame(width: 200, height: 32)
+
+            // Subtitle placeholder
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(.white.opacity(0.05))
+                .frame(width: 80, height: 17)
+        }
+        #if os(tvOS)
+        .padding(.horizontal, 80)
+        .padding(.top, 60)
+        .padding(.bottom, 32)
+        #else
+        .padding(.horizontal, 40)
+        .padding(.top, 40)
+        .padding(.bottom, 24)
+        #endif
+    }
+
+    private var skeletonPosterCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Poster placeholder - square for music, rectangle for video
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.white.opacity(0.08))
+                #if os(tvOS)
+                .frame(width: 220, height: isMusicLibrary ? 220 : 330)
+                #else
+                .frame(width: 180, height: isMusicLibrary ? 180 : 270)
+                #endif
+
+            // Title placeholder
+            VStack(alignment: .leading, spacing: 6) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.white.opacity(0.06))
+                    .frame(width: 160, height: 14)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.white.opacity(0.04))
+                    .frame(width: 100, height: 12)
+            }
+            #if os(tvOS)
+            .frame(height: 52, alignment: .top)
+            #else
+            .frame(height: 44, alignment: .top)
+            #endif
+        }
     }
 
     // MARK: - Error View
@@ -856,7 +939,11 @@ struct PlexLibraryView: View {
             // Only update hubs if they're actually different
             if !hubsAreEqual(hubs, fetchedHubs) {
                 hubs = fetchedHubs
+                cachedProcessedHubs = computeProcessedHubs(from: fetchedHubs)
             }
+
+            // Cache for instant loading next time
+            await cacheManager.cacheLibraryHubs(fetchedHubs, forLibrary: libraryKey)
         } catch {
             // Ignore cancellation errors
             if (error as NSError).code == NSURLErrorCancelled {

@@ -239,14 +239,9 @@ struct PlayerControlsOverlay: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        #if os(tvOS)
-        .onExitCommand {
-            // Close info panel when back/menu is pressed
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                viewModel.showInfoPanel = false
-            }
-        }
-        #endif
+        // Note: Menu/Back button handling is centralized in PlayerContainerViewController
+        // to properly intercept the event before it can dismiss the modal.
+        // Do NOT add onExitCommand here.
     }
 
     /// Column container with header

@@ -21,6 +21,9 @@ enum MediaItemContextSource {
 /// Callback type for context menu actions that may require data refresh
 typealias MediaItemRefreshCallback = () async -> Void
 
+/// Callback type for navigation actions (synchronous)
+typealias MediaItemNavigationCallback = () -> Void
+
 // MARK: - Context Menu Modifier
 
 /// A view modifier that adds a context menu to media items with common Plex actions
@@ -30,6 +33,7 @@ struct MediaItemContextMenu: ViewModifier {
     let authToken: String
     let source: MediaItemContextSource
     var onRefreshNeeded: MediaItemRefreshCallback?
+    var onShowInfo: MediaItemNavigationCallback?
 
     @State private var isPerformingAction = false
 
@@ -100,6 +104,15 @@ struct MediaItemContextMenu: ViewModifier {
 
             Divider()
 
+            // More Info (navigate to detail view)
+            if let onShowInfo = onShowInfo {
+                Button {
+                    onShowInfo()
+                } label: {
+                    Label("More Info", systemImage: "info.circle")
+                }
+            }
+
             // Refresh Metadata
             Button {
                 performAction {
@@ -147,14 +160,16 @@ extension View {
         serverURL: String,
         authToken: String,
         source: MediaItemContextSource = .other,
-        onRefreshNeeded: MediaItemRefreshCallback? = nil
+        onRefreshNeeded: MediaItemRefreshCallback? = nil,
+        onShowInfo: MediaItemNavigationCallback? = nil
     ) -> some View {
         modifier(MediaItemContextMenu(
             item: item,
             serverURL: serverURL,
             authToken: authToken,
             source: source,
-            onRefreshNeeded: onRefreshNeeded
+            onRefreshNeeded: onRefreshNeeded,
+            onShowInfo: onShowInfo
         ))
     }
 }

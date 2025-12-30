@@ -151,27 +151,10 @@ struct UniversalPlayerView: View {
                 handleSelectCommand()
             }
         }
-        .onExitCommand {
-            // Handle Menu/Back button - close UI elements before dismissing
-            if viewModel.postVideoState != .hidden {
-                // Post-video overlay showing - dismiss it and the player
-                viewModel.dismissPostVideo()
-                dismiss()
-            } else if viewModel.isScrubbing {
-                viewModel.cancelScrub()
-            } else if viewModel.showInfoPanel {
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                    viewModel.showInfoPanel = false
-                }
-            } else if viewModel.showControls {
-                withAnimation(.easeOut(duration: 0.25)) {
-                    viewModel.showControls = false
-                }
-            } else {
-                // Nothing to close - let the system dismiss the player
-                dismiss()
-            }
-        }
+        // Note: Menu/Back button handling is done in PlayerContainerViewController
+        // to intercept the event before SwiftUI can dismiss the player.
+        // Do NOT add onExitCommand here - it would fire after PlayerContainerViewController
+        // has already processed the event, causing double-handling.
         #endif
         .onChange(of: playerController) { _, controller in
             if let controller = controller {

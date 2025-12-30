@@ -108,6 +108,9 @@ struct TVSidebarView: View {
                 async let hubsLoad: () = dataStore.loadHubsIfNeeded()
                 async let librariesLoad: () = dataStore.loadLibrariesIfNeeded()
                 _ = await (hubsLoad, librariesLoad)
+
+                // Start background prefetch of library content for faster navigation
+                dataStore.startBackgroundPrefetch()
             }
         }
         .task {
@@ -143,7 +146,7 @@ struct TVSidebarView: View {
                                 icon: "magnifyingglass",
                                 title: "Search",
                                 isSelected: selectedDestination == .search,
-                                onSelect: { navigateToSearch(); closeSidebar() },
+                                onSelect: { closeSidebar(); navigateToSearch() },
                                 focusedItem: $sidebarFocusedItem
                             )
 
@@ -153,7 +156,7 @@ struct TVSidebarView: View {
                                 icon: "house.fill",
                                 title: "Home",
                                 isSelected: selectedDestination == .home && selectedLibraryKey == nil,
-                                onSelect: { navigateToHome(); closeSidebar() },
+                                onSelect: { closeSidebar(); navigateToHome() },
                                 focusedItem: $sidebarFocusedItem
                             )
 
@@ -167,7 +170,7 @@ struct TVSidebarView: View {
                                         icon: iconForLibrary(library),
                                         title: library.title,
                                         isSelected: selectedLibraryKey == library.key,
-                                        onSelect: { navigateToLibrary(library); closeSidebar() },
+                                        onSelect: { closeSidebar(); navigateToLibrary(library) },
                                         focusedItem: $sidebarFocusedItem
                                     )
                                 }
@@ -194,7 +197,7 @@ struct TVSidebarView: View {
                                     icon: "tv.and.mediabox",
                                     title: "Channels",
                                     isSelected: selectedDestination == .liveTV,
-                                    onSelect: { navigateToLiveTV(); closeSidebar() },
+                                    onSelect: { closeSidebar(); navigateToLiveTV() },
                                     focusedItem: $sidebarFocusedItem
                                 )
                             }
@@ -212,7 +215,7 @@ struct TVSidebarView: View {
                                 icon: "gearshape.fill",
                                 title: "Settings",
                                 isSelected: selectedDestination == .settings,
-                                onSelect: { navigateToSettings(); closeSidebar() },
+                                onSelect: { closeSidebar(); navigateToSettings() },
                                 focusedItem: $sidebarFocusedItem
                             )
                         }

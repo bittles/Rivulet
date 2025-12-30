@@ -946,12 +946,15 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             return nil
         }
 
-        components.queryItems = [
+        // Preserve existing query items (e.g., IVA trailer quality params like fmt=4&bitrate=5000)
+        var existingItems = components.queryItems ?? []
+        existingItems.append(contentsOf: [
             URLQueryItem(name: "X-Plex-Token", value: authToken),
             URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
             URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform),
             URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName)
-        ]
+        ])
+        components.queryItems = existingItems
 
         return components.url
     }

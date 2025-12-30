@@ -57,6 +57,7 @@ struct PlexDetailView: View {
     // Navigation state for episode parent navigation
     @State private var navigateToSeason: PlexMetadata?
     @State private var navigateToShow: PlexMetadata?
+    @State private var navigateToEpisode: PlexMetadata?
     @State private var isLoadingNavigation = false
 
     private let networkManager = PlexNetworkManager.shared
@@ -221,6 +222,9 @@ struct PlexDetailView: View {
         }
         .navigationDestination(item: $navigateToShow) { show in
             PlexDetailView(item: show)
+        }
+        .navigationDestination(item: $navigateToEpisode) { episode in
+            PlexDetailView(item: episode)
         }
         // Update goBackAction when viewing nested album
         .onChange(of: navigateToAlbum) { oldAlbum, newAlbum in
@@ -832,24 +836,36 @@ struct PlexDetailView: View {
                                 episode: episode,
                                 serverURL: authManager.selectedServerURL ?? "",
                                 authToken: authManager.authToken ?? "",
-                                focusedEpisodeId: $focusedEpisodeId
-                            ) {
-                                // Play episode (resume if in progress)
-                                selectedEpisode = episode
-                                playFromBeginning = false
-                                showPlayer = true
-                            }
+                                focusedEpisodeId: $focusedEpisodeId,
+                                onPlay: {
+                                    selectedEpisode = episode
+                                    playFromBeginning = false
+                                    showPlayer = true
+                                },
+                                onRefreshNeeded: {
+                                    await refreshEpisodeWatchStatus(ratingKey: episode.ratingKey)
+                                },
+                                onShowInfo: {
+                                    navigateToEpisode = episode
+                                }
+                            )
                             #else
                             EpisodeRow(
                                 episode: episode,
                                 serverURL: authManager.selectedServerURL ?? "",
-                                authToken: authManager.authToken ?? ""
-                            ) {
-                                // Play episode (resume if in progress)
-                                selectedEpisode = episode
-                                playFromBeginning = false
-                                showPlayer = true
-                            }
+                                authToken: authManager.authToken ?? "",
+                                onPlay: {
+                                    selectedEpisode = episode
+                                    playFromBeginning = false
+                                    showPlayer = true
+                                },
+                                onRefreshNeeded: {
+                                    await refreshEpisodeWatchStatus(ratingKey: episode.ratingKey)
+                                },
+                                onShowInfo: {
+                                    navigateToEpisode = episode
+                                }
+                            )
                             #endif
                         }
                     }
@@ -881,24 +897,36 @@ struct PlexDetailView: View {
                             episode: episode,
                             serverURL: authManager.selectedServerURL ?? "",
                             authToken: authManager.authToken ?? "",
-                            focusedEpisodeId: $focusedEpisodeId
-                        ) {
-                            // Play episode (resume if in progress)
-                            selectedEpisode = episode
-                            playFromBeginning = false
-                            showPlayer = true
-                        }
+                            focusedEpisodeId: $focusedEpisodeId,
+                            onPlay: {
+                                selectedEpisode = episode
+                                playFromBeginning = false
+                                showPlayer = true
+                            },
+                            onRefreshNeeded: {
+                                await refreshEpisodeWatchStatus(ratingKey: episode.ratingKey)
+                            },
+                            onShowInfo: {
+                                navigateToEpisode = episode
+                            }
+                        )
                         #else
                         EpisodeRow(
                             episode: episode,
                             serverURL: authManager.selectedServerURL ?? "",
-                            authToken: authManager.authToken ?? ""
-                        ) {
-                            // Play episode (resume if in progress)
-                            selectedEpisode = episode
-                            playFromBeginning = false
-                            showPlayer = true
-                        }
+                            authToken: authManager.authToken ?? "",
+                            onPlay: {
+                                selectedEpisode = episode
+                                playFromBeginning = false
+                                showPlayer = true
+                            },
+                            onRefreshNeeded: {
+                                await refreshEpisodeWatchStatus(ratingKey: episode.ratingKey)
+                            },
+                            onShowInfo: {
+                                navigateToEpisode = episode
+                            }
+                        )
                         #endif
                     }
                 }
@@ -1295,6 +1323,31 @@ struct PlexDetailView: View {
         isLoadingEpisodes = false
     }
 
+    /// Refresh a single episode's watch status without reloading the entire list
+    /// This preserves focus position in the episode list
+    private func refreshEpisodeWatchStatus(ratingKey: String?) async {
+        guard let ratingKey = ratingKey,
+              let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken else { return }
+
+        do {
+            // Fetch fresh metadata for just this episode
+            let updatedMetadata = try await networkManager.getMetadata(
+                serverURL: serverURL,
+                authToken: token,
+                ratingKey: ratingKey
+            )
+
+            // Update the episode in place
+            if let index = episodes.firstIndex(where: { $0.ratingKey == ratingKey }) {
+                episodes[index].viewCount = updatedMetadata.viewCount
+                episodes[index].viewOffset = updatedMetadata.viewOffset
+            }
+        } catch {
+            print("Failed to refresh episode watch status: \(error)")
+        }
+    }
+
     private func loadTracks() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.authToken,
@@ -1537,6 +1590,7 @@ struct EpisodeRow: View {
     let onPlay: () -> Void
     var onPlayFromBeginning: (() -> Void)? = nil
     var onRefreshNeeded: MediaItemRefreshCallback? = nil
+    var onShowInfo: MediaItemNavigationCallback? = nil
 
     #if os(tvOS)
     @FocusState private var isFocused: Bool
@@ -1667,7 +1721,8 @@ struct EpisodeRow: View {
             serverURL: serverURL,
             authToken: authToken,
             source: .other,
-            onRefreshNeeded: onRefreshNeeded
+            onRefreshNeeded: onRefreshNeeded,
+            onShowInfo: onShowInfo
         )
     }
 

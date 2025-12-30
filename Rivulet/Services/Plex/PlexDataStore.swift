@@ -340,20 +340,265 @@ class PlexDataStore: ObservableObject {
         }
     }
 
+    // MARK: - Background Prefetch
+
+    private var prefetchTask: Task<Void, Never>?
+
+    /// Prefetch library content in the background for faster navigation
+    /// Call this on app start after authentication is verified
+    func startBackgroundPrefetch() {
+        // Cancel any existing prefetch
+        prefetchTask?.cancel()
+
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken else {
+            print("📦 PlexDataStore: Cannot prefetch - not authenticated")
+            return
+        }
+
+        prefetchTask = Task(priority: .utility) {
+            print("📦 PlexDataStore: Starting background prefetch...")
+
+            // Wait for libraries to be loaded first
+            while libraries.isEmpty && !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            }
+
+            guard !Task.isCancelled else { return }
+
+            // Prefetch content for each visible/pinned video library only
+            for library in visibleVideoLibraries {
+                guard !Task.isCancelled else { break }
+
+                let libraryKey = library.key
+
+                // Check if already cached
+                let hasMoviesCache = await cacheManager.getCachedMovies(forLibrary: libraryKey) != nil
+                let hasShowsCache = await cacheManager.getCachedShows(forLibrary: libraryKey) != nil
+                let hasHubsCache = await cacheManager.getCachedLibraryHubs(forLibrary: libraryKey) != nil
+
+                if hasMoviesCache || hasShowsCache {
+                    print("📦 PlexDataStore: Library \(library.title) already cached, skipping items")
+                } else {
+                    // Fetch and cache library items
+                    do {
+                        print("📦 PlexDataStore: Prefetching items for \(library.title)...")
+                        let result = try await networkManager.getLibraryItemsWithTotal(
+                            serverURL: serverURL,
+                            authToken: token,
+                            sectionId: libraryKey,
+                            start: 0,
+                            size: 100
+                        )
+
+                        // Cache based on type
+                        if let firstItem = result.items.first {
+                            if firstItem.type == "movie" {
+                                await cacheManager.cacheMovies(result.items, forLibrary: libraryKey)
+                            } else if firstItem.type == "show" {
+                                await cacheManager.cacheShows(result.items, forLibrary: libraryKey)
+                            }
+                        }
+                        print("📦 PlexDataStore: ✅ Prefetched \(result.items.count) items for \(library.title)")
+
+                        // Prefetch poster images for first 30 items
+                        prefetchImages(for: result.items, serverURL: serverURL, token: token)
+                    } catch {
+                        print("📦 PlexDataStore: ⚠️ Failed to prefetch items for \(library.title): \(error.localizedDescription)")
+                    }
+                }
+
+                // Prefetch library hubs
+                if hasHubsCache {
+                    print("📦 PlexDataStore: Library \(library.title) hubs already cached, skipping")
+                } else {
+                    do {
+                        print("📦 PlexDataStore: Prefetching hubs for \(library.title)...")
+                        let hubs = try await networkManager.getLibraryHubs(
+                            serverURL: serverURL,
+                            authToken: token,
+                            sectionId: libraryKey
+                        )
+                        await cacheManager.cacheLibraryHubs(hubs, forLibrary: libraryKey)
+                        print("📦 PlexDataStore: ✅ Prefetched \(hubs.count) hubs for \(library.title)")
+                    } catch {
+                        print("📦 PlexDataStore: ⚠️ Failed to prefetch hubs for \(library.title): \(error.localizedDescription)")
+                    }
+                }
+
+                // Small delay between libraries to avoid overwhelming the server
+                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+            }
+
+            // Prefetch home hub images and next episodes for Continue Watching
+            await prefetchHubContent(serverURL: serverURL, token: token)
+
+            print("📦 PlexDataStore: Background prefetch complete")
+        }
+    }
+
+    // MARK: - Image Prefetching
+
+    /// Build image URL for a metadata item
+    private func buildImageURL(for item: PlexMetadata, serverURL: String, token: String) -> URL? {
+        // For episodes, prefer the series poster
+        let thumb: String?
+        if item.type == "episode" {
+            thumb = item.grandparentThumb ?? item.parentThumb ?? item.thumb
+        } else {
+            thumb = item.thumb
+        }
+
+        guard let thumbPath = thumb else { return nil }
+        var urlString = "\(serverURL)\(thumbPath)"
+        if !urlString.contains("X-Plex-Token") {
+            urlString += urlString.contains("?") ? "&" : "?"
+            urlString += "X-Plex-Token=\(token)"
+        }
+        return URL(string: urlString)
+    }
+
+    /// Prefetch poster images for a list of items
+    private func prefetchImages(for items: [PlexMetadata], serverURL: String, token: String) {
+        let imageURLs = items.compactMap { buildImageURL(for: $0, serverURL: serverURL, token: token) }
+        guard !imageURLs.isEmpty else { return }
+
+        print("📦 PlexDataStore: Prefetching \(imageURLs.count) poster images...")
+        Task.detached(priority: .utility) {
+            await ImageCacheManager.shared.prefetch(urls: imageURLs)
+        }
+    }
+
+    /// Prefetch hub content including images and next episodes for Continue Watching
+    private func prefetchHubContent(serverURL: String, token: String) async {
+        guard !hubs.isEmpty else { return }
+
+        print("📦 PlexDataStore: Prefetching hub content...")
+
+        // Collect all hub items for image prefetching
+        var allHubItems: [PlexMetadata] = []
+        var continueWatchingEpisodes: [PlexMetadata] = []
+
+        for hub in hubs {
+            guard let items = hub.Metadata else { continue }
+            allHubItems.append(contentsOf: items)
+
+            // Identify Continue Watching / On Deck hubs
+            let identifier = hub.hubIdentifier?.lowercased() ?? ""
+            let isContinueWatching = identifier.contains("continuewatching") ||
+                                     identifier.contains("ondeck") ||
+                                     identifier.contains("inprogress")
+
+            if isContinueWatching {
+                // Collect TV episodes for next episode prefetching
+                let episodes = items.filter { $0.type == "episode" }
+                continueWatchingEpisodes.append(contentsOf: episodes)
+            }
+        }
+
+        // Prefetch poster images for all hub items
+        prefetchImages(for: allHubItems, serverURL: serverURL, token: token)
+
+        // Prefetch next episodes for Continue Watching TV episodes
+        if !continueWatchingEpisodes.isEmpty {
+            await prefetchNextEpisodes(for: continueWatchingEpisodes, serverURL: serverURL, token: token)
+        }
+    }
+
+    // MARK: - Next Episode Prefetching
+
+    /// Cache for prefetched next episodes (keyed by current episode ratingKey)
+    private(set) var nextEpisodeCache: [String: PlexMetadata] = [:]
+
+    /// Prefetch next episodes for Continue Watching items
+    private func prefetchNextEpisodes(for episodes: [PlexMetadata], serverURL: String, token: String) async {
+        // Limit to first 5 episodes to avoid too many requests
+        let episodesToProcess = Array(episodes.prefix(5))
+        print("📦 PlexDataStore: Prefetching next episodes for \(episodesToProcess.count) items...")
+
+        for episode in episodesToProcess {
+            guard !Task.isCancelled else { break }
+
+            guard let ratingKey = episode.ratingKey else { continue }
+
+            // Skip if already cached
+            if nextEpisodeCache[ratingKey] != nil { continue }
+
+            do {
+                // Fetch full metadata if parent keys are missing
+                var workingEpisode = episode
+                if workingEpisode.parentRatingKey == nil || workingEpisode.index == nil {
+                    let fullMetadata = try await networkManager.getMetadata(
+                        serverURL: serverURL,
+                        authToken: token,
+                        ratingKey: ratingKey
+                    )
+                    workingEpisode.parentRatingKey = fullMetadata.parentRatingKey
+                    workingEpisode.grandparentRatingKey = fullMetadata.grandparentRatingKey
+                    workingEpisode.parentIndex = fullMetadata.parentIndex
+                    workingEpisode.index = fullMetadata.index
+                }
+
+                guard let seasonKey = workingEpisode.parentRatingKey,
+                      let currentIndex = workingEpisode.index else { continue }
+
+                // Get episodes in current season
+                let seasonEpisodes = try await networkManager.getChildren(
+                    serverURL: serverURL,
+                    authToken: token,
+                    ratingKey: seasonKey
+                )
+
+                // Find next episode
+                if let nextEp = seasonEpisodes.first(where: { $0.index == currentIndex + 1 }) {
+                    nextEpisodeCache[ratingKey] = nextEp
+                    print("📦 PlexDataStore: ✅ Cached next episode for \(episode.title ?? "?"): \(nextEp.episodeString ?? "?")")
+
+                    // Prefetch the next episode's thumbnail
+                    if let imageURL = buildImageURL(for: nextEp, serverURL: serverURL, token: token) {
+                        Task.detached(priority: .utility) {
+                            _ = await ImageCacheManager.shared.image(for: imageURL)
+                        }
+                    }
+                }
+                // Note: We don't try next season here to keep prefetch fast
+            } catch {
+                print("📦 PlexDataStore: ⚠️ Failed to prefetch next episode for \(episode.title ?? "?"): \(error.localizedDescription)")
+            }
+
+            // Small delay between requests
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+        }
+    }
+
+    /// Get cached next episode for a given episode ratingKey
+    func getCachedNextEpisode(for ratingKey: String) -> PlexMetadata? {
+        return nextEpisodeCache[ratingKey]
+    }
+
+    /// Clear next episode cache
+    func clearNextEpisodeCache() {
+        nextEpisodeCache.removeAll()
+    }
+
     // MARK: - Reset (on sign out)
 
     func reset() {
         print("📦 PlexDataStore: Resetting all data")
         hubsLoadTask?.cancel()
         librariesLoadTask?.cancel()
+        prefetchTask?.cancel()
         hubsLoadTask = nil
         librariesLoadTask = nil
+        prefetchTask = nil
         hubs = []
         libraries = []
         hubsError = nil
         librariesError = nil
         isLoadingHubs = false
         isLoadingLibraries = false
+        nextEpisodeCache.removeAll()
+        heroCache.removeAll()
     }
 
     // MARK: - Diffing Helpers

@@ -13,19 +13,13 @@ struct StreamSlotView: View {
     let isFocused: Bool
     var showBorder: Bool = true
     var showChannelBadge: Bool = true
-    var containerSize: CGSize = .zero  // Passed from parent for explicit size updates
+    var containerSize: CGSize = .zero  // Explicit size for MPV multi-stream
     let onControllerReady: (MPVMetalViewController) -> Void
 
     @State private var playerController: MPVMetalViewController?
-    @State private var lastContainerSize: CGSize = .zero
 
     private var streamURL: URL? {
         LiveTVDataStore.shared.buildStreamURL(for: slot.channel)
-    }
-
-    /// Determines which player engine is being used for this slot
-    private var isMPVPlayer: Bool {
-        slot.mpvWrapper != nil
     }
 
     var body: some View {
@@ -34,7 +28,7 @@ struct StreamSlotView: View {
             Color.black
 
             // Player view - either MPV or AVPlayer based on slot configuration
-            // Size is managed by parent via containerSize prop, not GeometryReader
+            // Size is handled naturally by SwiftUI layout - the player fills its parent
             if let _ = streamURL {
                 playerView
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -92,28 +86,6 @@ struct StreamSlotView: View {
         .onChange(of: playerController) { _, controller in
             if let controller = controller {
                 onControllerReady(controller)
-                // Apply size - prefer containerSize (parent-driven), fallback to lastContainerSize
-                let sizeToApply = containerSize != .zero ? containerSize : lastContainerSize
-                if sizeToApply != .zero {
-                    print("🧩 StreamSlot \(index): playerController ready, applying size \(sizeToApply)")
-                    controller.updateForContainerSize(sizeToApply)
-                }
-            }
-        }
-        .onChange(of: containerSize) { _, newSize in
-            // Parent-driven size update (for layout mode changes)
-            // Force update by resetting lastContainerSize - this is an intentional layout change
-            if newSize != .zero && newSize != lastContainerSize {
-                print("🧩 StreamSlot \(index): containerSize changed to \(newSize) (was \(lastContainerSize))")
-                lastContainerSize = .zero  // Reset to force update past threshold
-                updatePlayerSize(newSize)
-            }
-        }
-        .onAppear {
-            // Apply initial containerSize if provided
-            if containerSize != .zero {
-                print("🧩 StreamSlot \(index): onAppear with containerSize \(containerSize)")
-                updatePlayerSize(containerSize)
             }
         }
     }
@@ -123,7 +95,7 @@ struct StreamSlotView: View {
     @ViewBuilder
     private var playerView: some View {
         if let mpvWrapper = slot.mpvWrapper, let url = streamURL {
-            // MPV Player - pass containerSize for explicit size updates
+            // MPV Player - containerSize passed for explicit sizing in multi-stream
             MPVPlayerView(
                 url: url,
                 headers: [:],
@@ -136,29 +108,6 @@ struct StreamSlotView: View {
         } else if let avWrapper = slot.avWrapper {
             // AVPlayer - lightweight native player
             AVPlayerView(playerWrapper: avWrapper)
-        }
-    }
-
-    private func updatePlayerSize(_ newSize: CGSize) {
-        // Only applies to MPV player - AVPlayer handles sizing automatically
-        guard isMPVPlayer else { return }
-        guard newSize != .zero else { return }
-
-        // Only resize if the change is significant (more than 5 pixels)
-        // This prevents unnecessary reconfigurations during minor layout shifts
-        let widthDiff = abs(newSize.width - lastContainerSize.width)
-        let heightDiff = abs(newSize.height - lastContainerSize.height)
-        guard widthDiff > 5 || heightDiff > 5 || lastContainerSize == .zero else { return }
-
-        lastContainerSize = newSize
-        print("🧩 StreamSlot \(index): container size -> \(newSize), playerController=\(playerController != nil ? "set" : "nil")")
-
-        if let controller = playerController {
-            controller.updateForContainerSize(newSize)
-        } else {
-            // Controller not ready yet - it will pick up the size when it becomes available
-            // via onChange(of: playerController)
-            print("🧩 StreamSlot \(index): playerController nil, will apply size when ready")
         }
     }
 
@@ -318,6 +267,7 @@ struct StreamSlotView: View {
         ),
         index: 0,
         isFocused: true,
+        containerSize: CGSize(width: 400, height: 300),
         onControllerReady: { _ in }
     )
     .frame(width: 400, height: 300)

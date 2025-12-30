@@ -61,19 +61,11 @@ class PlayerContainerViewController: UIViewController {
             hosting.didMove(toParent: self)
         }
 
-        // Add tap gesture recognizer for Menu button to intercept before UIKit navigation
-        let menuTapRecognizer = UITapGestureRecognizer(target: self, action: #selector(menuTapped))
-        menuTapRecognizer.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
-        view.addGestureRecognizer(menuTapRecognizer)
-
-        // Left/right arrow tap vs hold is handled via pressesBegan/pressesEnded
+        // Menu button is handled via pressesBegan (not gesture recognizer)
+        // to avoid double-firing issues
+        // Left/right arrow tap vs hold is also handled via pressesBegan/pressesEnded
         // This gives us precise timing control without gesture recognizer delays
-        print("🎮 [SETUP] PlayerContainerViewController configured for arrow key handling via pressesBegan/pressesEnded")
-    }
-
-    @objc private func menuTapped() {
-        print("🎮 [MENU] Gesture recognizer intercepted Menu tap")
-        handleMenuButton()
+        print("🎮 [SETUP] PlayerContainerViewController configured for button handling via pressesBegan/pressesEnded")
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -84,6 +76,49 @@ class PlayerContainerViewController: UIViewController {
 
     override var canBecomeFirstResponder: Bool {
         return true
+    }
+
+    /// Override dismiss to intercept system-triggered dismissals (e.g., from Menu button)
+    /// and only allow dismissal when we've explicitly decided to dismiss.
+    override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
+        // If we just handled a menu action that closed something, block this dismiss
+        if blockNextDismiss {
+            print("🎮 [DISMISS INTERCEPT] Blocked - menu action already handled this press")
+            blockNextDismiss = false
+            return
+        }
+
+        // Check if we have something to close before allowing dismiss
+        if let vm = viewModel {
+            if vm.postVideoState != .hidden {
+                print("🎮 [DISMISS INTERCEPT] Post-video visible - dismissing normally")
+                vm.dismissPostVideo()
+                super.dismiss(animated: flag, completion: completion)
+                return
+            }
+            if vm.isScrubbing {
+                print("🎮 [DISMISS INTERCEPT] Scrubbing active - cancelling scrub instead")
+                vm.cancelScrub()
+                return
+            }
+            if vm.showInfoPanel {
+                print("🎮 [DISMISS INTERCEPT] Info panel open - closing it instead")
+                withAnimation(.easeOut(duration: 0.3)) {
+                    vm.showInfoPanel = false
+                }
+                return
+            }
+            if vm.showControls {
+                print("🎮 [DISMISS INTERCEPT] Controls visible - hiding them instead")
+                withAnimation(.easeOut(duration: 0.25)) {
+                    vm.showControls = false
+                }
+                return
+            }
+        }
+        // Nothing to close, allow normal dismiss
+        print("🎮 [DISMISS INTERCEPT] Nothing to close - allowing dismiss")
+        super.dismiss(animated: flag, completion: completion)
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -105,6 +140,11 @@ class PlayerContainerViewController: UIViewController {
     private var arrowHoldTimer: Timer?
     private var didStartScrubbing = false
     private let holdThreshold: TimeInterval = 0.4
+
+    /// Flag to block dismiss calls that occur immediately after we handled a menu action
+    /// This prevents the double-handling issue where handleMenuButton() closes something,
+    /// then SwiftUI's responder chain also calls dismiss().
+    private var blockNextDismiss = false
 
     /// Siri Remote touchpad click types (undocumented but discovered via logging)
     /// These are different from standard UIPress.PressType arrow values
@@ -276,10 +316,11 @@ class PlayerContainerViewController: UIViewController {
     }
 
     /// Handle Menu button press with priority:
-    /// 1. Cancel scrubbing if active
-    /// 2. Close info panel if open
-    /// 3. Hide controls if visible
-    /// 4. Dismiss player if nothing else to close
+    /// 1. Dismiss post-video overlay if showing
+    /// 2. Cancel scrubbing if active
+    /// 3. Close info panel if open
+    /// 4. Hide controls if visible
+    /// 5. Dismiss player if nothing else to close
     private func handleMenuButton() {
         guard let vm = viewModel else {
             print("🎮 [MENU] No viewModel - dismissing player")
@@ -287,16 +328,25 @@ class PlayerContainerViewController: UIViewController {
             return
         }
 
-        if vm.isScrubbing {
+        print("🎮 [MENU] State check: postVideo=\(vm.postVideoState), scrubbing=\(vm.isScrubbing), infoPanel=\(vm.showInfoPanel), controls=\(vm.showControls)")
+
+        if vm.postVideoState != .hidden {
+            print("🎮 [MENU] Dismissing post-video overlay and player")
+            vm.dismissPostVideo()
+            dismissPlayer()
+        } else if vm.isScrubbing {
             print("🎮 [MENU] Cancelling scrub")
+            blockNextDismiss = true  // Block any subsequent dismiss from SwiftUI
             vm.cancelScrub()
         } else if vm.showInfoPanel {
             print("🎮 [MENU] Closing info panel")
+            blockNextDismiss = true  // Block any subsequent dismiss from SwiftUI
             withAnimation(.easeOut(duration: 0.3)) {
                 vm.showInfoPanel = false
             }
         } else if vm.showControls {
             print("🎮 [MENU] Hiding controls")
+            blockNextDismiss = true  // Block any subsequent dismiss from SwiftUI
             withAnimation(.easeOut(duration: 0.25)) {
                 vm.showControls = false
             }

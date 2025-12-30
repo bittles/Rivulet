@@ -197,7 +197,7 @@ struct LiveTVPlayerView: View {
                             isFocused: viewModel.focusedSlotIndex == index && !viewModel.showControls,
                             showBorder: viewModel.streamCount > 1,
                             showChannelBadge: showChannelBadges,
-                            containerSize: CGSize(width: rect.width, height: rect.height),
+                            containerSize: rect.size,
                             onControllerReady: { controller in
                                 viewModel.setPlayerController(controller, for: slot.id)
                             }

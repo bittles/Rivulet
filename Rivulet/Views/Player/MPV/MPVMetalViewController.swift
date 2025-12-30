@@ -31,8 +31,10 @@ final class MPVMetalViewController: UIViewController {
     private var isShuttingDown = false
     private var lastKnownSize: CGSize = .zero
     private var previousDrawableSize: CGSize = .zero
-    private var pendingDrawableSize: CGSize?  // Delayed shrink target
     private var resizeWorkItem: DispatchWorkItem?
+
+    /// Explicit target size set by parent - when set, this overrides view.bounds for sizing
+    private var explicitTargetSize: CGSize?
 
     // MARK: - Simulator Detection
 
@@ -68,11 +70,6 @@ final class MPVMetalViewController: UIViewController {
         metalLayer.framebufferOnly = true
         metalLayer.backgroundColor = UIColor.black.cgColor
 
-        // Use top-left anchor point for consistent transform behavior
-        // This must be set BEFORE adding to superlayer to avoid frame issues
-        metalLayer.anchorPoint = CGPoint(x: 0, y: 0)
-        metalLayer.position = .zero
-
         view.layer.addSublayer(metalLayer)
 
         // Don't setup MPV here - wait for viewDidLayoutSubviews when we have proper bounds
@@ -80,6 +77,12 @@ final class MPVMetalViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+
+        // If we have an explicit target size (set by parent for multi-stream),
+        // ignore view.bounds changes - the parent controls our size
+        if explicitTargetSize != nil {
+            return
+        }
 
         let newSize = view.bounds.size
 
@@ -99,15 +102,56 @@ final class MPVMetalViewController: UIViewController {
                 loadFile(url)
             }
         }
-        // For VOD (non-live) mode: trigger resize based on view bounds changes
-        // For live streams: size is managed by updateForContainerSize, don't interfere
-        else if hasSetupMpv && mpv != nil && !isShuttingDown && !isLiveStreamMode {
+        // Handle view resizing - MPV will detect drawable size changes via MoltenVK
+        // and reconfigure automatically. We just need to debounce rapid changes.
+        else if hasSetupMpv && mpv != nil && !isShuttingDown {
             let sizeDelta = abs(newSize.width - lastKnownSize.width) + abs(newSize.height - lastKnownSize.height)
             if sizeDelta > 10 {  // More than 10pt change
                 lastKnownSize = newSize
+                print("🎬 MPV: viewDidLayoutSubviews size changed to \(newSize)")
 
                 // Cancel any pending resize and schedule a new one
                 // This debounces rapid size changes during animations
+                resizeWorkItem?.cancel()
+                let workItem = DispatchWorkItem { [weak self] in
+                    self?.forceVideoResize()
+                }
+                resizeWorkItem = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: workItem)
+            }
+        }
+    }
+
+    /// Set explicit target size from parent (for multi-stream layout)
+    /// This bypasses viewDidLayoutSubviews to prevent SwiftUI layout thrashing
+    func setExplicitSize(_ size: CGSize) {
+        guard size != .zero else {
+            explicitTargetSize = nil
+            return
+        }
+
+        explicitTargetSize = size
+        print("🎬 MPV: setExplicitSize to \(size)")
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        metalLayer.frame = CGRect(origin: .zero, size: size)
+        CATransaction.commit()
+
+        // Setup MPV if not done yet
+        if !hasSetupMpv && size.width > 0 && size.height > 0 {
+            hasSetupMpv = true
+            lastKnownSize = size
+            setupMpv()
+
+            if let url = playUrl {
+                loadFile(url)
+            }
+        } else if hasSetupMpv && mpv != nil && !isShuttingDown {
+            let sizeDelta = abs(size.width - lastKnownSize.width) + abs(size.height - lastKnownSize.height)
+            if sizeDelta > 10 {
+                lastKnownSize = size
+
                 resizeWorkItem?.cancel()
                 let workItem = DispatchWorkItem { [weak self] in
                     self?.forceVideoResize()
@@ -124,9 +168,8 @@ final class MPVMetalViewController: UIViewController {
 
         let currentDrawable = metalLayer.drawableSize
         let sizeChanged = currentDrawable != previousDrawableSize
-        let hasPendingShrink = pendingDrawableSize != nil
 
-        print("🎬 MPV: Forcing video resize to \(lastKnownSize), drawable: \(previousDrawableSize) -> \(currentDrawable), changed: \(sizeChanged), pendingShrink: \(pendingDrawableSize?.debugDescription ?? "none")")
+        print("🎬 MPV: Forcing video resize to \(lastKnownSize), drawable: \(previousDrawableSize) -> \(currentDrawable), changed: \(sizeChanged)")
 
         // Force the Metal layer to redraw at new size
         CATransaction.begin()
@@ -134,8 +177,8 @@ final class MPVMetalViewController: UIViewController {
         metalLayer.setNeedsDisplay()
         CATransaction.commit()
 
-        // Skip if drawable size hasn't changed and no pending shrink
-        guard sizeChanged || hasPendingShrink else { return }
+        // Skip if drawable size hasn't changed
+        guard sizeChanged else { return }
 
         previousDrawableSize = currentDrawable
 
@@ -147,111 +190,11 @@ final class MPVMetalViewController: UIViewController {
             let currentSync = self.getString("video-sync") ?? "audio"
             self.setString("video-sync", "display-resample")
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                 guard let self, self.mpv != nil, !self.isShuttingDown else { return }
-
-                // Apply pending drawable shrink
-                let didShrink = self.pendingDrawableSize != nil
-                if let pendingSize = self.pendingDrawableSize {
-                    CATransaction.begin()
-                    CATransaction.setDisableActions(true)
-                    self.metalLayer.drawableSize = pendingSize
-                    // Reset transform since drawable now matches intended size
-                    self.metalLayer.transform = CATransform3DIdentity
-                    CATransaction.commit()
-                    self.pendingDrawableSize = nil
-                    self.previousDrawableSize = pendingSize
-                    print("🎬 MPV: Applied delayed drawable shrink to \(pendingSize)")
-                }
-
-                // Reset video-sync, then if we shrunk, do another toggle to force MPV
-                // to reconfigure with the NEW drawable size
                 self.queue.async {
                     self.setString("video-sync", currentSync)
-
-                    if didShrink {
-                        // Force another reconfigure now that drawable is at correct size
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                            guard let self, self.mpv != nil, !self.isShuttingDown else { return }
-                            print("🎬 MPV: Post-shrink reconfigure, drawable=\(self.metalLayer.drawableSize)")
-                            self.queue.async {
-                                self.setString("video-sync", "display-resample")
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                                    guard let self else { return }
-                                    self.queue.async {
-                                        self.setString("video-sync", currentSync)
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
-            }
-        }
-    }
-
-    /// Explicitly handle container size changes initiated by SwiftUI layout updates
-    func updateForContainerSize(_ newSize: CGSize) {
-        guard !isShuttingDown, newSize != .zero else { return }
-
-        // Use the passed-in newSize (the intended size from SwiftUI layout)
-        // Don't use view.bounds - it may not have updated yet when onChange fires
-
-        // Calculate target drawable size
-        let screenSize = view.window?.windowScene?.screen.nativeBounds.size ?? CGSize(width: 3840, height: 2160)
-        // Round UP to avoid 1-pixel mismatches where MPV expects 1076 but we give 1075
-        let baseWidth = ceil(max(newSize.width * metalLayer.contentsScale, 1))
-        let baseHeight = ceil(max(newSize.height * metalLayer.contentsScale, 1))
-        let targetSize = CGSize(
-            width: min(screenSize.width, baseWidth),
-            height: min(screenSize.height, baseHeight)
-        )
-
-        let currentDrawable = metalLayer.drawableSize
-        let isGrowing = targetSize.width > currentDrawable.width || targetSize.height > currentDrawable.height
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-
-        // Set Metal layer frame to the intended size
-        metalLayer.frame = CGRect(origin: .zero, size: newSize)
-
-        // For live streams: NEVER shrink the drawable (causes Metal crashes).
-        // Only grow. Use scale transform to visually shrink content instead.
-        if isGrowing {
-            metalLayer.drawableSize = targetSize
-        }
-        // Lock drawable to current size to prevent auto-shrink from frame change
-        metalLayer.drawableSize = metalLayer.drawableSize
-
-        // Apply scale transform when drawable doesn't match frame
-        // CAMetalLayer doesn't auto-scale content, so we need to do it manually
-        // Anchor point is set to (0,0) in viewDidLoad for consistent positioning
-        let currentDrawableAfter = metalLayer.drawableSize
-        let scaleX = newSize.width / (currentDrawableAfter.width / metalLayer.contentsScale)
-        let scaleY = newSize.height / (currentDrawableAfter.height / metalLayer.contentsScale)
-
-        // Always apply transform - CAMetalLayer clips rather than scales,
-        // so even small mismatches cause visual issues
-        metalLayer.transform = CATransform3DMakeScale(scaleX, scaleY, 1.0)
-
-        CATransaction.commit()
-
-        // No delayed shrink - we use transform instead
-        pendingDrawableSize = nil
-
-        let growInfo = isGrowing ? " (grew drawable)" : " (kept drawable, using transform)"
-        let transformInfo = (abs(scaleX - 1.0) > 0.01 || abs(scaleY - 1.0) > 0.01) ? String(format: ", scale=(%.2f, %.2f)", scaleX, scaleY) : ""
-        print("🎬 MPV: updateForContainerSize new=\(newSize), drawable=\(metalLayer.drawableSize), target=\(targetSize)\(growInfo)\(transformInfo)")
-
-        lastKnownSize = newSize
-
-        // For live streams: only reconfigure MPV when drawable GREW
-        // (need MPV to render at larger size). When shrinking, transforms handle it.
-        // For VOD: always reconfigure (no transform-based sizing)
-        if hasSetupMpv && mpv != nil {
-            if !isLiveStreamMode || isGrowing {
-                forceVideoResize()
             }
         }
     }
@@ -288,11 +231,12 @@ final class MPVMetalViewController: UIViewController {
         // to avoid destroying textures while command buffers still reference them
         DispatchQueue.global(qos: .background).async {
             #if targetEnvironment(simulator)
-            // Simulator: MoltenVK software rendering needs more time for GPU flush
-            Thread.sleep(forTimeInterval: 0.5)
+            // Simulator: MoltenVK software rendering needs significant time for GPU flush
+            // The simulator uses software rendering which is much slower to complete
+            Thread.sleep(forTimeInterval: 1.0)
             #else
             // Device: Wait for GPU commands to flush
-            Thread.sleep(forTimeInterval: 0.1)
+            Thread.sleep(forTimeInterval: 0.15)
             #endif
 
             // Now safe to destroy - this does the heavy Vulkan cleanup
@@ -671,8 +615,11 @@ final class MPVMetalViewController: UIViewController {
             }
 
         case MPV_EVENT_SHUTDOWN:
-            mpv_terminate_destroy(mpv)
-            mpv = nil
+            // Don't call mpv_terminate_destroy here - let shutdownMpv() handle it
+            // to ensure proper GPU resource cleanup before destruction
+            DispatchQueue.main.async { [weak self] in
+                self?.shutdownMpv()
+            }
 
         case MPV_EVENT_LOG_MESSAGE:
             #if DEBUG
