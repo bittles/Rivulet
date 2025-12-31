@@ -57,8 +57,8 @@ enum AutoplayCountdown: Int, CaseIterable, CustomStringConvertible {
 
 struct SettingsView: View {
     @State private var navigationPath = NavigationPath()
-    @AppStorage("showHomeHero") private var showHomeHero = false
-    @AppStorage("showLibraryHero") private var showLibraryHero = false
+    @AppStorage("showHomeHero") private var showHomeHero = true
+    @AppStorage("showLibraryHero") private var showLibraryHero = true
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
     @AppStorage("liveTVLayout") private var liveTVLayoutRaw = LiveTVLayout.channels.rawValue
     @AppStorage("liveTVPlayerEngine") private var liveTVPlayerEngineRaw = LiveTVPlayerEngine.mpv.rawValue
@@ -242,7 +242,7 @@ struct SettingsView: View {
                                 icon: "rectangle.split.2x2.fill",
                                 iconColor: .orange,
                                 title: "Allow 3 or 4 Streams",
-                                subtitle: "This may crash the app. Will probably crash the app. But go for it.",
+                                subtitle: "4 streams may crash the app, but I won't stop you",
                                 isOn: $allowFourStreams
                             )
                         }
