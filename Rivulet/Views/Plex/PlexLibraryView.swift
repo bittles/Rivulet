@@ -34,10 +34,18 @@ struct PlexLibraryView: View {
     @State private var totalItemCount: Int = 0  // Total items in this library
     @State private var cachedProcessedHubs: [PlexHub] = []  // Memoized hubs to avoid recalculation
     @State private var loadingTask: Task<Void, Never>?  // Track current loading task for cancellation
+    @State private var visibleItemCount: Int = 0  // Number of grid items to render initially
+    @State private var visibleItemExpandTask: Task<Void, Never>?  // Gradual reveal task
 
     #if os(tvOS)
     @FocusState private var focusedItemId: String?  // Track focused item by "context:itemId" format
     @State private var lastPrefetchIndex: Int = -18  // Track last prefetch position for throttling
+    private var firstDisplayedItem: PlexMetadata? {
+        if visibleItemCount == 0 {
+            return items.first
+        }
+        return items.prefix(visibleItemCount).first
+    }
 
     /// Create a unique focus ID for a grid item
     private func gridFocusId(for item: PlexMetadata) -> String {
@@ -62,6 +70,8 @@ struct PlexLibraryView: View {
         GridItem(.adaptive(minimum: 180, maximum: 200), spacing: 20)
     ]
     #endif
+
+    private let initialVisibleBatch = 24  // Limit first-frame layout work
 
     // MARK: - Processed Hubs (merged Continue Watching + On Deck)
 
@@ -190,7 +200,14 @@ struct PlexLibraryView: View {
                         hubs = []
                         cachedProcessedHubs = []
                         isLoading = true
+                        visibleItemCount = 0
+                        visibleItemExpandTask?.cancel()
                         lastLoadedLibraryKey = libraryKey
+                        #if os(tvOS)
+                        // Ensure we start in content scope with no stale focus when switching libraries
+                        focusScopeManager.switchTo(.content, savingCurrent: false)
+                        focusedItemId = nil
+                        #endif
 
                         // Load cached hero synchronously (fast, in-memory)
                         heroItem = dataStore.getCachedHero(forLibrary: libraryKey)
@@ -217,6 +234,7 @@ struct PlexLibraryView: View {
                         if !cachedItems.isEmpty {
                             items = cachedItems
                             isLoading = false
+                            updateVisibleItems(for: cachedItems.count, animated: true)
 
                             if heroItem == nil {
                                 selectHeroItemFromCurrentData()
@@ -374,8 +392,7 @@ struct PlexLibraryView: View {
 
         // Fallback to items sorted by addedAt
         if !items.isEmpty {
-            let recentItems = items.sorted { ($0.addedAt ?? 0) > ($1.addedAt ?? 0) }.prefix(10)
-            if let newHero = recentItems.randomElement() ?? items.first {
+            if let newHero = mostRecentItem(from: items) {
                 heroItem = newHero
                 dataStore.cacheHero(newHero, forLibrary: libraryKey)
             }
@@ -507,8 +524,17 @@ struct PlexLibraryView: View {
     // MARK: - Library Grid View
 
     private var libraryGridView: some View {
-        LazyVGrid(columns: columns, spacing: 40) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+        let displayedItems: [PlexMetadata] = {
+            if visibleItemCount == 0 {
+                // Fallback: limit initial render even before the counter is set
+                return Array(items.prefix(initialVisibleBatch))
+            }
+            return Array(items.prefix(visibleItemCount))
+        }()
+
+        return LazyVGrid(columns: columns, spacing: 40) {
+            ForEach(displayedItems.indices, id: \.self) { index in
+                let item = displayedItems[index]
                 libraryGridItem(item: item, index: index)
             }
         }
@@ -766,8 +792,7 @@ struct PlexLibraryView: View {
         // When switching libraries, hubs might not be loaded yet, so prioritize items
         // Try items first (they're available immediately from cache)
         if !items.isEmpty {
-            let recentItems = items.sorted { ($0.addedAt ?? 0) > ($1.addedAt ?? 0) }.prefix(10)
-            if let newHero = recentItems.randomElement() ?? items.first {
+            if let newHero = mostRecentItem(from: items) {
                 heroItem = newHero
                 dataStore.cacheHero(newHero, forLibrary: libraryKey)
             }
@@ -791,6 +816,15 @@ struct PlexLibraryView: View {
         }
     }
 
+    /// Pick the most recently added item without sorting the entire array (avoids main-thread spikes)
+    private func mostRecentItem(from items: [PlexMetadata]) -> PlexMetadata? {
+        items.max { lhs, rhs in
+            let lAdded = lhs.addedAt ?? 0
+            let rAdded = rhs.addedAt ?? 0
+            return lAdded < rAdded
+        }
+    }
+
     private func getCachedItems() async -> [PlexMetadata] {
         // Determine type based on library (this is simplified - ideally we'd know the library type)
         if let cached = await cacheManager.getCachedMovies(forLibrary: libraryKey) {
@@ -802,7 +836,7 @@ struct PlexLibraryView: View {
         return []
     }
 
-    private let pageSize = 100  // Items per page
+    private let pageSize = 60  // Smaller initial batch to reduce main-thread layout work
 
     private func fetchFromServer(serverURL: String, token: String, updateLoading: Bool) async {
         do {
@@ -1040,14 +1074,65 @@ struct PlexLibraryView: View {
 
     /// Handle items count change - triggers prefetch on tvOS
     private func handleItemsCountChange(oldCount: Int, newCount: Int) {
+        if newCount == 0 {
+            visibleItemExpandTask?.cancel()
+            visibleItemCount = 0
+        } else if oldCount == 0 {
+            // First load for this library: limit initial render then expand
+            updateVisibleItems(for: newCount, animated: true)
+        } else if newCount > visibleItemCount {
+            // Additional pages appended; show them immediately
+            updateVisibleItems(for: newCount, animated: false)
+        }
+
         #if os(tvOS)
         if oldCount == 0 && newCount > 0 {
             prefetchImages()
         } else if !hasPrefetched && newCount > 0 {
             prefetchImages()
         }
+        ensureInitialFocusIfNeeded()
         #endif
     }
+
+    /// Limit first-frame grid layout to a small batch, then reveal the rest
+    private func updateVisibleItems(for total: Int, animated: Bool) {
+        guard total > 0 else {
+            visibleItemCount = 0
+            return
+        }
+
+        visibleItemExpandTask?.cancel()
+
+        // If we're already showing most items, just jump to total
+        if !animated || total <= initialVisibleBatch {
+            visibleItemCount = total
+            return
+        }
+
+        let initial = min(initialVisibleBatch, total)
+        visibleItemCount = initial
+
+        visibleItemExpandTask = Task {
+            try? await Task.sleep(nanoseconds: 120_000_000) // 120ms
+            await MainActor.run {
+                visibleItemCount = total
+            }
+        }
+    }
+
+    #if os(tvOS)
+    /// Ensure the first grid item receives focus when entering a library
+    private func ensureInitialFocusIfNeeded() {
+        guard focusScopeManager.isScopeActive(.content) else { return }
+        guard focusedItemId == nil else { return }
+        guard let first = firstDisplayedItem, let ratingKey = first.ratingKey else { return }
+
+        let targetId = gridFocusId(for: first)
+        focusedItemId = targetId
+        focusScopeManager.setFocus(FocusItemId(scope: .content, context: "libraryGrid", itemId: ratingKey))
+    }
+    #endif
 
     private func posterThumb(for item: PlexMetadata) -> String? {
         if item.type == "episode" {

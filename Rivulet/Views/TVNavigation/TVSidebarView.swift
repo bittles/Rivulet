@@ -18,6 +18,8 @@ struct TVSidebarView: View {
     @State private var selectedDestination: TVDestination = .home
     @State private var selectedLibraryKey: String?
     @FocusState private var sidebarFocusedItem: String?  // Track focused item in sidebar
+    @State private var pendingDestination: TVDestination?
+    @State private var pendingLibraryKey: String?
 
     /// Computed property for sidebar visibility based on active scope
     private var isSidebarVisible: Bool {
@@ -60,7 +62,7 @@ struct TVSidebarView: View {
                 .onTapGesture {
                     closeSidebar()
                 }
-                .animation(.easeOut(duration: 0.15), value: isSidebarVisible)
+                .animation(.easeOut(duration: 0.12), value: isSidebarVisible)
                 .zIndex(1)
 
             HStack(spacing: 0) {
@@ -87,7 +89,7 @@ struct TVSidebarView: View {
                 Spacer()
             }
             .zIndex(2)
-            .animation(.spring(response: 0.18, dampingFraction: 0.9), value: isSidebarVisible)
+            .animation(.spring(response: 0.16, dampingFraction: 0.9), value: isSidebarVisible)
         }
         .ignoresSafeArea()
         // Handle exit command based on current state
@@ -146,7 +148,7 @@ struct TVSidebarView: View {
                                 icon: "magnifyingglass",
                                 title: "Search",
                                 isSelected: selectedDestination == .search,
-                                onSelect: { closeSidebar(); navigateToSearch() },
+                                onSelect: { queueNavigation(destination: .search, libraryKey: nil) },
                                 focusedItem: $sidebarFocusedItem
                             )
 
@@ -156,7 +158,7 @@ struct TVSidebarView: View {
                                 icon: "house.fill",
                                 title: "Home",
                                 isSelected: selectedDestination == .home && selectedLibraryKey == nil,
-                                onSelect: { closeSidebar(); navigateToHome() },
+                                onSelect: { queueNavigation(destination: .home, libraryKey: nil) },
                                 focusedItem: $sidebarFocusedItem
                             )
 
@@ -170,7 +172,7 @@ struct TVSidebarView: View {
                                         icon: iconForLibrary(library),
                                         title: library.title,
                                         isSelected: selectedLibraryKey == library.key,
-                                        onSelect: { closeSidebar(); navigateToLibrary(library) },
+                                        onSelect: { queueNavigation(destination: .home, libraryKey: library.key) },
                                         focusedItem: $sidebarFocusedItem
                                     )
                                 }
@@ -197,7 +199,7 @@ struct TVSidebarView: View {
                                     icon: "tv.and.mediabox",
                                     title: "Channels",
                                     isSelected: selectedDestination == .liveTV,
-                                    onSelect: { closeSidebar(); navigateToLiveTV() },
+                                    onSelect: { queueNavigation(destination: .liveTV, libraryKey: nil) },
                                     focusedItem: $sidebarFocusedItem
                                 )
                             }
@@ -215,7 +217,7 @@ struct TVSidebarView: View {
                                 icon: "gearshape.fill",
                                 title: "Settings",
                                 isSelected: selectedDestination == .settings,
-                                onSelect: { closeSidebar(); navigateToSettings() },
+                                onSelect: { queueNavigation(destination: .settings, libraryKey: nil) },
                                 focusedItem: $sidebarFocusedItem
                             )
                         }
@@ -235,6 +237,8 @@ struct TVSidebarView: View {
                         proxy.scrollTo(itemToFocus, anchor: .center)
                     } else {
                         sidebarFocusedItem = nil
+                        // Apply deferred navigation after the close animation completes
+                        applyPendingNavigation()
                     }
                 }
             }
@@ -319,14 +323,49 @@ struct TVSidebarView: View {
 
     // MARK: - Navigation Actions
 
+    /// Queue navigation and close the sidebar; actual navigation applies after close to keep animation smooth
+    private func queueNavigation(destination: TVDestination, libraryKey: String?) {
+        pendingDestination = destination
+        pendingLibraryKey = libraryKey
+        closeSidebar()
+    }
+
+    private func applyPendingNavigation() {
+        guard let destination = pendingDestination else { return }
+
+        // Apply pending navigation now that sidebar is closed
+        switch destination {
+        case .home:
+            if let libraryKey = pendingLibraryKey,
+               let library = dataStore.libraries.first(where: { $0.key == libraryKey }) {
+                navigateToLibrary(library)
+            } else {
+                navigateToHome()
+            }
+        case .search:
+            navigateToSearch()
+        case .liveTV:
+            navigateToLiveTV()
+        case .settings:
+            navigateToSettings()
+        }
+
+        pendingDestination = nil
+        pendingLibraryKey = nil
+    }
+
     private func openSidebar() {
-        // Activate sidebar scope (saves content focus automatically)
-        focusScopeManager.activate(.sidebar)
+        // Activate sidebar scope (saves content focus automatically) with a short spring
+        withAnimation(.spring(response: 0.16, dampingFraction: 0.92)) {
+            focusScopeManager.activate(.sidebar)
+        }
     }
 
     private func closeSidebar() {
-        // Deactivate sidebar scope (restores content focus automatically)
-        focusScopeManager.deactivate()
+        // Deactivate sidebar scope (restores content focus automatically) with a quick snap
+        withAnimation(.easeOut(duration: 0.08)) {
+            focusScopeManager.deactivate()
+        }
     }
 
     private func handleExitCommand() {

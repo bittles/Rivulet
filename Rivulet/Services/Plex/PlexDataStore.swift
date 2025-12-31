@@ -356,26 +356,31 @@ class PlexDataStore: ObservableObject {
             return
         }
 
-        prefetchTask = Task(priority: .utility) {
+        // Run heavy prefetch work off the main actor; only hop back when touching UI state.
+        prefetchTask = Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
             print("📦 PlexDataStore: Starting background prefetch...")
 
-            // Wait for libraries to be loaded first
-            while libraries.isEmpty && !Task.isCancelled {
+            // Wait for libraries to be loaded first (check on main actor, quickly)
+            while await self.libraries.isEmpty && !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
             }
 
             guard !Task.isCancelled else { return }
 
+            // Snapshot visible libraries on the main actor to avoid keeping it busy during the loop
+            let videoLibraries = await self.visibleVideoLibraries
+
             // Prefetch content for each visible/pinned video library only
-            for library in visibleVideoLibraries {
+            for library in videoLibraries {
                 guard !Task.isCancelled else { break }
 
                 let libraryKey = library.key
 
                 // Check if already cached
-                let hasMoviesCache = await cacheManager.getCachedMovies(forLibrary: libraryKey) != nil
-                let hasShowsCache = await cacheManager.getCachedShows(forLibrary: libraryKey) != nil
-                let hasHubsCache = await cacheManager.getCachedLibraryHubs(forLibrary: libraryKey) != nil
+                let hasMoviesCache = await self.cacheManager.getCachedMovies(forLibrary: libraryKey) != nil
+                let hasShowsCache = await self.cacheManager.getCachedShows(forLibrary: libraryKey) != nil
+                let hasHubsCache = await self.cacheManager.getCachedLibraryHubs(forLibrary: libraryKey) != nil
 
                 if hasMoviesCache || hasShowsCache {
                     print("📦 PlexDataStore: Library \(library.title) already cached, skipping items")
@@ -383,7 +388,7 @@ class PlexDataStore: ObservableObject {
                     // Fetch and cache library items
                     do {
                         print("📦 PlexDataStore: Prefetching items for \(library.title)...")
-                        let result = try await networkManager.getLibraryItemsWithTotal(
+                        let result = try await self.networkManager.getLibraryItemsWithTotal(
                             serverURL: serverURL,
                             authToken: token,
                             sectionId: libraryKey,
@@ -394,15 +399,15 @@ class PlexDataStore: ObservableObject {
                         // Cache based on type
                         if let firstItem = result.items.first {
                             if firstItem.type == "movie" {
-                                await cacheManager.cacheMovies(result.items, forLibrary: libraryKey)
+                                await self.cacheManager.cacheMovies(result.items, forLibrary: libraryKey)
                             } else if firstItem.type == "show" {
-                                await cacheManager.cacheShows(result.items, forLibrary: libraryKey)
+                                await self.cacheManager.cacheShows(result.items, forLibrary: libraryKey)
                             }
                         }
                         print("📦 PlexDataStore: ✅ Prefetched \(result.items.count) items for \(library.title)")
 
                         // Prefetch poster images for first 30 items
-                        prefetchImages(for: result.items, serverURL: serverURL, token: token)
+                        self.prefetchImages(for: result.items, serverURL: serverURL, token: token)
                     } catch {
                         print("📦 PlexDataStore: ⚠️ Failed to prefetch items for \(library.title): \(error.localizedDescription)")
                     }
@@ -414,12 +419,12 @@ class PlexDataStore: ObservableObject {
                 } else {
                     do {
                         print("📦 PlexDataStore: Prefetching hubs for \(library.title)...")
-                        let hubs = try await networkManager.getLibraryHubs(
+                        let hubs = try await self.networkManager.getLibraryHubs(
                             serverURL: serverURL,
                             authToken: token,
                             sectionId: libraryKey
                         )
-                        await cacheManager.cacheLibraryHubs(hubs, forLibrary: libraryKey)
+                        await self.cacheManager.cacheLibraryHubs(hubs, forLibrary: libraryKey)
                         print("📦 PlexDataStore: ✅ Prefetched \(hubs.count) hubs for \(library.title)")
                     } catch {
                         print("📦 PlexDataStore: ⚠️ Failed to prefetch hubs for \(library.title): \(error.localizedDescription)")
@@ -430,8 +435,10 @@ class PlexDataStore: ObservableObject {
                 try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
             }
 
+            guard !Task.isCancelled else { return }
+
             // Prefetch home hub images and next episodes for Continue Watching
-            await prefetchHubContent(serverURL: serverURL, token: token)
+            await self.prefetchHubContent(serverURL: serverURL, token: token)
 
             print("📦 PlexDataStore: Background prefetch complete")
         }
@@ -440,7 +447,7 @@ class PlexDataStore: ObservableObject {
     // MARK: - Image Prefetching
 
     /// Build image URL for a metadata item
-    private func buildImageURL(for item: PlexMetadata, serverURL: String, token: String) -> URL? {
+    nonisolated private func buildImageURL(for item: PlexMetadata, serverURL: String, token: String) -> URL? {
         // For episodes, prefer the series poster
         let thumb: String?
         if item.type == "episode" {
@@ -459,7 +466,7 @@ class PlexDataStore: ObservableObject {
     }
 
     /// Prefetch poster images for a list of items
-    private func prefetchImages(for items: [PlexMetadata], serverURL: String, token: String) {
+    nonisolated private func prefetchImages(for items: [PlexMetadata], serverURL: String, token: String) {
         let imageURLs = items.compactMap { buildImageURL(for: $0, serverURL: serverURL, token: token) }
         guard !imageURLs.isEmpty else { return }
 
