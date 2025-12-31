@@ -258,8 +258,6 @@ struct UniversalPlayerView: View {
     @State private var hasStartedPlayback = false
     @State private var playerController: MPVMetalViewController?
     @State private var lastReportedTime: TimeInterval = 0
-    @State private var cachedArtImage: UIImage?
-    @State private var cachedThumbImage: UIImage?
     @FocusState private var isSkipButtonFocused: Bool
 
     /// Initialize with metadata (creates viewModel internally)
@@ -345,18 +343,6 @@ struct UniversalPlayerView: View {
             // Start GameController monitoring for D-pad
             holdDetector.startMonitoring()
             #endif
-
-            // Load cached images synchronously for instant display
-            if let artURL = loadingArtURL {
-                Task {
-                    cachedArtImage = await ImageCacheManager.shared.cachedImage(for: artURL)
-                }
-            }
-            if let thumbURL = loadingThumbURL {
-                Task {
-                    cachedThumbImage = await ImageCacheManager.shared.cachedImage(for: thumbURL)
-                }
-            }
         }
         .task {
             guard !hasStartedPlayback else { return }
@@ -557,8 +543,8 @@ struct UniversalPlayerView: View {
             Color.black
                 .ignoresSafeArea()
 
-            // Background art (only if already cached - no async loading)
-            if let artImage = cachedArtImage {
+            // Background art (passed from detail view - instant display)
+            if let artImage = viewModel.loadingArtImage {
                 Image(uiImage: artImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -644,8 +630,8 @@ struct UniversalPlayerView: View {
 
                 Spacer()
 
-                // Right side - poster (only if already cached - no async loading)
-                if let thumbImage = cachedThumbImage {
+                // Right side - poster (passed from detail view - instant display)
+                if let thumbImage = viewModel.loadingThumbImage {
                     Image(uiImage: thumbImage)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
@@ -656,16 +642,6 @@ struct UniversalPlayerView: View {
                 }
             }
         }
-    }
-
-    private var loadingArtURL: URL? {
-        guard let art = viewModel.metadata.bestArt else { return nil }
-        return URL(string: "\(viewModel.serverURL)\(art)?X-Plex-Token=\(viewModel.authToken)")
-    }
-
-    private var loadingThumbURL: URL? {
-        guard let thumb = viewModel.metadata.bestThumb else { return nil }
-        return URL(string: "\(viewModel.serverURL)\(thumb)?X-Plex-Token=\(viewModel.authToken)")
     }
 
     private func formatDuration(_ milliseconds: Int) -> String {

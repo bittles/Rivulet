@@ -367,6 +367,11 @@ final class UniversalPlayerViewModel: ObservableObject {
     let authToken: String
     let startOffset: TimeInterval?
 
+    // MARK: - Loading Screen Images (passed from detail view for instant display)
+
+    let loadingArtImage: UIImage?
+    let loadingThumbImage: UIImage?
+
     // MARK: - Stream URL (computed once)
 
     private(set) var streamURL: URL?
@@ -378,12 +383,16 @@ final class UniversalPlayerViewModel: ObservableObject {
         metadata: PlexMetadata,
         serverURL: String,
         authToken: String,
-        startOffset: TimeInterval? = nil
+        startOffset: TimeInterval? = nil,
+        loadingArtImage: UIImage? = nil,
+        loadingThumbImage: UIImage? = nil
     ) {
         self.metadata = metadata
         self.serverURL = serverURL
         self.authToken = authToken
         self.startOffset = startOffset
+        self.loadingArtImage = loadingArtImage
+        self.loadingThumbImage = loadingThumbImage
         self.mpvPlayerWrapper = MPVPlayerWrapper()
 
         setupPlayer()

@@ -1107,66 +1107,66 @@ struct PlexDetailView: View {
             : playItem.viewOffset
         let resumeOffset = playFromBeginning ? nil : (Double(viewOffset ?? 0) / 1000.0)
 
-        // Prefetch loading screen images (art + poster) for instant display
-        prefetchPlayerImages(for: playItem)
+        // Get images for loading screen (from cache or fetch if needed)
+        Task {
+            let (artImage, thumbImage) = await getPlayerImages(for: playItem)
 
-        // Create viewModel first so we can pass the same instance to both view and container
-        let viewModel = UniversalPlayerViewModel(
-            metadata: playItem,
-            serverURL: authManager.selectedServerURL ?? "",
-            authToken: authManager.authToken ?? "",
-            startOffset: resumeOffset != nil && resumeOffset! > 0 ? resumeOffset : nil
-        )
+            await MainActor.run {
+                // Create viewModel with cached images for instant loading screen display
+                let viewModel = UniversalPlayerViewModel(
+                    metadata: playItem,
+                    serverURL: authManager.selectedServerURL ?? "",
+                    authToken: authManager.authToken ?? "",
+                    startOffset: resumeOffset != nil && resumeOffset! > 0 ? resumeOffset : nil,
+                    loadingArtImage: artImage,
+                    loadingThumbImage: thumbImage
+                )
 
-        // Create view with the external viewModel
-        let playerView = UniversalPlayerView(viewModel: viewModel)
+                // Create view with the external viewModel
+                let playerView = UniversalPlayerView(viewModel: viewModel)
 
-        // Create container that intercepts Menu button, passing the same viewModel
-        let container = PlayerContainerViewController(
-            rootView: playerView,
-            viewModel: viewModel
-        )
+                // Create container that intercepts Menu button, passing the same viewModel
+                let container = PlayerContainerViewController(
+                    rootView: playerView,
+                    viewModel: viewModel
+                )
 
-        // Update SwiftUI state when player is dismissed
-        container.onDismiss = {
-            showPlayer = false
-        }
+                // Update SwiftUI state when player is dismissed
+                container.onDismiss = {
+                    showPlayer = false
+                }
 
-        // Present from top-most view controller
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootVC = windowScene.windows.first?.rootViewController {
-            var topVC = rootVC
-            while let presented = topVC.presentedViewController {
-                topVC = presented
+                // Present from top-most view controller
+                if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                   let rootVC = windowScene.windows.first?.rootViewController {
+                    var topVC = rootVC
+                    while let presented = topVC.presentedViewController {
+                        topVC = presented
+                    }
+                    topVC.present(container, animated: true)
+                }
             }
-            topVC.present(container, animated: true)
         }
     }
 
-    /// Prefetch art and poster images for the player loading screen
-    private func prefetchPlayerImages(for metadata: PlexMetadata) {
+    /// Get art and poster images for the player loading screen (from cache or fetch)
+    private func getPlayerImages(for metadata: PlexMetadata) async -> (UIImage?, UIImage?) {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return }
+              let token = authManager.authToken else { return (nil, nil) }
 
-        var urls: [URL] = []
+        // For episodes, use the show's art (displayed on detail page)
+        let art = (metadata.type == "episode" && selectedEpisode != nil) ? item.bestArt : metadata.bestArt
+        let thumb = metadata.thumb ?? metadata.bestThumb
 
-        // Art (background)
-        if let art = metadata.bestArt {
-            if let url = URL(string: "\(serverURL)\(art)?X-Plex-Token=\(token)") {
-                urls.append(url)
-            }
-        }
+        // Build URLs
+        let artURL = art.flatMap { URL(string: "\(serverURL)\($0)?X-Plex-Token=\(token)") }
+        let thumbURL = thumb.flatMap { URL(string: "\(serverURL)\($0)?X-Plex-Token=\(token)") }
 
-        // Thumb (poster)
-        if let thumb = metadata.bestThumb {
-            if let url = URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(token)") {
-                urls.append(url)
-            }
-        }
+        // Fetch both images concurrently (from cache or network)
+        async let artTask: UIImage? = artURL != nil ? ImageCacheManager.shared.image(for: artURL!) : nil
+        async let thumbTask: UIImage? = thumbURL != nil ? ImageCacheManager.shared.image(for: thumbURL!) : nil
 
-        if !urls.isEmpty {
-            ImageCacheManager.shared.prefetch(urls: urls)
-        }
+        return await (artTask, thumbTask)
     }
     #endif
 
@@ -1224,10 +1224,6 @@ struct PlexDetailView: View {
                 authToken: token,
                 ratingKey: ratingKey
             )
-            #if os(tvOS)
-            // Prefetch loading screen images
-            prefetchPlayerImages(for: metadata)
-            #endif
             trailerMetadata = metadata
             showTrailerPlayer = true
         } catch {

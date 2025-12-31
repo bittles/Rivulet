@@ -132,54 +132,57 @@ struct TVSidebarView: View {
 
     /// Present player for a deep link from Top Shelf
     private func presentPlayerForDeepLink(_ metadata: PlexMetadata) {
-        // Prefetch loading screen images for instant display
-        prefetchPlayerImages(for: metadata)
+        // Get images for loading screen (from cache or fetch if needed)
+        Task {
+            let (artImage, thumbImage) = await getPlayerImages(for: metadata)
 
-        let viewModel = UniversalPlayerViewModel(
-            metadata: metadata,
-            serverURL: authManager.selectedServerURL ?? "",
-            authToken: authManager.authToken ?? "",
-            startOffset: metadata.viewOffset.map { Double($0) / 1000.0 }
-        )
+            await MainActor.run {
+                let viewModel = UniversalPlayerViewModel(
+                    metadata: metadata,
+                    serverURL: authManager.selectedServerURL ?? "",
+                    authToken: authManager.authToken ?? "",
+                    startOffset: metadata.viewOffset.map { Double($0) / 1000.0 },
+                    loadingArtImage: artImage,
+                    loadingThumbImage: thumbImage
+                )
 
-        let playerView = UniversalPlayerView(viewModel: viewModel)
-        let container = PlayerContainerViewController(
-            rootView: playerView,
-            viewModel: viewModel
-        )
+                let playerView = UniversalPlayerView(viewModel: viewModel)
+                let container = PlayerContainerViewController(
+                    rootView: playerView,
+                    viewModel: viewModel
+                )
 
-        // Present from top-most view controller
-        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootVC = scene.windows.first?.rootViewController {
-            var topVC = rootVC
-            while let presented = topVC.presentedViewController {
-                topVC = presented
+                // Present from top-most view controller
+                if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                   let rootVC = scene.windows.first?.rootViewController {
+                    var topVC = rootVC
+                    while let presented = topVC.presentedViewController {
+                        topVC = presented
+                    }
+                    container.modalPresentationStyle = .fullScreen
+                    topVC.present(container, animated: true)
+                }
             }
-            container.modalPresentationStyle = .fullScreen
-            topVC.present(container, animated: true)
         }
     }
 
-    /// Prefetch art and poster images for the player loading screen
-    private func prefetchPlayerImages(for metadata: PlexMetadata) {
+    /// Get art and poster images for the player loading screen (from cache or fetch)
+    private func getPlayerImages(for metadata: PlexMetadata) async -> (UIImage?, UIImage?) {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return }
+              let token = authManager.authToken else { return (nil, nil) }
 
-        var urls: [URL] = []
+        let art = metadata.bestArt
+        let thumb = metadata.thumb ?? metadata.bestThumb
 
-        if let art = metadata.bestArt,
-           let url = URL(string: "\(serverURL)\(art)?X-Plex-Token=\(token)") {
-            urls.append(url)
-        }
+        // Build URLs
+        let artURL = art.flatMap { URL(string: "\(serverURL)\($0)?X-Plex-Token=\(token)") }
+        let thumbURL = thumb.flatMap { URL(string: "\(serverURL)\($0)?X-Plex-Token=\(token)") }
 
-        if let thumb = metadata.bestThumb,
-           let url = URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(token)") {
-            urls.append(url)
-        }
+        // Fetch both images concurrently (from cache or network)
+        async let artTask: UIImage? = artURL != nil ? ImageCacheManager.shared.image(for: artURL!) : nil
+        async let thumbTask: UIImage? = thumbURL != nil ? ImageCacheManager.shared.image(for: thumbURL!) : nil
 
-        if !urls.isEmpty {
-            ImageCacheManager.shared.prefetch(urls: urls)
-        }
+        return await (artTask, thumbTask)
     }
 
     // MARK: - Sidebar Content
