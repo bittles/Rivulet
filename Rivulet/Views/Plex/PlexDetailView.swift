@@ -52,6 +52,7 @@ struct PlexDetailView: View {
     @State private var isStarred = false  // For music: 5-star rating toggle
     @State private var isLoadingExtras = false
     @State private var showTrailerPlayer = false
+    @State private var trailerMetadata: PlexMetadata?  // Full metadata for trailer playback
     @State private var playFromBeginning = false  // For "Play from Beginning" button
 
     // Navigation state for episode parent navigation
@@ -190,13 +191,15 @@ struct PlexDetailView: View {
         }
         #endif
         .fullScreenCover(isPresented: $showTrailerPlayer) {
-            // Play trailer if available
-            if let trailer = fullMetadata?.trailer {
-                TrailerPlayerView(
-                    trailer: trailer,
-                    serverURL: authManager.selectedServerURL ?? "",
-                    authToken: authManager.authToken ?? ""
-                )
+            // Play trailer using the same player as regular content
+            if let metadata = trailerMetadata {
+                UniversalPlayerView(metadata: metadata)
+            }
+        }
+        .onChange(of: showTrailerPlayer) { _, isShowing in
+            // Clear trailer metadata when player is dismissed
+            if !isShowing {
+                trailerMetadata = nil
             }
         }
         .sheet(isPresented: $showBioSheet) {
@@ -721,7 +724,9 @@ struct PlexDetailView: View {
             // Trailer button (only show if available, not for music)
             if !isMusicItem, fullMetadata?.trailer != nil {
                 Button {
-                    showTrailerPlayer = true
+                    Task {
+                        await loadAndPlayTrailer()
+                    }
                 } label: {
                     Label("Watch Trailer", systemImage: "film")
                         .font(.system(size: 24, weight: .medium))
@@ -1140,6 +1145,26 @@ struct PlexDetailView: View {
             relatedItems = related
         } catch {
             print("Failed to load related items: \(error)")
+        }
+    }
+
+    private func loadAndPlayTrailer() async {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken,
+              let trailer = fullMetadata?.trailer,
+              let ratingKey = trailer.ratingKey else { return }
+
+        do {
+            // Fetch full metadata for the trailer (includes Media/Part info for playback)
+            let metadata = try await networkManager.getMetadata(
+                serverURL: serverURL,
+                authToken: token,
+                ratingKey: ratingKey
+            )
+            trailerMetadata = metadata
+            showTrailerPlayer = true
+        } catch {
+            print("Failed to load trailer metadata: \(error)")
         }
     }
 
