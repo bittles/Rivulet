@@ -782,13 +782,13 @@ final class UniversalPlayerViewModel: ObservableObject {
     func preloadThumbnails() {
         // Debug: Log metadata structure
         if let media = metadata.Media {
-            print("🖼️ [THUMB] Media count: \(media.count)")
+            //print("🖼️ [THUMB] Media count: \(media.count)")
             if let firstMedia = media.first {
-                print("🖼️ [THUMB] First media id: \(firstMedia.id)")
+                //print("🖼️ [THUMB] First media id: \(firstMedia.id)")
                 if let parts = firstMedia.Part {
-                    print("🖼️ [THUMB] Part count: \(parts.count)")
+                    //print("🖼️ [THUMB] Part count: \(parts.count)")
                     if let firstPart = parts.first {
-                        print("🖼️ [THUMB] First part id: \(firstPart.id)")
+                        //print("🖼️ [THUMB] First part id: \(firstPart.id)")
                     }
                 } else {
                     print("⚠️ [THUMB] No Part array in media")
@@ -802,7 +802,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             print("⚠️ No part ID available for thumbnail preload")
             return
         }
-        print("🖼️ Preloading BIF thumbnails for part \(partId)")
+        // print("🖼️ Preloading BIF thumbnails for part \(partId)")
         PlexThumbnailService.shared.preloadBIF(
             partId: partId,
             serverURL: serverURL,

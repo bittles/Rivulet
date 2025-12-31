@@ -9,6 +9,14 @@ This project has fairly *opinionated* designs and logic, with a few focal points
 - **Vertical Scrolling** - I have never liked scrolling sideways. I use horizontal scrolling for some of the "infinite" lists, but use vertical scrolling whenever practical.
 - **Apple-esque** - I like most of Apple's designs. I want this to feel *somewhat* native.
 
+<a href="https://testflight.apple.com/join/TcCsF5As">
+  <img src="https://developer.apple.com/assets/elements/icons/testflight/testflight-64x64_2x.png" alt="TestFlight" height="50">
+  <br>
+  <strong>Join the TestFlight Beta</strong>
+</a>
+
+<br>
+
 ![tvOS 26+](https://img.shields.io/badge/tvOS-26+-000000?logo=apple)
 ![Swift](https://img.shields.io/badge/Swift-6.0-FA7343?logo=swift&logoColor=white)
 

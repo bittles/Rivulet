@@ -96,7 +96,7 @@ struct PlexDetailView: View {
                     }
 
                     // Summary
-                    if let summary = item.summary, !summary.isEmpty {
+                    if let summary = fullMetadata?.summary ?? item.summary, !summary.isEmpty {
                         Text(summary)
                             .font(.body)
                             .foregroundStyle(.secondary)
@@ -221,7 +221,7 @@ struct PlexDetailView: View {
         }
         .sheet(isPresented: $showBioSheet) {
             ArtistBioSheet(
-                artistName: item.title ?? "Artist",
+                artistName: fullMetadata?.title ?? item.title ?? "Artist",
                 bio: fullMetadata?.summary ?? item.summary ?? "",
                 thumbURL: artistThumbURL
             )
@@ -448,16 +448,16 @@ struct PlexDetailView: View {
             Spacer()
                 .frame(height: isMusicItem ? 20 : 40)
 
-            Text(item.title ?? "Unknown Title")
+            Text(fullMetadata?.title ?? item.title ?? "Unknown Title")
                 .font(.title2)
                 .fontWeight(.semibold)
 
             HStack(spacing: 16) {
-                if let year = item.year {
+                if let year = fullMetadata?.year ?? item.year {
                     Text(String(year))
                 }
 
-                if let contentRating = item.contentRating {
+                if let contentRating = fullMetadata?.contentRating ?? item.contentRating {
                     Text(contentRating)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
@@ -467,11 +467,11 @@ struct PlexDetailView: View {
                         }
                 }
 
-                if let duration = item.durationFormatted {
+                if let duration = fullMetadata?.durationFormatted ?? item.durationFormatted {
                     Text(duration)
                 }
 
-                if let rating = item.rating {
+                if let rating = fullMetadata?.rating ?? item.rating {
                     HStack(spacing: 4) {
                         Image(systemName: "star.fill")
                             .foregroundStyle(.yellow)
@@ -495,7 +495,7 @@ struct PlexDetailView: View {
             .font(.subheadline)
             .foregroundStyle(.secondary)
 
-            if let tagline = item.tagline {
+            if let tagline = fullMetadata?.tagline ?? item.tagline {
                 Text(tagline)
                     .font(.subheadline)
                     .italic()
@@ -1107,6 +1107,9 @@ struct PlexDetailView: View {
             : playItem.viewOffset
         let resumeOffset = playFromBeginning ? nil : (Double(viewOffset ?? 0) / 1000.0)
 
+        // Prefetch loading screen images (art + poster) for instant display
+        prefetchPlayerImages(for: playItem)
+
         // Create viewModel first so we can pass the same instance to both view and container
         let viewModel = UniversalPlayerViewModel(
             metadata: playItem,
@@ -1137,6 +1140,32 @@ struct PlexDetailView: View {
                 topVC = presented
             }
             topVC.present(container, animated: true)
+        }
+    }
+
+    /// Prefetch art and poster images for the player loading screen
+    private func prefetchPlayerImages(for metadata: PlexMetadata) {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken else { return }
+
+        var urls: [URL] = []
+
+        // Art (background)
+        if let art = metadata.bestArt {
+            if let url = URL(string: "\(serverURL)\(art)?X-Plex-Token=\(token)") {
+                urls.append(url)
+            }
+        }
+
+        // Thumb (poster)
+        if let thumb = metadata.bestThumb {
+            if let url = URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(token)") {
+                urls.append(url)
+            }
+        }
+
+        if !urls.isEmpty {
+            ImageCacheManager.shared.prefetch(urls: urls)
         }
     }
     #endif
@@ -1195,6 +1224,10 @@ struct PlexDetailView: View {
                 authToken: token,
                 ratingKey: ratingKey
             )
+            #if os(tvOS)
+            // Prefetch loading screen images
+            prefetchPlayerImages(for: metadata)
+            #endif
             trailerMetadata = metadata
             showTrailerPlayer = true
         } catch {

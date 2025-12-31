@@ -15,6 +15,7 @@ struct TVSidebarView: View {
     @StateObject private var liveTVDataStore = LiveTVDataStore.shared
     @StateObject private var nestedNavState = NestedNavigationState()
     @StateObject private var focusScopeManager = FocusScopeManager()
+    @StateObject private var deepLinkHandler = DeepLinkHandler.shared
     @State private var selectedDestination: TVDestination = .home
     @State private var selectedLibraryKey: String?
     @FocusState private var sidebarFocusedItem: String?  // Track focused item in sidebar
@@ -118,6 +119,66 @@ struct TVSidebarView: View {
         .task {
             // Start background preloading of Live TV data (low priority)
             liveTVDataStore.startBackgroundPreload()
+        }
+        // Handle deep links from Top Shelf
+        .onChange(of: deepLinkHandler.pendingPlayback) { _, metadata in
+            guard let metadata else { return }
+            presentPlayerForDeepLink(metadata)
+            deepLinkHandler.pendingPlayback = nil
+        }
+    }
+
+    // MARK: - Deep Link Player
+
+    /// Present player for a deep link from Top Shelf
+    private func presentPlayerForDeepLink(_ metadata: PlexMetadata) {
+        // Prefetch loading screen images for instant display
+        prefetchPlayerImages(for: metadata)
+
+        let viewModel = UniversalPlayerViewModel(
+            metadata: metadata,
+            serverURL: authManager.selectedServerURL ?? "",
+            authToken: authManager.authToken ?? "",
+            startOffset: metadata.viewOffset.map { Double($0) / 1000.0 }
+        )
+
+        let playerView = UniversalPlayerView(viewModel: viewModel)
+        let container = PlayerContainerViewController(
+            rootView: playerView,
+            viewModel: viewModel
+        )
+
+        // Present from top-most view controller
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = scene.windows.first?.rootViewController {
+            var topVC = rootVC
+            while let presented = topVC.presentedViewController {
+                topVC = presented
+            }
+            container.modalPresentationStyle = .fullScreen
+            topVC.present(container, animated: true)
+        }
+    }
+
+    /// Prefetch art and poster images for the player loading screen
+    private func prefetchPlayerImages(for metadata: PlexMetadata) {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken else { return }
+
+        var urls: [URL] = []
+
+        if let art = metadata.bestArt,
+           let url = URL(string: "\(serverURL)\(art)?X-Plex-Token=\(token)") {
+            urls.append(url)
+        }
+
+        if let thumb = metadata.bestThumb,
+           let url = URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(token)") {
+            urls.append(url)
+        }
+
+        if !urls.isEmpty {
+            ImageCacheManager.shared.prefetch(urls: urls)
         }
     }
 
@@ -309,10 +370,10 @@ struct TVSidebarView: View {
 
             VStack(spacing: 12) {
                 Text("Welcome to Rivulet")
-                    .font(.system(size: 36, weight: .semibold))
+                    .font(.system(size: 46, weight: .semibold))
 
-                Text("Press the Back button or navigate left to open the sidebar, then go to Settings to connect your Plex server.")
-                    .font(.system(size: 18))
+                Text("Press the Back button or navigate left to open the sidebar, go to Settings, and scroll to the bottom to connect your Plex server.")
+                    .font(.system(size: 28))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 500)

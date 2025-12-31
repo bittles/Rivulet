@@ -289,7 +289,7 @@ struct PlexHomeView: View {
                     }
                 }
                 .padding(.top, 48)
-                .padding(.bottom, 80)
+                .padding(.bottom, 500)  // Large padding prevents aggressive end-of-content scroll
             }
         }
         .scrollClipDisabled()  // Allow shadow overflow
@@ -796,20 +796,20 @@ struct InfiniteContentRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 2) {
             // Section title with item count
             HStack(spacing: 12) {
                 Text(title)
-                    .font(.system(size: 28, weight: .semibold))
+                    .font(.system(size: 40, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.9))
 
                 if let total = totalSize, total > items.count {
                     Text("\(items.count) of \(total)")
-                        .font(.system(size: 17, weight: .medium))
+                        .font(.system(size: 19, weight: .medium))
                         .foregroundStyle(.white.opacity(0.4))
                 } else if hasReachedEnd && items.count > pageSize {
                     Text("All \(items.count)")
-                        .font(.system(size: 17, weight: .medium))
+                        .font(.system(size: 19, weight: .medium))
                         .foregroundStyle(.white.opacity(0.4))
                 }
             }

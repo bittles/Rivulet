@@ -253,7 +253,7 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
         _currentSubtitleTrackId = subtitles.first(where: { $0.isSelected })?.id
 
         // Notify subscribers that tracks are available
-        print("🎬 [MPV] Tracks updated: \(audio.count) audio, \(subtitles.count) subtitles")
+       // print("🎬 [MPV] Tracks updated: \(audio.count) audio, \(subtitles.count) subtitles")
         tracksSubject.send()
     }
 

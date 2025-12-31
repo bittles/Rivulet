@@ -29,7 +29,6 @@ final class RemoteHoldDetector: ObservableObject {
     var onTap: ((Bool) -> Void)?  // forward: Bool
     var onHoldStart: ((Bool) -> Void)?  // forward: Bool (called once when hold detected)
     var onSpeedTap: ((Bool) -> Void)?  // forward: Bool (called for taps while scrubbing)
-    var onScrubEnd: (() -> Void)?  // called when finger is lifted after scrubbing
 
     #if os(tvOS)
     private var controllerObserver: NSObjectProtocol?
@@ -114,13 +113,7 @@ final class RemoteHoldDetector: ObservableObject {
                     } else if abs(xValue) < 0.15 && abs(yValue) < 0.15 {
                         // Only clear when truly at rest position (finger lifted)
                         self.lastSignificantDirection = nil
-
-                        // If we were scrubbing, end it now that finger is lifted
-                        if self.isScrubbing {
-                            print("🎮 [GC] Finger lifted - ending scrub mode")
-                            self.isScrubbing = false
-                            self.onScrubEnd?()
-                        }
+                        // Note: Scrubbing continues until select/play is pressed or up/down cancels
                     }
                     // Values between 0.15 and threshold are ambiguous - keep previous direction
                 }
@@ -265,6 +258,8 @@ struct UniversalPlayerView: View {
     @State private var hasStartedPlayback = false
     @State private var playerController: MPVMetalViewController?
     @State private var lastReportedTime: TimeInterval = 0
+    @State private var cachedArtImage: UIImage?
+    @State private var cachedThumbImage: UIImage?
     @FocusState private var isSkipButtonFocused: Bool
 
     /// Initialize with metadata (creates viewModel internally)
@@ -300,6 +295,7 @@ struct UniversalPlayerView: View {
             }
         }
         .environment(\.focusScopeManager, focusScopeManager)
+        .animation(.easeInOut(duration: 1.0), value: viewModel.playbackState)
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
         .animation(.spring(response: 0.25, dampingFraction: 0.9), value: viewModel.showInfoPanel)
         .animation(.easeInOut(duration: 0.3), value: viewModel.showSkipButton)
@@ -346,13 +342,21 @@ struct UniversalPlayerView: View {
                 vm.scrubInDirection(forward: forward)
                 vm.showControlsTemporarily()
             }
-            holdDetector.onScrubEnd = { [weak viewModel] in
-                guard let vm = viewModel else { return }
-                vm.cancelScrub()
-            }
             // Start GameController monitoring for D-pad
             holdDetector.startMonitoring()
             #endif
+
+            // Load cached images synchronously for instant display
+            if let artURL = loadingArtURL {
+                Task {
+                    cachedArtImage = await ImageCacheManager.shared.cachedImage(for: artURL)
+                }
+            }
+            if let thumbURL = loadingThumbURL {
+                Task {
+                    cachedThumbImage = await ImageCacheManager.shared.cachedImage(for: thumbURL)
+                }
+            }
         }
         .task {
             guard !hasStartedPlayback else { return }
@@ -433,6 +437,12 @@ struct UniversalPlayerView: View {
             // Loading State
             if viewModel.playbackState == .loading || viewModel.playbackState == .idle {
                 loadingView
+                    .transition(
+                        .asymmetric(
+                            insertion: .opacity.animation(.easeIn(duration: 1.0)),
+                            removal: .opacity.animation(.easeOut(duration: 1.0))
+                        )
+                    )
             }
 
             // Buffering Indicator
@@ -542,21 +552,130 @@ struct UniversalPlayerView: View {
     // MARK: - Loading View
 
     private var loadingView: some View {
-        VStack(spacing: 24) {
-            ProgressView()
-                .scaleEffect(2)
-                .tint(.white)
+        ZStack {
+            // Solid black background (fallback)
+            Color.black
+                .ignoresSafeArea()
 
-            Text("Loading...")
-                .font(.title2)
-                .foregroundStyle(.white.opacity(0.7))
+            // Background art (only if already cached - no async loading)
+            if let artImage = cachedArtImage {
+                Image(uiImage: artImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .ignoresSafeArea()
+            }
 
-            Text(viewModel.title)
-                .font(.headline)
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
+            // Gradient overlay for readability
+            LinearGradient(
+                colors: [
+                    .black.opacity(0.9),
+                    .black.opacity(0.6),
+                    .black.opacity(0.4),
+                    .black.opacity(0.6)
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .ignoresSafeArea()
+
+            // Content
+            HStack(alignment: .center, spacing: 0) {
+                // Left side - metadata
+                VStack(alignment: .leading, spacing: 16) {
+                    // Show title (for episodes)
+                    if let grandparentTitle = viewModel.metadata.grandparentTitle {
+                        Text(grandparentTitle)
+                            .font(.title2)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+
+                    // Main title
+                    Text(viewModel.title)
+                        .font(.system(size: 56, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+
+                    // Season/Episode info
+                    if let seasonNum = viewModel.metadata.parentIndex,
+                       let episodeNum = viewModel.metadata.index {
+                        Text("Season \(seasonNum), Episode \(episodeNum)")
+                            .font(.title3)
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+
+                    // Year and duration
+                    HStack(spacing: 16) {
+                        if let year = viewModel.metadata.year {
+                            Text(String(year))
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                        if let duration = viewModel.metadata.duration {
+                            Text(formatDuration(duration))
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                        if let rating = viewModel.metadata.contentRating {
+                            Text(rating)
+                                .foregroundStyle(.white.opacity(0.6))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .strokeBorder(.white.opacity(0.3), lineWidth: 1)
+                                )
+                        }
+                    }
+                    .font(.body)
+
+                    Spacer()
+
+                    // Loading indicator
+                    HStack(spacing: 12) {
+                        ProgressView()
+                            .tint(.white)
+                        Text("Loading...")
+                            .font(.callout)
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                }
+                .frame(maxWidth: 700, alignment: .leading)
+                .padding(.leading, 80)
+                .padding(.vertical, 60)
+
+                Spacer()
+
+                // Right side - poster (only if already cached - no async loading)
+                if let thumbImage = cachedThumbImage {
+                    Image(uiImage: thumbImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(height: 500)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 10)
+                        .padding(.trailing, 80)
+                }
+            }
         }
+    }
+
+    private var loadingArtURL: URL? {
+        guard let art = viewModel.metadata.bestArt else { return nil }
+        return URL(string: "\(viewModel.serverURL)\(art)?X-Plex-Token=\(viewModel.authToken)")
+    }
+
+    private var loadingThumbURL: URL? {
+        guard let thumb = viewModel.metadata.bestThumb else { return nil }
+        return URL(string: "\(viewModel.serverURL)\(thumb)?X-Plex-Token=\(viewModel.authToken)")
+    }
+
+    private func formatDuration(_ milliseconds: Int) -> String {
+        let totalMinutes = milliseconds / 60000
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+        return "\(minutes)m"
     }
 
     // MARK: - Buffering Indicator

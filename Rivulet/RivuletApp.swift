@@ -53,6 +53,12 @@ struct RivuletApp: App {
         WindowGroup {
             ContentView()
                 .preferredColorScheme(.dark)  // Force dark mode
+                .onOpenURL { url in
+                    // Handle deep links from Top Shelf
+                    Task {
+                        await DeepLinkHandler.shared.handle(url: url)
+                    }
+                }
         }
         .modelContainer(sharedModelContainer)
     }

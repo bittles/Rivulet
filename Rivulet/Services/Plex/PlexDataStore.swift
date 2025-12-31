@@ -156,6 +156,9 @@ class PlexDataStore: ObservableObject {
             } else {
                 print("📦 PlexDataStore: Hubs unchanged, skipping update")
             }
+
+            // Always update Top Shelf cache after fetching (lightweight, idempotent)
+            updateTopShelfCache()
             self.hubsError = nil
             if updateLoading {
                 self.isLoadingHubs = false
@@ -588,6 +591,107 @@ class PlexDataStore: ObservableObject {
         nextEpisodeCache.removeAll()
     }
 
+    // MARK: - Top Shelf Cache
+
+    /// Update the Top Shelf cache with Continue Watching items
+    /// Called after hubs are fetched to keep Top Shelf in sync
+    private func updateTopShelfCache() {
+        print("TopShelf: updateTopShelfCache called")
+
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.authToken else {
+            print("TopShelf: No server URL or token available")
+            return
+        }
+
+        // Use server URL as identifier (unique per server)
+        let serverIdentifier = serverURL
+        print("TopShelf: Server identifier = \(serverIdentifier)")
+
+        // Collect Continue Watching items from hubs
+        var continueWatchingItems: [PlexMetadata] = []
+
+        print("TopShelf: Scanning \(hubs.count) hubs for Continue Watching content")
+        print("TopShelf: All hub identifiers: \(hubs.compactMap { $0.hubIdentifier })")
+        for hub in hubs {
+            let identifier = hub.hubIdentifier?.lowercased() ?? ""
+            let isContinueWatching = identifier.contains("continuewatching") ||
+                                     identifier.contains("ondeck") ||
+                                     identifier.contains("inprogress")
+
+            if isContinueWatching, let items = hub.Metadata {
+                print("TopShelf: Found hub '\(hub.title ?? "")' with \(items.count) items (identifier: \(identifier))")
+                continueWatchingItems.append(contentsOf: items)
+            }
+        }
+
+        print("TopShelf: Total Continue Watching items found: \(continueWatchingItems.count)")
+
+        // Deduplicate by ratingKey and sort by lastViewedAt (Unix timestamp)
+        var seen = Set<String>()
+        var deduplicatedItems: [PlexMetadata] = []
+        for item in continueWatchingItems {
+            guard let key = item.ratingKey, !seen.contains(key) else { continue }
+            seen.insert(key)
+            deduplicatedItems.append(item)
+        }
+        // Sort by lastViewedAt descending (most recent first)
+        deduplicatedItems.sort { ($0.lastViewedAt ?? 0) > ($1.lastViewedAt ?? 0) }
+        let uniqueItems = deduplicatedItems
+
+        // Convert to TopShelfItem and take top 10
+        let topShelfItems = uniqueItems.prefix(10).compactMap { metadata -> TopShelfItem? in
+            guard let ratingKey = metadata.ratingKey else { return nil }
+
+            // Build title
+            let title: String
+            if metadata.type == "episode" {
+                title = metadata.fullEpisodeTitle ?? metadata.title ?? "Unknown"
+            } else {
+                title = metadata.title ?? "Unknown"
+            }
+
+            // Build image URL with token
+            // For episodes, prefer show poster (grandparentThumb) for Top Shelf display
+            let thumbPath: String
+            if metadata.type == "episode" {
+                thumbPath = metadata.grandparentThumb ?? metadata.parentThumb ?? metadata.thumb ?? ""
+            } else {
+                thumbPath = metadata.thumb ?? ""
+            }
+            var imageURL = thumbPath
+            if !thumbPath.isEmpty && !thumbPath.hasPrefix("http") {
+                imageURL = "\(serverURL)\(thumbPath)"
+            }
+            if !imageURL.contains("X-Plex-Token") && !imageURL.isEmpty {
+                imageURL += imageURL.contains("?") ? "&" : "?"
+                imageURL += "X-Plex-Token=\(token)"
+            }
+
+            // Convert Unix timestamp to Date
+            let lastWatchedDate: Date
+            if let timestamp = metadata.lastViewedAt {
+                lastWatchedDate = Date(timeIntervalSince1970: TimeInterval(timestamp))
+            } else {
+                lastWatchedDate = Date()
+            }
+
+            return TopShelfItem(
+                ratingKey: ratingKey,
+                title: title,
+                subtitle: metadata.grandparentTitle,
+                imageURL: imageURL,
+                progress: metadata.watchProgress ?? 0,
+                type: metadata.type ?? "movie",
+                lastWatched: lastWatchedDate,
+                serverIdentifier: serverIdentifier
+            )
+        }
+
+        print("TopShelf: Writing \(topShelfItems.count) items to cache")
+        TopShelfCache.shared.writeItems(Array(topShelfItems))
+    }
+
     // MARK: - Reset (on sign out)
 
     func reset() {
@@ -606,6 +710,7 @@ class PlexDataStore: ObservableObject {
         isLoadingLibraries = false
         nextEpisodeCache.removeAll()
         heroCache.removeAll()
+        TopShelfCache.shared.clear()
     }
 
     // MARK: - Diffing Helpers

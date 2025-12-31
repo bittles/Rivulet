@@ -80,12 +80,12 @@ final class PlexThumbnailService {
     }
 
     private func loadBIF(partId: Int, serverURL: String, authToken: String) async -> BIFData? {
-        print("🖼️ Loading BIF for part \(partId) from \(serverURL)")
+        // print("🖼️ Loading BIF for part \(partId) from \(serverURL)")
 
         // Try SD first (smaller, faster to load), fall back to HD
         for quality in ["sd", "hd"] {
             let urlString = "\(serverURL)/library/parts/\(partId)/indexes/\(quality)"
-            print("🖼️ Trying BIF URL: \(urlString)")
+            // print("🖼️ Trying BIF URL: \(urlString)")
 
             guard var urlComponents = URLComponents(string: urlString) else {
                 print("⚠️ Failed to create URL components")
@@ -113,7 +113,7 @@ final class PlexThumbnailService {
                     continue
                 }
 
-                print("🖼️ BIF response status: \(httpResponse.statusCode), size: \(data.count) bytes")
+                // print("🖼️ BIF response status: \(httpResponse.statusCode), size: \(data.count) bytes")
 
                 guard httpResponse.statusCode == 200 else {
                     print("⚠️ BIF request failed with status \(httpResponse.statusCode)")
@@ -121,12 +121,12 @@ final class PlexThumbnailService {
                 }
 
                 if let bifData = BIFData(data: data) {
-                    print("✅ Loaded BIF thumbnails (\(quality)): \(bifData.frameCount) frames, interval: \(bifData.intervalMs)ms")
+                    // print("✅ Loaded BIF thumbnails (\(quality)): \(bifData.frameCount) frames, interval: \(bifData.intervalMs)ms")
                     // Debug: Check first 5 frames and a few later ones
                     for i in [0, 1, 2, 3, 4, 10, 50, 100] {
                         if i < bifData.frames.count {
                             let frame = bifData.frames[i]
-                            print("🖼️ Frame[\(i)]: timestamp=\(frame.timestamp)ms, size=\(frame.imageData.count) bytes")
+                            // print("🖼️ Frame[\(i)]: timestamp=\(frame.timestamp)ms, size=\(frame.imageData.count) bytes")
                         }
                     }
                     return bifData
@@ -142,7 +142,7 @@ final class PlexThumbnailService {
             }
         }
 
-        print("❌ No BIF thumbnails available for part \(partId)")
+        // print("❌ No BIF thumbnails available for part \(partId)")
         return nil
     }
 
