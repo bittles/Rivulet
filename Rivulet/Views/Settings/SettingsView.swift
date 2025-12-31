@@ -57,10 +57,10 @@ enum AutoplayCountdown: Int, CaseIterable, CustomStringConvertible {
 
 struct SettingsView: View {
     @State private var navigationPath = NavigationPath()
-    @AppStorage("showHomeHero") private var showHomeHero = true
-    @AppStorage("showLibraryHero") private var showLibraryHero = true
+    @AppStorage("showHomeHero") private var showHomeHero = false
+    @AppStorage("showLibraryHero") private var showLibraryHero = false
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
-    @AppStorage("liveTVLayout") private var liveTVLayoutRaw = LiveTVLayout.channels.rawValue
+    @AppStorage("liveTVLayout") private var liveTVLayoutRaw = LiveTVLayout.guide.rawValue
     @AppStorage("liveTVPlayerEngine") private var liveTVPlayerEngineRaw = LiveTVPlayerEngine.mpv.rawValue
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
     @AppStorage("allowFourStreams") private var allowFourStreams = false

@@ -26,22 +26,6 @@ final class MPVMetalViewController: UIViewController {
     /// Enable lightweight mode for live streams (smaller buffers, simpler rendering)
     var isLiveStreamMode: Bool = false
 
-    // MARK: - Live Edge Detection (for IPTV)
-
-    /// Last known time position - used to detect backwards jumps
-    private var lastTimePos: Double = 0
-
-    /// Threshold for detecting a significant backwards jump (in seconds)
-    /// If time goes backwards by more than this, we consider it a source issue
-    private let backwardsJumpThreshold: Double = 5.0
-
-    /// Minimum time between live edge seeks to avoid rapid correction loops
-    private var lastLiveEdgeSeekTime: Date?
-    private let liveEdgeSeekCooldown: TimeInterval = 10.0
-
-    /// Whether we're currently seeking to live edge (avoid recursive detection)
-    private var isSeekingToLiveEdge: Bool = false
-
     private var timeObserverActive = false
     private var currentState: MPVPlayerState = .idle
     private var isShuttingDown = false
@@ -397,6 +381,12 @@ final class MPVMetalViewController: UIViewController {
             checkError(mpv_set_option_string(mpv, "cache-secs", "10"))
             checkError(mpv_set_option_string(mpv, "demuxer-readahead-secs", "5"))
 
+            // Live edge behavior: always stay at the leading edge of the stream
+            // When paused and resumed, or after buffering, jump to live edge
+            checkError(mpv_set_option_string(mpv, "stream-lavf-o", "live_start_index=-1"))  // Start at live edge
+            checkError(mpv_set_option_string(mpv, "cache-pause-initial", "no"))  // Don't wait for cache to fill
+            checkError(mpv_set_option_string(mpv, "cache-pause-wait", "1"))  // Resume quickly after buffer (1 sec)
+
             // Reduce CPU overhead for live streams
             checkError(mpv_set_option_string(mpv, "vd-lavc-threads", "1"))  // Single decode thread (HW does the work)
             checkError(mpv_set_option_string(mpv, "scale", "bilinear"))  // Fast GPU scaling
@@ -407,7 +397,7 @@ final class MPVMetalViewController: UIViewController {
             checkError(mpv_set_option_string(mpv, "deband", "no"))  // No debanding
             checkError(mpv_set_option_string(mpv, "interpolation", "no"))  // No frame interpolation
 
-            print("🎬 MPV: Using live stream optimized settings (minimal processing, GPU scaling)")
+            print("🎬 MPV: Using live stream optimized settings (live edge, minimal processing)")
         } else {
             // VOD: larger buffers for smooth 4K HDR playback (100+ Mbps streams)
             // 250MiB forward buffer + 30s readahead provides ~30 seconds of 4K content
@@ -454,10 +444,6 @@ final class MPVMetalViewController: UIViewController {
 
     func loadFile(_ url: URL) {
         guard mpv != nil else { return }
-
-        // Reset live edge tracking for new stream
-        lastTimePos = 0
-        isSeekingToLiveEdge = false
 
         updateState(.loading)
 
@@ -508,37 +494,6 @@ final class MPVMetalViewController: UIViewController {
     func seekRelative(by seconds: Double) {
         guard mpv != nil else { return }
         command("seek", args: [String(seconds), "relative"])
-    }
-
-    /// Seeks to the live edge of a live stream.
-    /// Uses MPV's cache-aware seeking to jump to the most current position available.
-    func seekToLiveEdge() {
-        guard mpv != nil, isLiveStreamMode else { return }
-
-        isSeekingToLiveEdge = true
-        lastLiveEdgeSeekTime = Date()
-
-        // Get the demuxer cache duration - this tells us how much is buffered
-        // Seeking to duration (or close to it) puts us at the live edge
-        let cacheDuration = getDouble(MPVProperty.demuxerCacheDuration)
-        let currentDuration = duration
-
-        if currentDuration > 0 {
-            // Seek to near the end of the available duration (live edge)
-            // Leave a small buffer (2 seconds) to avoid constant rebuffering
-            let targetPos = max(0, currentDuration - 2.0)
-            command("seek", args: [String(targetPos), "absolute"])
-            print("🔴 Seeking to live edge: \(String(format: "%.1f", targetPos))s (duration: \(String(format: "%.1f", currentDuration))s, cached: \(String(format: "%.1f", cacheDuration))s)")
-        } else {
-            // Fallback: use percent-based seek to 100%
-            command("seek", args: ["100", "absolute-percent"])
-            print("🔴 Seeking to live edge using percent (duration unknown)")
-        }
-
-        // Reset the seeking flag after a short delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            self?.isSeekingToLiveEdge = false
-        }
     }
 
     // MARK: - Track Selection
@@ -623,7 +578,9 @@ final class MPVMetalViewController: UIViewController {
                 codec: getString("\(prefix)/codec"),
                 isDefault: getFlag("\(prefix)/default"),
                 isForced: getFlag("\(prefix)/forced"),
-                isSelected: getFlag("\(prefix)/selected")
+                isSelected: getFlag("\(prefix)/selected"),
+                channels: nil,
+                sampleRate: nil
             )
 
             switch type {
@@ -734,30 +691,9 @@ final class MPVMetalViewController: UIViewController {
             }
 
         case MPVProperty.timePos:
-            let newTimePos = property.data?.assumingMemoryBound(to: Double.self).pointee ?? 0
-
-            // Live edge detection for IPTV streams
-            if isLiveStreamMode && !isSeekingToLiveEdge && lastTimePos > 0 {
-                let timeDiff = lastTimePos - newTimePos
-                // Check if time went backwards significantly (source jumped back)
-                if timeDiff > backwardsJumpThreshold {
-                    // Check cooldown to avoid rapid seek loops
-                    let canSeek: Bool
-                    if let lastSeek = lastLiveEdgeSeekTime {
-                        canSeek = Date().timeIntervalSince(lastSeek) > liveEdgeSeekCooldown
-                    } else {
-                        canSeek = true
-                    }
-
-                    if canSeek {
-                        print("🔴 Live stream jumped backwards by \(String(format: "%.1f", timeDiff))s - seeking to live edge")
-                        DispatchQueue.main.async { [weak self] in
-                            self?.seekToLiveEdge()
-                        }
-                    }
-                }
-            }
-            lastTimePos = newTimePos
+            // Note: Live edge detection was removed because MPV handles timestamp
+            // discontinuities automatically via "Reset playback due to audio timestamp reset".
+            // Our seek attempts were interfering with MPV's built-in recovery.
 
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }

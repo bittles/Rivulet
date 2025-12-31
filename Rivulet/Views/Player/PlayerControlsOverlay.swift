@@ -109,8 +109,8 @@ struct PlayerControlsOverlay: View {
 
                                 ForEach(Array(viewModel.subtitleTracks.enumerated()), id: \.element.id) { index, track in
                                     PlaybackSettingsRow(
-                                        title: track.name,
-                                        subtitle: formatSubtitleTrackInfo(track),
+                                        title: formatSubtitleTrackTitle(track),
+                                        subtitle: formatSubtitleTrackSubtitle(track),
                                         isSelected: track.id == viewModel.currentSubtitleTrackId,
                                         isFocused: viewModel.isSettingFocused(column: 0, index: index + 1)
                                     )
@@ -142,8 +142,8 @@ struct PlayerControlsOverlay: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 ForEach(Array(viewModel.audioTracks.enumerated()), id: \.element.id) { index, track in
                                     PlaybackSettingsRow(
-                                        title: track.name,
-                                        subtitle: formatAudioTrackInfo(track),
+                                        title: formatAudioTrackTitle(track),
+                                        subtitle: formatAudioTrackSubtitle(track),
                                         isSelected: track.id == viewModel.currentAudioTrackId,
                                         isFocused: viewModel.isSettingFocused(column: 1, index: index)
                                     )
@@ -436,26 +436,33 @@ struct PlayerControlsOverlay: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    private func formatAudioTrackInfo(_ track: MediaTrack) -> String {
-        var parts: [String] = []
-        if let codec = track.codec?.uppercased() {
-            parts.append(codec)
-        }
-        if let lang = track.language {
-            parts.append(lang)
-        }
-        return parts.isEmpty ? "Audio" : parts.joined(separator: " · ")
+    // MARK: - Track Display Formatting
+
+    /// Audio track title: format string (e.g., "AAC Stereo", "TrueHD 5.1")
+    private func formatAudioTrackTitle(_ track: MediaTrack) -> String {
+        track.audioFormatString
     }
 
-    private func formatSubtitleTrackInfo(_ track: MediaTrack) -> String {
-        var parts: [String] = []
-        if let codec = track.codec?.uppercased() {
-            parts.append(codec)
-        }
+    /// Audio track subtitle: language in uppercase (e.g., "ENGLISH")
+    private func formatAudioTrackSubtitle(_ track: MediaTrack) -> String {
+        track.languageDisplay
+    }
+
+    /// Subtitle track title: language in uppercase (e.g., "ENGLISH")
+    private func formatSubtitleTrackTitle(_ track: MediaTrack) -> String {
+        var title = track.languageDisplay
         if track.isForced {
-            parts.append("Forced")
+            title += " (Forced)"
         }
-        return parts.isEmpty ? "Subtitle" : parts.joined(separator: " · ")
+        if track.isHearingImpaired {
+            title += " (SDH)"
+        }
+        return title
+    }
+
+    /// Subtitle track subtitle: format/codec (e.g., "SRT", "PGS")
+    private func formatSubtitleTrackSubtitle(_ track: MediaTrack) -> String {
+        track.formattedCodec
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {

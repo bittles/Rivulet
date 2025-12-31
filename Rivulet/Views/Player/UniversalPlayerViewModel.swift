@@ -96,6 +96,78 @@ enum SubtitlePreferenceManager {
     }
 }
 
+// MARK: - Audio Preference
+
+/// Stores user's audio preference for auto-selection
+struct AudioPreference: Codable, Equatable {
+    /// Preferred language code (e.g., "en", "es"). Nil means default to English.
+    var languageCode: String?
+
+    static let defaultEnglish = AudioPreference(languageCode: "eng")
+
+    /// Create preference from a selected track
+    init(from track: MediaTrack) {
+        self.languageCode = track.languageCode
+    }
+
+    init(languageCode: String?) {
+        self.languageCode = languageCode
+    }
+}
+
+/// Manages audio preference persistence
+enum AudioPreferenceManager {
+    private static let key = "audioPreference"
+
+    static var current: AudioPreference {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: key),
+                  let pref = try? JSONDecoder().decode(AudioPreference.self, from: data) else {
+                return .defaultEnglish
+            }
+            return pref
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: key)
+            }
+        }
+    }
+
+    /// Find best matching audio track based on preference
+    /// Returns the highest quality track in the preferred language, falling back to English
+    static func findBestMatch(in tracks: [MediaTrack], preference: AudioPreference) -> MediaTrack? {
+        guard !tracks.isEmpty else { return nil }
+
+        // Helper to find best track by quality (most channels = better)
+        func bestTrack(in candidates: [MediaTrack]) -> MediaTrack? {
+            candidates.max { ($0.channels ?? 0) < ($1.channels ?? 0) }
+        }
+
+        // Try preferred language first
+        if let preferredLang = preference.languageCode {
+            let langMatches = tracks.filter {
+                $0.languageCode?.lowercased() == preferredLang.lowercased()
+            }
+            if let best = bestTrack(in: langMatches) {
+                return best
+            }
+        }
+
+        // Fall back to English tracks
+        let englishMatches = tracks.filter {
+            let code = $0.languageCode?.lowercased()
+            return code == "eng" || code == "en" || code == "english"
+        }
+        if let best = bestTrack(in: englishMatches) {
+            return best
+        }
+
+        // No English either - return the first track (usually default)
+        return tracks.first(where: { $0.isDefault }) ?? tracks.first
+    }
+}
+
 // MARK: - Post-Video State
 
 /// State machine for post-video summary experience
@@ -743,6 +815,18 @@ final class UniversalPlayerViewModel: ObservableObject {
     func selectAudioTrack(id: Int) {
         mpvPlayerWrapper.selectAudioTrack(id: id)
         currentAudioTrackId = id
+
+        // Save preference
+        if let track = audioTracks.first(where: { $0.id == id }) {
+            AudioPreferenceManager.current = AudioPreference(from: track)
+            print("[AUDIO PREF] Saved: \(track.languageCode ?? "?")")
+        }
+    }
+
+    /// Select audio track without saving preference (for auto-selection)
+    private func selectAudioTrackWithoutSaving(id: Int) {
+        mpvPlayerWrapper.selectAudioTrack(id: id)
+        currentAudioTrackId = id
     }
 
     func selectSubtitleTrack(id: Int?) {
@@ -759,21 +843,85 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Whether we've already applied subtitle preference for this playback session
+    /// Whether we've already applied track preferences for this playback session
     private var hasAppliedSubtitlePreference = false
+    private var hasAppliedAudioPreference = false
 
     private func updateTrackLists() {
         let previousSubtitleCount = subtitleTracks.count
+        let previousAudioCount = audioTracks.count
 
-        audioTracks = mpvPlayerWrapper.audioTracks
-        subtitleTracks = mpvPlayerWrapper.subtitleTracks
+        // Get raw tracks from MPV
+        var newAudioTracks = mpvPlayerWrapper.audioTracks
+        var newSubtitleTracks = mpvPlayerWrapper.subtitleTracks
+
+        // Enrich with Plex stream metadata (for channel info, etc.)
+        if let streams = metadata.Media?.first?.Part?.first?.Stream {
+            newAudioTracks = enrichTracksWithPlexStreams(newAudioTracks, plexStreams: streams)
+            newSubtitleTracks = enrichTracksWithPlexStreams(newSubtitleTracks, plexStreams: streams)
+        }
+
+        audioTracks = newAudioTracks
+        subtitleTracks = newSubtitleTracks
         currentAudioTrackId = mpvPlayerWrapper.currentAudioTrackId
         currentSubtitleTrackId = mpvPlayerWrapper.currentSubtitleTrackId
+
+        // Apply saved audio preference when tracks are first available
+        if !hasAppliedAudioPreference && !audioTracks.isEmpty && previousAudioCount == 0 {
+            hasAppliedAudioPreference = true
+            applyAudioPreference()
+        }
 
         // Apply saved subtitle preference when tracks are first available
         if !hasAppliedSubtitlePreference && !subtitleTracks.isEmpty && previousSubtitleCount == 0 {
             hasAppliedSubtitlePreference = true
             applySubtitlePreference()
+        }
+    }
+
+    /// Enrich MPV tracks with Plex stream metadata (channels, etc.)
+    private func enrichTracksWithPlexStreams(_ tracks: [MediaTrack], plexStreams: [PlexStream]) -> [MediaTrack] {
+        return tracks.map { track in
+            // Try to find matching Plex stream by language code and codec
+            let matchingStream = plexStreams.first { stream in
+                // Match by language code and codec type
+                let langMatch = track.languageCode?.lowercased() == stream.languageCode?.lowercased()
+                let codecMatch = track.codec?.lowercased() == stream.codec?.lowercased()
+                return langMatch && codecMatch
+            } ?? plexStreams.first { stream in
+                // Fallback: just match by language
+                track.languageCode?.lowercased() == stream.languageCode?.lowercased()
+            }
+
+            guard let stream = matchingStream else { return track }
+
+            // Create enriched track with Plex channel info
+            return MediaTrack(
+                id: track.id,
+                name: track.name,
+                language: track.language,
+                languageCode: track.languageCode,
+                codec: track.codec,
+                isDefault: track.isDefault,
+                isForced: track.isForced,
+                isHearingImpaired: stream.hearingImpaired ?? track.isHearingImpaired,
+                channels: stream.channels ?? track.channels
+            )
+        }
+    }
+
+    /// Apply saved audio preference
+    private func applyAudioPreference() {
+        let preference = AudioPreferenceManager.current
+
+        // Find best matching track
+        if let match = AudioPreferenceManager.findBestMatch(in: audioTracks, preference: preference) {
+            if match.id != currentAudioTrackId {
+                selectAudioTrackWithoutSaving(id: match.id)
+                print("[AUDIO PREF] Applied: \(match.audioFormatString) (\(match.languageCode ?? "?"))")
+            } else {
+                print("[AUDIO PREF] Already on best track: \(match.audioFormatString)")
+            }
         }
     }
 

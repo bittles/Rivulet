@@ -231,7 +231,8 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
                 languageCode: track.language,
                 codec: track.codec,
                 isDefault: track.isDefault,
-                isForced: track.isForced
+                isForced: track.isForced,
+                channels: track.channels
             )
         }
 

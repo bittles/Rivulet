@@ -37,6 +37,10 @@ struct MPVTrack: Identifiable, Equatable, Sendable {
     let isForced: Bool
     let isSelected: Bool
 
+    // Audio-specific
+    let channels: Int?
+    let sampleRate: Int?
+
     enum TrackType: String, Sendable {
         case audio
         case subtitle
