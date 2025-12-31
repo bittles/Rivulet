@@ -235,10 +235,8 @@ struct PlayerControlsOverlay: View {
             )
             .padding(.horizontal, 60)
             .padding(.top, 40)
-
-            Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: .top)
         // Note: Menu/Back button handling is centralized in PlayerContainerViewController
         // to properly intercept the event before it can dismiss the modal.
         // Do NOT add onExitCommand here.

@@ -63,6 +63,19 @@ struct PlexDetailView: View {
 
     private let networkManager = PlexNetworkManager.shared
 
+    /// Effective item data - uses fullMetadata for progress/viewOffset when available
+    /// This ensures we have the most up-to-date playback position after returning from the player
+    private var effectiveItem: PlexMetadata {
+        if let full = fullMetadata {
+            // Merge updated viewOffset/viewCount into item
+            var merged = item
+            merged.viewOffset = full.viewOffset
+            merged.viewCount = full.viewCount
+            return merged
+        }
+        return item
+    }
+
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
@@ -78,7 +91,7 @@ struct PlexDetailView: View {
                     actionButtons
 
                     // Progress bar for in-progress content (movies/episodes)
-                    if !isMusicItem, item.isInProgress, let progress = item.watchProgress, progress > 0 && progress < 1 {
+                    if !isMusicItem, effectiveItem.isInProgress, let progress = effectiveItem.watchProgress, progress > 0 && progress < 1 {
                         progressSection(progress: progress)
                     }
 
@@ -183,7 +196,11 @@ struct PlexDetailView: View {
         .fullScreenCover(isPresented: $showPlayer) {
             // Play the selected episode/track if available, otherwise play the main item (movie/album)
             let playItem = selectedEpisode ?? selectedTrack ?? item
-            let resumeOffset = playFromBeginning ? nil : (Double(playItem.viewOffset ?? 0) / 1000.0)
+            // Use fullMetadata for updated viewOffset when playing the main item (not episodes/tracks)
+            let viewOffset = (selectedEpisode == nil && selectedTrack == nil)
+                ? (fullMetadata?.viewOffset ?? playItem.viewOffset)
+                : playItem.viewOffset
+            let resumeOffset = playFromBeginning ? nil : (Double(viewOffset ?? 0) / 1000.0)
             UniversalPlayerView(
                 metadata: playItem,
                 startOffset: resumeOffset != nil && resumeOffset! > 0 ? resumeOffset : nil
@@ -212,9 +229,22 @@ struct PlexDetailView: View {
         .onChange(of: showPlayer) { _, isShowing in
             // Clear selected episode/track and playFromBeginning when player closes
             if !isShowing {
+                // Capture episode ratingKey before clearing for refresh
+                let playedEpisodeKey = selectedEpisode?.ratingKey
+
                 selectedEpisode = nil
                 selectedTrack = nil
                 playFromBeginning = false
+
+                // Refresh metadata to get updated viewOffset after playback
+                Task {
+                    await loadFullMetadata()
+
+                    // Also refresh the specific episode if one was played
+                    if let episodeKey = playedEpisodeKey {
+                        await refreshEpisodeWatchStatus(ratingKey: episodeKey)
+                    }
+                }
             }
         }
         .navigationDestination(item: $navigateToAlbum) { album in
@@ -499,7 +529,7 @@ struct PlexDetailView: View {
             .frame(height: 6)
 
             // Time remaining text
-            if let remaining = item.remainingTimeFormatted {
+            if let remaining = effectiveItem.remainingTimeFormatted {
                 Text("\(remaining) remaining")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -563,7 +593,7 @@ struct PlexDetailView: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "play.fill")
-                        Text(item.isInProgress ? "Resume" : "Play")
+                        Text(effectiveItem.isInProgress ? "Resume" : "Play")
                     }
                     .font(.system(size: 20, weight: .semibold))
                     .frame(minWidth: actionButtonMinWidth, minHeight: actionButtonHeight)
@@ -574,7 +604,7 @@ struct PlexDetailView: View {
                 #endif
 
                 // Restart button (only for in-progress content)
-                if item.isInProgress {
+                if effectiveItem.isInProgress {
                     Button {
                         playFromBeginning = true
                         showPlayer = true
@@ -741,7 +771,7 @@ struct PlexDetailView: View {
             Spacer()
 
             // Progress info on the right (not for music)
-            if !isMusicItem, let progress = item.viewOffsetFormatted, item.isInProgress {
+            if !isMusicItem, let progress = effectiveItem.viewOffsetFormatted, effectiveItem.isInProgress {
                 Text("\(progress) watched")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -1071,7 +1101,11 @@ struct PlexDetailView: View {
     /// Present player using UIViewController to intercept Menu button
     private func presentPlayer() {
         let playItem = selectedEpisode ?? selectedTrack ?? item
-        let resumeOffset = playFromBeginning ? nil : (Double(playItem.viewOffset ?? 0) / 1000.0)
+        // Use fullMetadata for updated viewOffset when playing the main item (not episodes/tracks)
+        let viewOffset = (selectedEpisode == nil && selectedTrack == nil)
+            ? (fullMetadata?.viewOffset ?? playItem.viewOffset)
+            : playItem.viewOffset
+        let resumeOffset = playFromBeginning ? nil : (Double(viewOffset ?? 0) / 1000.0)
 
         // Create viewModel first so we can pass the same instance to both view and container
         let viewModel = UniversalPlayerViewModel(

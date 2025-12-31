@@ -26,15 +26,34 @@ final class MPVMetalViewController: UIViewController {
     /// Enable lightweight mode for live streams (smaller buffers, simpler rendering)
     var isLiveStreamMode: Bool = false
 
+    // MARK: - Live Edge Detection (for IPTV)
+
+    /// Last known time position - used to detect backwards jumps
+    private var lastTimePos: Double = 0
+
+    /// Threshold for detecting a significant backwards jump (in seconds)
+    /// If time goes backwards by more than this, we consider it a source issue
+    private let backwardsJumpThreshold: Double = 5.0
+
+    /// Minimum time between live edge seeks to avoid rapid correction loops
+    private var lastLiveEdgeSeekTime: Date?
+    private let liveEdgeSeekCooldown: TimeInterval = 10.0
+
+    /// Whether we're currently seeking to live edge (avoid recursive detection)
+    private var isSeekingToLiveEdge: Bool = false
+
     private var timeObserverActive = false
     private var currentState: MPVPlayerState = .idle
     private var isShuttingDown = false
     private var lastKnownSize: CGSize = .zero
     private var previousDrawableSize: CGSize = .zero
-    private var resizeWorkItem: DispatchWorkItem?
 
-    /// Explicit target size set by parent - when set, this overrides view.bounds for sizing
+    /// Explicit target size set by parent - when set, enables transform-based scaling
+    /// to avoid swapchain recreation during multiview layout changes
     private var explicitTargetSize: CGSize?
+
+    /// The original size at which MPV was initialized - used as reference for transform scaling
+    private var originalRenderSize: CGSize?
 
     // MARK: - Simulator Detection
 
@@ -78,125 +97,145 @@ final class MPVMetalViewController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
 
-        // If we have an explicit target size (set by parent for multi-stream),
-        // ignore view.bounds changes - the parent controls our size
+        let newSize = view.bounds.size
+        guard newSize.width > 0 && newSize.height > 0 else { return }
+
+        // For multiview (when explicitTargetSize is set), use transform-based scaling
+        // to avoid swapchain recreation which disrupts playback
         if explicitTargetSize != nil {
+            updateLayerTransform(for: newSize)
             return
         }
 
-        let newSize = view.bounds.size
-
-        // Update metal layer frame to match view bounds
+        // For single-stream playback, use normal frame-based sizing
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        metalLayer.anchorPoint = CGPoint(x: 0, y: 0)  // Reset to default
+        metalLayer.transform = CATransform3DIdentity
         metalLayer.frame = view.bounds
         CATransaction.commit()
 
         // Setup MPV after we have proper bounds (not .zero)
-        if !hasSetupMpv && newSize.width > 0 && newSize.height > 0 {
+        if !hasSetupMpv {
             hasSetupMpv = true
             lastKnownSize = newSize
+            previousDrawableSize = metalLayer.drawableSize
             setupMpv()
 
             if let url = playUrl {
                 loadFile(url)
             }
         }
-        // Handle view resizing - MPV will detect drawable size changes via MoltenVK
-        // and reconfigure automatically. We just need to debounce rapid changes.
-        else if hasSetupMpv && mpv != nil && !isShuttingDown {
-            let sizeDelta = abs(newSize.width - lastKnownSize.width) + abs(newSize.height - lastKnownSize.height)
-            if sizeDelta > 10 {  // More than 10pt change
-                lastKnownSize = newSize
-                print("🎬 MPV: viewDidLayoutSubviews size changed to \(newSize)")
-
-                // Cancel any pending resize and schedule a new one
-                // This debounces rapid size changes during animations
-                resizeWorkItem?.cancel()
-                let workItem = DispatchWorkItem { [weak self] in
-                    self?.forceVideoResize()
-                }
-                resizeWorkItem = workItem
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: workItem)
-            }
-        }
     }
 
-    /// Set explicit target size from parent (for multi-stream layout)
-    /// This bypasses viewDidLayoutSubviews to prevent SwiftUI layout thrashing
+    /// Set explicit target size hint from parent (for multi-stream layout)
+    /// Pass .zero to exit multiview mode and use normal frame-based sizing
     func setExplicitSize(_ size: CGSize) {
-        guard size != .zero else {
+        if size == .zero {
+            // Exiting multiview mode - reset to normal frame-based sizing
+            let wasSet = explicitTargetSize != nil
             explicitTargetSize = nil
+            originalRenderSize = nil
+
+            // Reset layer to use normal frame-based sizing
+            if wasSet && hasSetupMpv {
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                metalLayer.anchorPoint = CGPoint(x: 0, y: 0)
+                metalLayer.transform = CATransform3DIdentity
+                metalLayer.frame = view.bounds
+                CATransaction.commit()
+            }
             return
         }
 
+        let wasNil = explicitTargetSize == nil
         explicitTargetSize = size
-        print("🎬 MPV: setExplicitSize to \(size)")
 
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        metalLayer.frame = CGRect(origin: .zero, size: size)
-        CATransaction.commit()
+        // First time entering multiview mode - initialize layer at this size
+        if wasNil && !hasSetupMpv {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            metalLayer.frame = CGRect(origin: .zero, size: size)
+            CATransaction.commit()
 
-        // Setup MPV if not done yet
-        if !hasSetupMpv && size.width > 0 && size.height > 0 {
             hasSetupMpv = true
             lastKnownSize = size
+            originalRenderSize = size  // Save original size for transform scaling
+            previousDrawableSize = metalLayer.drawableSize
             setupMpv()
 
             if let url = playUrl {
                 loadFile(url)
             }
-        } else if hasSetupMpv && mpv != nil && !isShuttingDown {
-            let sizeDelta = abs(size.width - lastKnownSize.width) + abs(size.height - lastKnownSize.height)
-            if sizeDelta > 10 {
-                lastKnownSize = size
-
-                resizeWorkItem?.cancel()
-                let workItem = DispatchWorkItem { [weak self] in
-                    self?.forceVideoResize()
-                }
-                resizeWorkItem = workItem
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: workItem)
-            }
+        } else if hasSetupMpv {
+            // MPV already running - update transform to fit new size
+            updateLayerTransform(for: size)
         }
     }
 
-    /// Force MPV to re-evaluate its output size when container resizes
-    private func forceVideoResize() {
-        guard mpv != nil, !isShuttingDown else { return }
+    /// Update metal layer transform to scale content to fit new bounds
+    /// This avoids swapchain recreation by keeping the drawable size fixed
+    private func updateLayerTransform(for targetSize: CGSize) {
+        guard targetSize.width > 0 && targetSize.height > 0 else { return }
 
-        let currentDrawable = metalLayer.drawableSize
-        let sizeChanged = currentDrawable != previousDrawableSize
+        // If MPV isn't set up yet, initialize at current size and save as original
+        if !hasSetupMpv {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            metalLayer.frame = CGRect(origin: .zero, size: targetSize)
+            CATransaction.commit()
 
-        print("🎬 MPV: Forcing video resize to \(lastKnownSize), drawable: \(previousDrawableSize) -> \(currentDrawable), changed: \(sizeChanged)")
+            hasSetupMpv = true
+            lastKnownSize = targetSize
+            originalRenderSize = targetSize  // Save the original size
+            previousDrawableSize = metalLayer.drawableSize
+            setupMpv()
 
-        // Force the Metal layer to redraw at new size
+            if let url = playUrl {
+                loadFile(url)
+            }
+            return
+        }
+
+        // Use the original render size (saved at initialization) as reference
+        // This ensures we're scaling from a fixed known size, not the current drawable
+        guard let originalSize = originalRenderSize,
+              originalSize.width > 0 && originalSize.height > 0 else {
+            // Fallback: just set frame if we don't have original size yet
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            metalLayer.frame = CGRect(origin: .zero, size: targetSize)
+            CATransaction.commit()
+            return
+        }
+
+        // Calculate scale factors to fit original render size into target size
+        let scaleX = targetSize.width / originalSize.width
+        let scaleY = targetSize.height / originalSize.height
+
+        // Use uniform scale to maintain aspect ratio
+        let uniformScale = min(scaleX, scaleY)
+
+        // Calculate the scaled size
+        let scaledWidth = originalSize.width * uniformScale
+        let scaledHeight = originalSize.height * uniformScale
+
+        // Center in the view
+        let offsetX = (targetSize.width - scaledWidth) / 2
+        let offsetY = (targetSize.height - scaledHeight) / 2
+
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        metalLayer.setNeedsDisplay()
+
+        // IMPORTANT: Keep the layer at its ORIGINAL size (so drawable doesn't change)
+        // Use anchorPoint + position + transform to scale and position it
+        metalLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        metalLayer.bounds = CGRect(origin: .zero, size: originalSize)
+        metalLayer.position = CGPoint(x: offsetX + scaledWidth / 2, y: offsetY + scaledHeight / 2)
+        metalLayer.transform = CATransform3DMakeScale(uniformScale, uniformScale, 1.0)
+
         CATransaction.commit()
-
-        // Skip if drawable size hasn't changed
-        guard sizeChanged else { return }
-
-        previousDrawableSize = currentDrawable
-
-        // Tell MPV to reconfigure by toggling a harmless property
-        queue.async { [weak self] in
-            guard let self, self.mpv != nil, !self.isShuttingDown else { return }
-
-            // Toggle video-sync which forces vo reconfiguration without affecting playback
-            let currentSync = self.getString("video-sync") ?? "audio"
-            self.setString("video-sync", "display-resample")
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                guard let self, self.mpv != nil, !self.isShuttingDown else { return }
-                self.queue.async {
-                    self.setString("video-sync", currentSync)
-                }
-            }
-        }
     }
 
     deinit {
@@ -416,6 +455,10 @@ final class MPVMetalViewController: UIViewController {
     func loadFile(_ url: URL) {
         guard mpv != nil else { return }
 
+        // Reset live edge tracking for new stream
+        lastTimePos = 0
+        isSeekingToLiveEdge = false
+
         updateState(.loading)
 
         let args = [url.absoluteString, "replace"]
@@ -426,14 +469,16 @@ final class MPVMetalViewController: UIViewController {
             setString("http-header-fields", headerString)
         }
 
-        command("loadfile", args: args)
-
-        // Seek to start position after loading
+        // Set start position BEFORE loading file - MPV will seek to this position
+        // during file load, which is more reliable than seeking after load
         if let startTime = startTime, startTime > 0 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.seek(to: startTime)
-            }
+            setString("start", String(format: "%.3f", startTime))
+            print("🎬 MPV: Setting start position to \(startTime)s")
+        } else {
+            setString("start", "0")
         }
+
+        command("loadfile", args: args)
     }
 
     func play() {
@@ -463,6 +508,37 @@ final class MPVMetalViewController: UIViewController {
     func seekRelative(by seconds: Double) {
         guard mpv != nil else { return }
         command("seek", args: [String(seconds), "relative"])
+    }
+
+    /// Seeks to the live edge of a live stream.
+    /// Uses MPV's cache-aware seeking to jump to the most current position available.
+    func seekToLiveEdge() {
+        guard mpv != nil, isLiveStreamMode else { return }
+
+        isSeekingToLiveEdge = true
+        lastLiveEdgeSeekTime = Date()
+
+        // Get the demuxer cache duration - this tells us how much is buffered
+        // Seeking to duration (or close to it) puts us at the live edge
+        let cacheDuration = getDouble(MPVProperty.demuxerCacheDuration)
+        let currentDuration = duration
+
+        if currentDuration > 0 {
+            // Seek to near the end of the available duration (live edge)
+            // Leave a small buffer (2 seconds) to avoid constant rebuffering
+            let targetPos = max(0, currentDuration - 2.0)
+            command("seek", args: [String(targetPos), "absolute"])
+            print("🔴 Seeking to live edge: \(String(format: "%.1f", targetPos))s (duration: \(String(format: "%.1f", currentDuration))s, cached: \(String(format: "%.1f", cacheDuration))s)")
+        } else {
+            // Fallback: use percent-based seek to 100%
+            command("seek", args: ["100", "absolute-percent"])
+            print("🔴 Seeking to live edge using percent (duration unknown)")
+        }
+
+        // Reset the seeking flag after a short delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            self?.isSeekingToLiveEdge = false
+        }
     }
 
     // MARK: - Track Selection
@@ -657,7 +733,41 @@ final class MPVMetalViewController: UIViewController {
                 }
             }
 
-        case MPVProperty.timePos, MPVProperty.duration:
+        case MPVProperty.timePos:
+            let newTimePos = property.data?.assumingMemoryBound(to: Double.self).pointee ?? 0
+
+            // Live edge detection for IPTV streams
+            if isLiveStreamMode && !isSeekingToLiveEdge && lastTimePos > 0 {
+                let timeDiff = lastTimePos - newTimePos
+                // Check if time went backwards significantly (source jumped back)
+                if timeDiff > backwardsJumpThreshold {
+                    // Check cooldown to avoid rapid seek loops
+                    let canSeek: Bool
+                    if let lastSeek = lastLiveEdgeSeekTime {
+                        canSeek = Date().timeIntervalSince(lastSeek) > liveEdgeSeekCooldown
+                    } else {
+                        canSeek = true
+                    }
+
+                    if canSeek {
+                        print("🔴 Live stream jumped backwards by \(String(format: "%.1f", timeDiff))s - seeking to live edge")
+                        DispatchQueue.main.async { [weak self] in
+                            self?.seekToLiveEdge()
+                        }
+                    }
+                }
+            }
+            lastTimePos = newTimePos
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.delegate?.mpvPlayerTimeDidChange(
+                    current: self.currentTime,
+                    duration: self.duration
+                )
+            }
+
+        case MPVProperty.duration:
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.delegate?.mpvPlayerTimeDidChange(

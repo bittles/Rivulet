@@ -67,14 +67,8 @@ actor PlexProgressReporter {
 
             let (_, response) = try await URLSession.shared.data(for: request)
 
-            if let httpResponse = response as? HTTPURLResponse {
-                if httpResponse.statusCode == 200 {
-                    let timeFormatted = String(format: "%.0f", time)
-                    let durationFormatted = String(format: "%.0f", duration)
-                    print("📊 PlexProgress: Reported \(timeFormatted)s/\(durationFormatted)s (\(state)) for \(ratingKey)")
-                } else {
-                    print("📊 PlexProgress: Timeline report failed with status \(httpResponse.statusCode)")
-                }
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+                print("📊 PlexProgress: Timeline report failed with status \(httpResponse.statusCode)")
             }
         } catch {
             print("📊 PlexProgress: Failed to report progress: \(error)")

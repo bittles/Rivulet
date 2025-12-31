@@ -143,19 +143,14 @@ struct LiveTVPlayerView: View {
             }
         }
         .onAppear {
-            print("📺 LiveTVPlayerView onAppear")
             // Start with controls hidden, focus on stream grid
             viewModel.showControls = false
             // Delay focus grab slightly to ensure view is laid out
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                print("📺 LiveTVPlayerView setting focusArea to .streamGrid")
                 focusArea = .streamGrid
             }
             // Show badges initially then auto-hide
             showChannelBadgesTemporarily()
-        }
-        .onChange(of: focusArea) { oldValue, newValue in
-            print("📺 focusArea changed: \(String(describing: oldValue)) → \(String(describing: newValue))")
         }
         .onDisappear {
             channelBadgeTimer?.invalidate()
@@ -189,15 +184,18 @@ struct LiveTVPlayerView: View {
             let frames = layoutFrames(for: geometry.size)
 
             ZStack(alignment: .topLeading) {
-                ForEach(Array(viewModel.streams.enumerated()), id: \.element.id) { index, slot in
+                ForEach(viewModel.streams, id: \.id) { slot in
                     if let rect = frames[slot.id] {
+                        let index = viewModel.streams.firstIndex(where: { $0.id == slot.id }) ?? 0
                         StreamSlotView(
                             slot: slot,
                             index: index,
                             isFocused: viewModel.focusedSlotIndex == index && !viewModel.showControls,
                             showBorder: viewModel.streamCount > 1,
                             showChannelBadge: showChannelBadges,
-                            containerSize: rect.size,
+                            // Pass .zero for single stream to use normal frame-based sizing
+                            // Pass actual size for multi-stream to use transform-based scaling
+                            containerSize: viewModel.streamCount > 1 ? rect.size : .zero,
                             onControllerReady: { controller in
                                 viewModel.setPlayerController(controller, for: slot.id)
                             }
@@ -260,8 +258,6 @@ struct LiveTVPlayerView: View {
             let sideStreams = viewModel.streams.filter { $0.id != mainSlot?.id }
             let sideCount = max(sideStreams.count, 1)
 
-            print("📐 Focus layout: mainId=\(mainId), mainSlot=\(mainSlot?.id.uuidString.prefix(8) ?? "nil"), sideCount=\(sideCount)")
-
             // Main stream: 75% width, maintain 16:9 aspect ratio
             let mainWidth = size.width * 0.75
             let mainHeight = min(mainWidth / aspect, size.height)
@@ -281,16 +277,12 @@ struct LiveTVPlayerView: View {
             let startX = (size.width - totalWidth) / 2
 
             if let mainSlot {
-                let mainFrame = CGRect(x: startX, y: mainY, width: actualMainWidth, height: mainHeight)
-                frames[mainSlot.id] = mainFrame
-                print("📐 Main frame: \(Int(mainFrame.width))x\(Int(mainFrame.height))")
+                frames[mainSlot.id] = CGRect(x: startX, y: mainY, width: actualMainWidth, height: mainHeight)
             }
 
             var currentY = sideStartY
             for slot in sideStreams {
-                let sideFrame = CGRect(x: startX + actualMainWidth + spacing, y: currentY, width: sideWidth, height: sideSlotHeight)
-                frames[slot.id] = sideFrame
-                print("📐 Side frame for \(slot.id.uuidString.prefix(8)): \(Int(sideFrame.width))x\(Int(sideFrame.height))")
+                frames[slot.id] = CGRect(x: startX + actualMainWidth + spacing, y: currentY, width: sideWidth, height: sideSlotHeight)
                 currentY += sideSlotHeight + spacing
             }
         } else {
@@ -822,7 +814,6 @@ struct LiveTVPlayerView: View {
                 icon: "minus.circle.fill",
                 label: "Remove",
                 action: {
-                    print("📺 Remove pressed: focusedSlotIndex=\(viewModel.focusedSlotIndex), streamCount=\(viewModel.streamCount)")
                     viewModel.removeStream(at: viewModel.focusedSlotIndex)
                     // If only 1 stream left, hide controls
                     if viewModel.streamCount <= 1 {
@@ -855,20 +846,16 @@ struct LiveTVPlayerView: View {
 
     #if os(tvOS)
     private func handleExitCommand() {
-        print("📺 handleExitCommand: showExitConfirmation=\(showExitConfirmation), showChannelPicker=\(viewModel.showChannelPicker), showControls=\(viewModel.showControls), streamCount=\(viewModel.streamCount)")
         if showExitConfirmation {
             // Cancel the confirmation and return to streams
-            print("📺 handleExitCommand: Cancelling exit confirmation")
             showExitConfirmation = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 focusArea = .streamGrid
             }
         } else if viewModel.showChannelPicker {
-            print("📺 handleExitCommand: Closing channel picker")
             viewModel.showChannelPicker = false
         } else if viewModel.showControls {
             // Hide controls and return focus to stream grid
-            print("📺 handleExitCommand: Hiding controls")
             withAnimation(.easeOut(duration: 0.2)) {
                 viewModel.showControls = false
             }
@@ -876,7 +863,6 @@ struct LiveTVPlayerView: View {
                 focusArea = .streamGrid
             }
         } else {
-            print("📺 handleExitCommand: Calling dismissPlayer")
             dismissPlayer()
         }
     }
@@ -884,12 +870,9 @@ struct LiveTVPlayerView: View {
 
     private func dismissPlayer() {
         // Check if we should show confirmation for multiview
-        print("📺 dismissPlayer: confirmExitMultiview=\(confirmExitMultiview), streamCount=\(viewModel.streamCount)")
         if confirmExitMultiview && viewModel.streamCount > 1 {
-            print("📺 dismissPlayer: Showing exit confirmation")
             showExitConfirmation = true
         } else {
-            print("📺 dismissPlayer: Forcing exit (no confirmation needed)")
             forceExitPlayer()
         }
     }

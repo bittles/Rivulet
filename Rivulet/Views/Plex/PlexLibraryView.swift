@@ -19,7 +19,7 @@ struct PlexLibraryView: View {
 
     @StateObject private var authManager = PlexAuthManager.shared
     private let dataStore = PlexDataStore.shared
-    @AppStorage("showLibraryHero") private var showLibraryHero = true
+    @AppStorage("showLibraryHero") private var showLibraryHero = false
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
     @State private var items: [PlexMetadata] = []
     @State private var hubs: [PlexHub] = []  // Library-specific hubs from Plex API

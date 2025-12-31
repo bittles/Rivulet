@@ -57,8 +57,8 @@ enum AutoplayCountdown: Int, CaseIterable, CustomStringConvertible {
 
 struct SettingsView: View {
     @State private var navigationPath = NavigationPath()
-    @AppStorage("showHomeHero") private var showHomeHero = true
-    @AppStorage("showLibraryHero") private var showLibraryHero = true
+    @AppStorage("showHomeHero") private var showHomeHero = false
+    @AppStorage("showLibraryHero") private var showLibraryHero = false
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
     @AppStorage("liveTVLayout") private var liveTVLayoutRaw = LiveTVLayout.channels.rawValue
     @AppStorage("liveTVPlayerEngine") private var liveTVPlayerEngineRaw = LiveTVPlayerEngine.mpv.rawValue
@@ -195,7 +195,7 @@ struct SettingsView: View {
                                 icon: "sparkles.tv",
                                 iconColor: .pink,
                                 title: "High Quality Scaling",
-                                subtitle: "Sharper upscaling for 720p/1080p content",
+                                subtitle: "Sharper upscaling for 720p/1080p content. Maybe you can tell a difference",
                                 isOn: $highQualityScaling
                             )
 

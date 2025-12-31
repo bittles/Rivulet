@@ -6,10 +6,260 @@
 //
 
 import SwiftUI
+import Combine
+#if os(tvOS)
+import GameController
+#endif
+
+// MARK: - Hold Detection Helper
+
+/// Detects tap vs hold for left/right navigation on tvOS remote using GameController framework.
+/// Only responds to physical clicks (buttonA), not capacitive touches on the touchpad.
+@MainActor
+final class RemoteHoldDetector: ObservableObject {
+    private var pressStartTime: Date?
+    private var pressDirection: Bool?  // true = right, false = left
+    private var holdTimer: Timer?
+    private(set) var isHolding = false
+    private(set) var isScrubbing = false  // True once scrubbing starts, until reset
+    var isEnabled = true  // Set to false to let SwiftUI handle focus navigation
+
+    private let holdThreshold: TimeInterval = 0.4  // How long before it becomes a hold
+
+    var onTap: ((Bool) -> Void)?  // forward: Bool
+    var onHoldStart: ((Bool) -> Void)?  // forward: Bool (called once when hold detected)
+    var onSpeedTap: ((Bool) -> Void)?  // forward: Bool (called for taps while scrubbing)
+    var onScrubEnd: (() -> Void)?  // called when finger is lifted after scrubbing
+
+    #if os(tvOS)
+    private var controllerObserver: NSObjectProtocol?
+
+    /// Current dpad position (capacitive touch) - used to determine direction when clicking
+    private var currentDpadX: Float = 0
+    /// Last significant direction detected (persists until finger is lifted from touchpad)
+    private var lastSignificantDirection: Bool? = nil  // true = right, false = left, nil = center
+
+    func startMonitoring() {
+        print("🎮 [GC] Starting GameController monitoring")
+
+        // Set up existing controllers
+        for controller in GCController.controllers() {
+            setupController(controller)
+        }
+
+        // Watch for new controllers
+        controllerObserver = NotificationCenter.default.addObserver(
+            forName: .GCControllerDidConnect,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            if let controller = notification.object as? GCController {
+                self?.setupController(controller)
+            }
+        }
+    }
+
+    func stopMonitoring() {
+        print("🎮 [GC] Stopping GameController monitoring")
+        clearControllerHandlers()
+        if let observer = controllerObserver {
+            NotificationCenter.default.removeObserver(observer)
+            controllerObserver = nil
+        }
+        holdTimer?.invalidate()
+    }
+
+    func pauseMonitoring() {
+        print("🎮 [GC] Pausing GameController monitoring")
+        clearControllerHandlers()
+        isEnabled = false
+    }
+
+    func resumeMonitoring() {
+        print("🎮 [GC] Resuming GameController monitoring")
+        for controller in GCController.controllers() {
+            setupController(controller)
+        }
+        isEnabled = true
+    }
+
+    private func clearControllerHandlers() {
+        for controller in GCController.controllers() {
+            controller.microGamepad?.dpad.valueChangedHandler = nil
+            controller.microGamepad?.buttonA.pressedChangedHandler = nil
+            controller.extendedGamepad?.dpad.valueChangedHandler = nil
+        }
+    }
+
+    private func setupController(_ controller: GCController) {
+        print("🎮 [GC] Setting up controller: \(controller.vendorName ?? "Unknown")")
+
+        // Use microGamepad for Siri Remote
+        if let micro = controller.microGamepad {
+            micro.reportsAbsoluteDpadValues = true
+
+            // Track dpad position (capacitive touch) - this tells us WHERE the finger is
+            micro.dpad.valueChangedHandler = { [weak self] (dpad, xValue, yValue) in
+                Task { @MainActor [weak self] in
+                    guard let self = self else { return }
+                    self.currentDpadX = xValue
+
+                    // Track last significant direction (for click detection)
+                    // Direction persists until finger is clearly lifted (centered position)
+                    let threshold: Float = 0.3
+                    if xValue > threshold {
+                        self.lastSignificantDirection = true  // right
+                    } else if xValue < -threshold {
+                        self.lastSignificantDirection = false  // left
+                    } else if abs(xValue) < 0.15 && abs(yValue) < 0.15 {
+                        // Only clear when truly at rest position (finger lifted)
+                        self.lastSignificantDirection = nil
+
+                        // If we were scrubbing, end it now that finger is lifted
+                        if self.isScrubbing {
+                            print("🎮 [GC] Finger lifted - ending scrub mode")
+                            self.isScrubbing = false
+                            self.onScrubEnd?()
+                        }
+                    }
+                    // Values between 0.15 and threshold are ambiguous - keep previous direction
+                }
+            }
+
+            // buttonA is the physical click on the touchpad - this is what we respond to
+            micro.buttonA.pressedChangedHandler = { [weak self] (button, value, pressed) in
+                Task { @MainActor [weak self] in
+                    self?.handleButtonA(pressed: pressed)
+                }
+            }
+            print("🎮 [GC] MicroGamepad handlers set (dpad for direction, buttonA for click)")
+        }
+
+        // Also try extendedGamepad for other controllers (game controllers, etc.)
+        if let extended = controller.extendedGamepad {
+            extended.dpad.valueChangedHandler = { [weak self] (dpad, xValue, yValue) in
+                Task { @MainActor [weak self] in
+                    self?.handleExtendedDpad(x: xValue, y: yValue)
+                }
+            }
+            print("🎮 [GC] ExtendedGamepad D-pad handler set")
+        }
+    }
+
+    /// Handle physical click on the Siri Remote touchpad
+    private func handleButtonA(pressed: Bool) {
+        // When disabled, let SwiftUI handle all input (e.g., for post-video focus navigation)
+        guard isEnabled else { return }
+
+        let threshold: Float = 0.3  // How far left/right counts as directional
+
+        if pressed {
+            // Button pressed - check if it's a directional click
+            // First check current position, then fall back to last known direction
+            // (handles case where dpad briefly reports center during the physical click action)
+            if currentDpadX > threshold {
+                handleDirectionPressed(forward: true)
+            } else if currentDpadX < -threshold {
+                handleDirectionPressed(forward: false)
+            } else if let direction = lastSignificantDirection {
+                // Use last known direction - it persists until finger is lifted
+                handleDirectionPressed(forward: direction)
+            }
+            // Center click with finger lifted - not a directional action
+        } else {
+            // Button released
+            handleDirectionReleased()
+        }
+    }
+
+    /// Handle extended gamepad dpad (for game controllers that have physical dpad buttons)
+    private func handleExtendedDpad(x: Float, y: Float) {
+        guard isEnabled else { return }
+
+        let threshold: Float = 0.5
+
+        if x > threshold {
+            handleDirectionPressed(forward: true)
+        } else if x < -threshold {
+            handleDirectionPressed(forward: false)
+        } else {
+            handleDirectionReleased()
+        }
+    }
+
+    private func handleDirectionPressed(forward: Bool) {
+        // If already pressing in same direction, ignore
+        if pressDirection == forward { return }
+
+        // If pressing opposite direction, treat as release first
+        if pressDirection != nil {
+            handleDirectionReleased()
+        }
+
+        // If already scrubbing, taps immediately increase speed (no hold detection needed)
+        if isScrubbing {
+            print("🎮 [GC] Speed tap while scrubbing: \(forward ? "RIGHT" : "LEFT")")
+            pressDirection = forward
+            onSpeedTap?(forward)
+            return
+        }
+
+        print("🎮 [GC] Direction CLICKED: \(forward ? "RIGHT" : "LEFT")")
+        pressStartTime = Date()
+        pressDirection = forward
+        isHolding = false
+
+        // Start hold timer - after threshold, it becomes a hold (starts scrubbing at 1x)
+        holdTimer?.invalidate()
+        holdTimer = Timer.scheduledTimer(withTimeInterval: holdThreshold, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self = self, self.pressDirection != nil else { return }
+                self.isHolding = true
+                self.isScrubbing = true
+                print("🎮 [GC] Hold detected - starting scrub \(forward ? "forward" : "backward") at 1x")
+                self.onHoldStart?(forward)
+            }
+        }
+    }
+
+    private func handleDirectionReleased() {
+        guard let forward = pressDirection else { return }
+
+        print("🎮 [GC] Click released, wasHolding: \(isHolding), isScrubbing: \(isScrubbing)")
+        holdTimer?.invalidate()
+        holdTimer = nil
+
+        if isHolding || isScrubbing {
+            // Was a hold or speed tap - scrubbing remains active
+            print("🎮 [GC] Scrubbing active at current speed")
+        } else {
+            // Was a tap (not scrubbing)
+            print("🎮 [GC] Tap detected - seeking \(forward ? "+10s" : "-10s")")
+            onTap?(forward)
+        }
+
+        pressStartTime = nil
+        pressDirection = nil
+        isHolding = false  // Reset for next press, but keep isScrubbing
+    }
+    #endif
+
+    func reset() {
+        #if os(tvOS)
+        holdTimer?.invalidate()
+        holdTimer = nil
+        #endif
+        pressStartTime = nil
+        pressDirection = nil
+        isHolding = false
+        isScrubbing = false
+    }
+}
 
 struct UniversalPlayerView: View {
     @StateObject private var viewModel: UniversalPlayerViewModel
     @StateObject private var focusScopeManager = FocusScopeManager()
+    @StateObject private var holdDetector = RemoteHoldDetector()
     @Environment(\.dismiss) private var dismiss
 
     @State private var hasStartedPlayback = false
@@ -39,55 +289,11 @@ struct UniversalPlayerView: View {
 
     var body: some View {
         ZStack {
-            // Background
-            Color.black
-                .ignoresSafeArea()
+            // Player content layer - handles input when post-video is hidden
+            playerContentLayer
+                .zIndex(0)
 
-            // Player Layer
-            playerLayer
-                .ignoresSafeArea()
-
-            // Loading State
-            if viewModel.playbackState == .loading || viewModel.playbackState == .idle {
-                loadingView
-            }
-
-            // Buffering Indicator
-            if viewModel.isBuffering && viewModel.playbackState != .loading {
-                bufferingIndicator
-            }
-
-            // Seek Indicator (10s skip)
-            if let indicator = viewModel.seekIndicator {
-                seekIndicatorView(indicator)
-                    .transition(.scale.combined(with: .opacity))
-            }
-
-            // Error State
-            if case .failed(let error) = viewModel.playbackState {
-                errorView(message: error.localizedDescription)
-            }
-
-            // Skip Button (intro/credits) - shows regardless of controls visibility
-            if viewModel.showSkipButton && !viewModel.showInfoPanel {
-                skipButtonOverlay
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
-            }
-
-            // Controls Overlay (transport bar at bottom)
-            // Always show when scrubbing so user can see the progress bar
-            if (viewModel.showControls || viewModel.isScrubbing) && viewModel.playbackState.isActive {
-                PlayerControlsOverlay(viewModel: viewModel, showInfoPanel: false)
-                    .transition(.opacity.animation(.easeInOut(duration: 0.25)))
-            }
-
-            // Info Panel (independent of controls visibility) - slides from top (triggered by d-pad down)
-            if viewModel.showInfoPanel {
-                PlayerControlsOverlay(viewModel: viewModel, showInfoPanel: true)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-
-            // Post-Video Summary Overlay
+            // Post-Video Summary Overlay - separate layer with its own focus handling
             if viewModel.postVideoState != .hidden {
                 PostVideoSummaryView(viewModel: viewModel, focusScopeManager: focusScopeManager)
                     .zIndex(100)  // Ensure it's above everything
@@ -98,48 +304,7 @@ struct UniversalPlayerView: View {
         .animation(.spring(response: 0.25, dampingFraction: 0.9), value: viewModel.showInfoPanel)
         .animation(.easeInOut(duration: 0.3), value: viewModel.showSkipButton)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: viewModel.seekIndicator)
-        // Focusable when skip button is not focused (let button take focus when visible)
-        .focusable(!isSkipButtonFocused)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            // Don't toggle controls if info panel is showing
-            guard !viewModel.showInfoPanel else { return }
-
-            // Tap anywhere to show/hide controls
-            withAnimation(.easeInOut(duration: 0.25)) {
-                if viewModel.showControls {
-                    viewModel.showControls = false
-                } else {
-                    viewModel.showControlsTemporarily()
-                }
-            }
-        }
         #if os(tvOS)
-        .onMoveCommand { direction in
-            print("🎮 [SwiftUI onMoveCommand] direction: \(direction), showInfoPanel: \(viewModel.showInfoPanel)")
-            if viewModel.showInfoPanel {
-                // Settings panel navigation - 3 column layout
-                switch direction {
-                case .up:
-                    if viewModel.focusedRowIndex == 0 {
-                        // At top row - close panel
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            viewModel.showInfoPanel = false
-                        }
-                    } else {
-                        viewModel.navigateSettings(direction: direction)
-                    }
-                case .down, .left, .right:
-                    viewModel.navigateSettings(direction: direction)
-                @unknown default:
-                    break
-                }
-            } else {
-                // Left/right are handled by gesture recognizers in PlayerContainerViewController
-                // for tap vs hold detection. Only handle up/down here.
-                handleMoveCommand(direction)
-            }
-        }
         .onPlayPauseCommand {
             // Skip button handles its own press via Button action
             guard !isSkipButtonFocused else { return }
@@ -161,6 +326,34 @@ struct UniversalPlayerView: View {
                 viewModel.setPlayerController(controller)
             }
         }
+        .onAppear {
+            #if os(tvOS)
+            // Configure hold detector callbacks for tap vs hold on left/right
+            holdDetector.onTap = { [weak viewModel] forward in
+                guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+                Task { await vm.seekRelative(by: forward ? 10 : -10) }
+                vm.showControlsTemporarily()
+            }
+            holdDetector.onHoldStart = { [weak viewModel] forward in
+                guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+                // Start scrubbing at 1x - additional taps will increase speed
+                vm.scrubInDirection(forward: forward)
+                vm.showControlsTemporarily()
+            }
+            holdDetector.onSpeedTap = { [weak viewModel] forward in
+                guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+                // Increase scrub speed (or change direction if tapping opposite way)
+                vm.scrubInDirection(forward: forward)
+                vm.showControlsTemporarily()
+            }
+            holdDetector.onScrubEnd = { [weak viewModel] in
+                guard let vm = viewModel else { return }
+                vm.cancelScrub()
+            }
+            // Start GameController monitoring for D-pad
+            holdDetector.startMonitoring()
+            #endif
+        }
         .task {
             guard !hasStartedPlayback else { return }
             hasStartedPlayback = true
@@ -171,6 +364,10 @@ struct UniversalPlayerView: View {
         .onDisappear {
             viewModel.stopPlayback()
             reportFinalProgress()
+            #if os(tvOS)
+            holdDetector.stopMonitoring()
+            #endif
+            holdDetector.reset()
             // Deactivate player scope when leaving
             focusScopeManager.deactivate()
             // Notify that Plex data should be refreshed (watch progress may have changed)
@@ -207,10 +404,121 @@ struct UniversalPlayerView: View {
         .onChange(of: viewModel.postVideoState) { _, state in
             if state != .hidden {
                 focusScopeManager.activate(.postVideo)
+                #if os(tvOS)
+                // Pause GameController monitoring so SwiftUI can handle focus navigation
+                holdDetector.pauseMonitoring()
+                #endif
             } else {
                 focusScopeManager.deactivate()
+                #if os(tvOS)
+                holdDetector.resumeMonitoring()
+                #endif
             }
         }
+    }
+
+    // MARK: - Player Content Layer (all player UI except post-video)
+
+    @ViewBuilder
+    private var playerContentLayer: some View {
+        ZStack {
+            // Background
+            Color.black
+                .ignoresSafeArea()
+
+            // Player Layer
+            playerLayer
+                .ignoresSafeArea()
+
+            // Loading State
+            if viewModel.playbackState == .loading || viewModel.playbackState == .idle {
+                loadingView
+            }
+
+            // Buffering Indicator
+            if viewModel.isBuffering && viewModel.playbackState != .loading {
+                bufferingIndicator
+            }
+
+            // Seek Indicator (10s skip)
+            if let indicator = viewModel.seekIndicator {
+                seekIndicatorView(indicator)
+                    .transition(.scale.combined(with: .opacity))
+            }
+
+            // Error State
+            if case .failed(let error) = viewModel.playbackState {
+                errorView(message: error.localizedDescription)
+            }
+
+            // Skip Button (intro/credits) - shows regardless of controls visibility, but not during post-video
+            if viewModel.showSkipButton && !viewModel.showInfoPanel && viewModel.postVideoState == .hidden {
+                skipButtonOverlay
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
+            }
+
+            // Controls Overlay (transport bar at bottom)
+            // Always show when scrubbing so user can see the progress bar, but not during post-video
+            if (viewModel.showControls || viewModel.isScrubbing) && viewModel.playbackState.isActive && viewModel.postVideoState == .hidden {
+                PlayerControlsOverlay(viewModel: viewModel, showInfoPanel: false)
+                    .transition(.opacity.animation(.easeInOut(duration: 0.25)))
+            }
+
+            // Info Panel (independent of controls visibility) - slides from top (triggered by d-pad down)
+            if viewModel.showInfoPanel {
+                VStack {
+                    PlayerControlsOverlay(viewModel: viewModel, showInfoPanel: true)
+                    Spacer()
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(10)  // Keep above other elements during animation
+            }
+        }
+        // Focusable when skip button is not focused and post-video is not showing
+        .focusable(!isSkipButtonFocused && viewModel.postVideoState == .hidden)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            // Don't toggle controls if info panel is showing
+            guard !viewModel.showInfoPanel else { return }
+
+            // Tap anywhere to show/hide controls
+            withAnimation(.easeInOut(duration: 0.25)) {
+                if viewModel.showControls {
+                    viewModel.showControls = false
+                } else {
+                    viewModel.showControlsTemporarily()
+                }
+            }
+        }
+        #if os(tvOS)
+        .onMoveCommand { direction in
+            // When post-video is showing, don't handle - let SwiftUI manage button focus
+            guard viewModel.postVideoState == .hidden else { return }
+
+            if viewModel.showInfoPanel {
+                // Settings panel navigation - 3 column layout
+                switch direction {
+                case .up:
+                    if viewModel.focusedRowIndex == 0 {
+                        // At top row - close panel
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                            viewModel.showInfoPanel = false
+                        }
+                    } else {
+                        viewModel.navigateSettings(direction: direction)
+                    }
+                case .down, .left, .right:
+                    viewModel.navigateSettings(direction: direction)
+                @unknown default:
+                    break
+                }
+            } else {
+                // Left/right are handled by GameController via RemoteHoldDetector
+                // for tap vs hold detection. Only handle up/down here.
+                handleMoveCommand(direction)
+            }
+        }
+        #endif
     }
 
     // MARK: - Player Layer
@@ -367,9 +675,9 @@ struct UniversalPlayerView: View {
     private func handleMoveCommand(_ direction: MoveCommandDirection) {
         switch direction {
         case .left, .right:
-            // Left/right are handled by PlayerContainerViewController via pressesBegan/pressesEnded
-            // which properly detects tap vs hold using Siri Remote touchpad press types (2079/2080)
-            // We ignore onMoveCommand for these to avoid duplicate handling
+            // Left/right are handled by GameController via RemoteHoldDetector
+            // which gives us actual press/release timing for tap vs hold detection.
+            // We ignore onMoveCommand for these directions.
             break
         case .down:
             if isSkipButtonFocused {
@@ -381,6 +689,7 @@ struct UniversalPlayerView: View {
             // Show info panel (cancels any active scrubbing)
             if viewModel.isScrubbing {
                 viewModel.cancelScrub()
+                holdDetector.reset()
             }
             if !viewModel.showInfoPanel {
                 viewModel.resetSettingsPanel()
@@ -397,6 +706,7 @@ struct UniversalPlayerView: View {
             // Cancel scrubbing on up
             if viewModel.isScrubbing {
                 viewModel.cancelScrub()
+                holdDetector.reset()
             }
         @unknown default:
             break
@@ -412,6 +722,7 @@ struct UniversalPlayerView: View {
         if viewModel.isScrubbing {
             // Commit scrub position
             Task { await viewModel.commitScrub() }
+            holdDetector.reset()
         } else {
             // Normal play/pause toggle
             viewModel.togglePlayPause()

@@ -43,4 +43,10 @@ struct MPVProperty {
     // Volume
     static let volume = "volume"
     static let mute = "mute"
+
+    // Cache (for live stream monitoring)
+    static let demuxerCacheTime = "demuxer-cache-time"
+    static let demuxerCacheDuration = "demuxer-cache-duration"
+    static let demuxerCacheState = "demuxer-cache-state"
+    static let playbackTime = "playback-time"
 }

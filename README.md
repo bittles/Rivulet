@@ -4,7 +4,6 @@ A native tvOS video streaming app designed for simplicity, combining **Plex** me
 
 ![tvOS 26+](https://img.shields.io/badge/tvOS-26+-000000?logo=apple)
 ![Swift](https://img.shields.io/badge/Swift-6.0-FA7343?logo=swift&logoColor=white)
-![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue)
 
 ## Features
 
@@ -81,60 +80,6 @@ Rivulet/
 | `LiveTVDataStore` | Aggregates channels from multiple providers |
 | `MPVPlayerWrapper` | MPV adapter implementing `PlayerProtocol` |
 | `UniversalPlayerView` | SwiftUI video player with scrubbing |
-
-## Contributing
-
-Contributions are welcome! Please read the guidelines below before submitting.
-
-### How to Contribute
-
-1. **Fork** the repository
-2. **Create a branch** for your feature (`git checkout -b feature/amazing-feature`)
-3. **Make your changes** with clear, focused commits
-4. **Test** on Apple TV (simulator or device)
-5. **Submit a pull request** with a description of your changes
-
-### Code Style
-
-- Follow existing patterns in the codebase
-- Use Swift's native async/await for concurrency
-- Keep views focused — extract complex logic to view models
-- Apply `.glassEffect()` only to navigation layers (sidebar, overlays)
-
-### Areas for Contribution
-
-- EPG grid view implementation
-- Favorites UI integration
-- Additional Live TV providers
-- Accessibility improvements (VoiceOver)
-- Performance optimizations
-- Bug fixes and documentation
-
-### What We're Not Looking For
-
-- Major architectural changes without discussion
-- Features that add complexity without clear benefit
-- Dependencies on closed-source libraries
-
-## License
-
-This project is licensed under the **PolyForm Noncommercial License 1.0.0**.
-
-You are free to:
-- **View** and **study** the source code
-- **Modify** the code for personal use
-- **Contribute** improvements back to this project
-
-You may **not**:
-- Use this software for commercial purposes
-- Distribute compiled applications
-- Publish this app on the App Store (only the original author may do so)
-
-See [LICENSE](LICENSE) for the full license text.
-
-### Why This License?
-
-Rivulet is source-available to encourage learning, collaboration, and community contributions while ensuring the project remains sustainable. If you're interested in commercial licensing, please reach out.
 
 ## Acknowledgments
 

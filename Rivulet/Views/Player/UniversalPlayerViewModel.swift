@@ -537,7 +537,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         updateTrackLists()
         focusedColumn = 0
         focusedRowIndex = 0
-        print("🎬 [SETTINGS] Opened with \(audioTracks.count) audio, \(subtitleTracks.count) subtitles")
     }
 
     func seek(to time: TimeInterval) async {
@@ -703,9 +702,6 @@ final class UniversalPlayerViewModel: ObservableObject {
                 serverURL: serverURL,
                 authToken: authToken
             )
-            if let thumb = thumbnail {
-                print("🖼️ [THUMB] Got thumbnail for \(Int(time))s: \(thumb.size)")
-            }
             self.scrubThumbnail = thumbnail
         }
     }
@@ -1198,7 +1194,14 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Start autoplay countdown timer
     func startAutoplayCountdown() {
-        let countdownSetting = UserDefaults.standard.integer(forKey: "autoplayCountdown")
+        // Default to 5 seconds if not set (key doesn't exist)
+        // 0 explicitly means disabled
+        let countdownSetting: Int
+        if UserDefaults.standard.object(forKey: "autoplayCountdown") == nil {
+            countdownSetting = 5  // Default: 5 seconds
+        } else {
+            countdownSetting = UserDefaults.standard.integer(forKey: "autoplayCountdown")
+        }
 
         // 0 means disabled
         guard countdownSetting > 0 else {

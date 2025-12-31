@@ -40,8 +40,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: MPVMetalViewController, context: Context) {
         // Update explicit size when container size changes
-        if containerSize != .zero {
-            uiViewController.setExplicitSize(containerSize)
-        }
+        // Pass .zero to disable transform scaling (reverts to normal frame-based sizing)
+        uiViewController.setExplicitSize(containerSize)
     }
 }

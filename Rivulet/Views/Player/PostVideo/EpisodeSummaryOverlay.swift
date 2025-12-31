@@ -21,7 +21,11 @@ struct EpisodeSummaryOverlay: View {
     }
 
     private var autoplayEnabled: Bool {
-        UserDefaults.standard.integer(forKey: "autoplayCountdown") > 0
+        // Default to enabled (5 seconds) if key doesn't exist
+        if UserDefaults.standard.object(forKey: "autoplayCountdown") == nil {
+            return true
+        }
+        return UserDefaults.standard.integer(forKey: "autoplayCountdown") > 0
     }
 
     private var isActive: Bool {

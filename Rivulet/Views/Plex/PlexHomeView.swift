@@ -11,7 +11,7 @@ import Combine
 struct PlexHomeView: View {
     @StateObject private var dataStore = PlexDataStore.shared
     @StateObject private var authManager = PlexAuthManager.shared
-    @AppStorage("showHomeHero") private var showHomeHero = true
+    @AppStorage("showHomeHero") private var showHomeHero = false
     @Environment(\.nestedNavigationState) private var nestedNavState
     @Environment(\.focusScopeManager) private var focusScopeManager
     @Environment(\.isSidebarVisible) private var isSidebarVisible
