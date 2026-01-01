@@ -346,6 +346,12 @@ final class MPVMetalViewController: UIViewController {
             // GPU optimizations - minimize CPU work
             checkError(mpv_set_option_string(mpv, "gpu-hwdec-interop", "videotoolbox"))  // Keep frames on GPU
 
+            // Dolby Vision / HDR robustness options
+            // Extra frames help with complex GOP structures in DV content
+            checkError(mpv_set_option_string(mpv, "hwdec-extra-frames", "4"))
+            // Allow recovery from hardware decode errors by seeking to keyframe
+            checkError(mpv_set_option_string(mpv, "hr-seek-framedrop", "yes"))
+
             print("🎬 MPV: Using VOD settings (gpu-next + Vulkan/MoltenVK + VideoToolbox + HDR)")
         }
 
