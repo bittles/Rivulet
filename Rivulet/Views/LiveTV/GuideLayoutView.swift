@@ -8,9 +8,20 @@ import SwiftUI
 #if os(tvOS)
 
 struct GuideLayoutView: View {
+    /// Optional source ID to filter channels. nil = show all sources.
+    var sourceIdFilter: String?
+
     @StateObject private var dataStore = LiveTVDataStore.shared
     @Environment(\.focusScopeManager) private var focusScopeManager
     @Environment(\.openSidebar) private var openSidebar
+
+    /// Channels filtered by source (if specified)
+    private var channels: [UnifiedChannel] {
+        if let sourceId = sourceIdFilter {
+            return dataStore.channels.filter { $0.sourceId == sourceId }
+        }
+        return dataStore.channels
+    }
 
     @State private var selectedChannel: UnifiedChannel?
     @State private var guideStartTime = Date()
@@ -25,7 +36,7 @@ struct GuideLayoutView: View {
                 ZStack {
                     Color.black.ignoresSafeArea()
 
-                    if dataStore.channels.isEmpty {
+                    if channels.isEmpty {
                         ProgressView()
                     } else {
                         guideView(size: geo.size)
@@ -75,8 +86,8 @@ struct GuideLayoutView: View {
         let visibleEnd = visibleStart.addingTimeInterval(180 * 60)
 
         return Button {
-            if focusedRow < dataStore.channels.count {
-                selectedChannel = dataStore.channels[focusedRow]
+            if focusedRow < channels.count {
+                selectedChannel = channels[focusedRow]
             }
         } label: {
             VStack(alignment: .leading, spacing: 0) {
@@ -103,7 +114,7 @@ struct GuideLayoutView: View {
                         ScrollView(.vertical, showsIndicators: false) {
                             ZStack(alignment: .topLeading) {
                                 VStack(spacing: 0) {
-                                    ForEach(Array(dataStore.channels.enumerated()), id: \.element.id) { idx, ch in
+                                    ForEach(Array(channels.enumerated()), id: \.element.id) { idx, ch in
                                         HStack(spacing: 0) {
                                             ChannelCell(channel: ch, isSelected: idx == focusedRow,
                                                        width: channelWidth, height: rowHeight)
@@ -124,7 +135,7 @@ struct GuideLayoutView: View {
                                 // Time line overlay (inside scroll content)
                                 TimeLineView(now: Date(), startTime: visibleStart, endTime: visibleEnd,
                                             headerHeight: 0, pxPerMin: pxPerMin,
-                                            totalHeight: CGFloat(dataStore.channels.count) * rowHeight)
+                                            totalHeight: CGFloat(channels.count) * rowHeight)
                                     .offset(x: channelWidth)
                                     .allowsHitTesting(false)
                             }
@@ -167,7 +178,6 @@ struct GuideLayoutView: View {
     }
 
     private func handleNav(_ dir: MoveCommandDirection) {
-        let channels = dataStore.channels
         guard !channels.isEmpty else { return }
 
         switch dir {
@@ -215,8 +225,8 @@ struct GuideLayoutView: View {
     }
 
     private func progCountFor(start: Date, end: Date) -> Int {
-        guard focusedRow >= 0 && focusedRow < dataStore.channels.count else { return 1 }
-        return max(1, dataStore.getPrograms(for: dataStore.channels[focusedRow],
+        guard focusedRow >= 0 && focusedRow < channels.count else { return 1 }
+        return max(1, dataStore.getPrograms(for: channels[focusedRow],
                                             startDate: start, endDate: end).count)
     }
 }
@@ -445,6 +455,8 @@ private struct TimeLineView: View {
 #else
 
 struct GuideLayoutView: View {
+    var sourceIdFilter: String?
+
     var body: some View {
         Text("Guide")
     }

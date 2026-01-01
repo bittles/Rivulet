@@ -1334,16 +1334,190 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         serverURL: String,
         authToken: String
     ) async throws -> [PlexLiveTVChannel] {
-        guard let url = URL(string: "\(serverURL)/livetv/sessions") else {
+        // The grid endpoint returns ALL channels with their info
+        return try await fetchChannelsFromGrid(serverURL: serverURL, authToken: authToken)
+    }
+
+    /// Fetch channels from grid endpoint using DVR lineup
+    /// The grid returns programs with channel info embedded in each program's Media array
+    private func fetchChannelsFromGrid(
+        serverURL: String,
+        authToken: String
+    ) async throws -> [PlexLiveTVChannel] {
+        guard let dvrsURL = URL(string: "\(serverURL)/livetv/dvrs") else {
             throw PlexAPIError.invalidURL
         }
 
-        let container: PlexLiveTVChannelContainer = try await request(
-            url,
+        let dvrContainer: PlexDVRContainer = try await request(
+            dvrsURL,
             headers: plexHeaders(authToken: authToken)
         )
 
-        return container.MediaContainer.Metadata ?? []
+        guard let dvr = dvrContainer.MediaContainer.Dvr?.first,
+              let lineup = dvr.lineup,
+              let dvrKey = dvr.key else {
+            print("🌐 PlexNetwork: No DVR or lineup found for Live TV")
+            return []
+        }
+
+        // Get HDHomeRun device URI for stream URLs
+        var hdhrStreamURLs: [String: String] = [:]
+        if let device = dvr.Device?.first, let deviceURI = device.uri {
+            hdhrStreamURLs = await fetchHDHomeRunLineup(deviceURI: deviceURI)
+            print("🌐 PlexNetwork: Fetched \(hdhrStreamURLs.count) stream URLs from HDHomeRun")
+        }
+
+        // Extract provider path using DVR key (e.g., tv.plex.providers.epg.xmltv:28)
+        let providerPath = extractProviderPath(from: lineup, dvrKey: dvrKey)
+
+        // Grid requires time parameters to return data
+        let now = Int(Date().timeIntervalSince1970)
+        let sixHoursLater = now + (6 * 3600)
+
+        guard var components = URLComponents(string: "\(serverURL)/\(providerPath)/grid") else {
+            print("🌐 PlexNetwork: Could not build grid URL from lineup: \(lineup)")
+            throw PlexAPIError.invalidURL
+        }
+
+        components.queryItems = [
+            URLQueryItem(name: "type", value: "1,4"),
+            URLQueryItem(name: "sort", value: "beginsAt"),
+            URLQueryItem(name: "beginsAt<=", value: "\(sixHoursLater)"),
+            URLQueryItem(name: "endsAt>=", value: "\(now)")
+        ]
+
+        guard let gridURL = components.url else {
+            throw PlexAPIError.invalidURL
+        }
+
+        print("🌐 PlexNetwork: Fetching channels from grid: \(gridURL.absoluteString)")
+
+        // The grid returns programs with channel info in each program's Media array
+        struct GridContainer: Codable {
+            let MediaContainer: GridMediaContainer
+        }
+        struct GridMediaContainer: Codable {
+            let size: Int?
+            let Metadata: [GridProgram]?
+        }
+        struct GridProgram: Codable {
+            let ratingKey: String?
+            let key: String?
+            let Media: [GridMedia]?
+        }
+        struct GridMedia: Codable {
+            let channelCallSign: String?
+            let channelIdentifier: String?
+            let channelThumb: String?
+            let channelTitle: String?
+            let channelVcn: String?  // Visual channel number
+        }
+
+        let container: GridContainer = try await request(
+            gridURL,
+            headers: plexHeaders(authToken: authToken)
+        )
+
+        // Extract unique channels from all programs' Media arrays
+        var seenChannels = Set<String>()
+        var channels: [PlexLiveTVChannel] = []
+
+        for program in container.MediaContainer.Metadata ?? [] {
+            for media in program.Media ?? [] {
+                guard let channelId = media.channelIdentifier,
+                      !seenChannels.contains(channelId) else {
+                    continue
+                }
+
+                seenChannels.insert(channelId)
+
+                let channelTitle = media.channelTitle ?? "Channel \(channelId)"
+                let channelNumber = media.channelVcn ?? channelId
+
+                // Get stream URL from HDHomeRun lineup (keyed by channel number)
+                let streamURL = hdhrStreamURLs[channelNumber] ?? hdhrStreamURLs[channelId]
+
+                let channel = PlexLiveTVChannel(
+                    ratingKey: channelId,
+                    key: "/tv.plex.providers.epg.xmltv:\(dvrKey)/metadata/\(channelId)",
+                    guid: nil,
+                    type: "channel",
+                    title: channelTitle,
+                    summary: nil,
+                    thumb: media.channelThumb,
+                    art: nil,
+                    year: nil,
+                    channelCallSign: media.channelCallSign,
+                    channelIdentifier: channelId,
+                    channelShortTitle: nil,
+                    channelThumb: media.channelThumb,
+                    channelTitle: channelTitle,
+                    channelNumber: channelNumber,
+                    streamURL: streamURL
+                )
+
+                channels.append(channel)
+            }
+        }
+
+        print("🌐 PlexNetwork: Found \(channels.count) unique channels from grid")
+        return channels
+    }
+
+    /// Fetch stream URLs from HDHomeRun device lineup
+    /// Returns a dictionary mapping channel number to stream URL
+    private func fetchHDHomeRunLineup(deviceURI: String) async -> [String: String] {
+        guard let lineupURL = URL(string: "\(deviceURI)/lineup.json") else {
+            print("🌐 PlexNetwork: Invalid HDHomeRun lineup URL")
+            return [:]
+        }
+
+        print("🌐 PlexNetwork: Fetching HDHomeRun lineup from \(lineupURL)")
+
+        struct HDHomeRunChannel: Codable {
+            let GuideNumber: String?
+            let GuideName: String?
+            let URL: String?
+        }
+
+        do {
+            let (data, _) = try await session.data(from: lineupURL)
+            let channels = try JSONDecoder().decode([HDHomeRunChannel].self, from: data)
+
+            var urlMap: [String: String] = [:]
+            for channel in channels {
+                if let number = channel.GuideNumber, let url = channel.URL {
+                    urlMap[number] = url
+                }
+            }
+
+            return urlMap
+        } catch {
+            print("🌐 PlexNetwork: Failed to fetch HDHomeRun lineup: \(error)")
+            return [:]
+        }
+    }
+
+    /// Extract provider path from DVR key and lineup URL for EPG access
+    /// The correct format is: tv.plex.providers.epg.xmltv:{dvrKey}
+    private func extractProviderPath(from lineup: String, dvrKey: String) -> String {
+        // Extract the provider identifier from the lineup URL
+        // lineup://tv.plex.providers.epg.xmltv/... -> tv.plex.providers.epg.xmltv
+        var providerIdentifier = lineup
+        if providerIdentifier.hasPrefix("lineup://") {
+            providerIdentifier = String(providerIdentifier.dropFirst("lineup://".count))
+        }
+        // Take just the first part before any / or #
+        if let slashIndex = providerIdentifier.firstIndex(of: "/") {
+            providerIdentifier = String(providerIdentifier[..<slashIndex])
+        }
+        if let hashIndex = providerIdentifier.firstIndex(of: "#") {
+            providerIdentifier = String(providerIdentifier[..<hashIndex])
+        }
+
+        // Build the provider path using the DVR key
+        // Format: tv.plex.providers.epg.xmltv:28
+        return "\(providerIdentifier):\(dvrKey)"
     }
 
     /// Get Live TV guide (EPG) for specified channels and time range
@@ -1354,7 +1528,27 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         startTime: Date,
         endTime: Date
     ) async throws -> [PlexLiveTVGuideChannel] {
-        guard var components = URLComponents(string: "\(serverURL)/livetv/dvrs/1/channels") else {
+        // Get the DVR lineup to build the grid URL
+        guard let dvrsURL = URL(string: "\(serverURL)/livetv/dvrs") else {
+            throw PlexAPIError.invalidURL
+        }
+
+        let dvrContainer: PlexDVRContainer = try await request(
+            dvrsURL,
+            headers: plexHeaders(authToken: authToken)
+        )
+
+        guard let dvr = dvrContainer.MediaContainer.Dvr?.first,
+              let lineup = dvr.lineup,
+              let dvrKey = dvr.key else {
+            print("🌐 PlexNetwork: No DVR or lineup found for Live TV guide")
+            return []
+        }
+
+        // Extract provider path using DVR key (e.g., tv.plex.providers.epg.xmltv:28)
+        let providerPath = extractProviderPath(from: lineup, dvrKey: dvrKey)
+
+        guard var components = URLComponents(string: "\(serverURL)/\(providerPath)/grid") else {
             throw PlexAPIError.invalidURL
         }
 
@@ -1362,9 +1556,10 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         let endTimestamp = Int(endTime.timeIntervalSince1970)
 
         var queryItems = [
-            URLQueryItem(name: "includeMeta", value: "1"),
-            URLQueryItem(name: "beginsAt>", value: "\(startTimestamp)"),
-            URLQueryItem(name: "endsAt<", value: "\(endTimestamp)")
+            URLQueryItem(name: "type", value: "1,4"),  // 1=movies, 4=shows
+            URLQueryItem(name: "sort", value: "beginsAt"),
+            URLQueryItem(name: "beginsAt<=", value: "\(endTimestamp)"),
+            URLQueryItem(name: "endsAt>=", value: "\(startTimestamp)")
         ]
 
         if let ids = channelIds, !ids.isEmpty {
@@ -1377,12 +1572,111 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             throw PlexAPIError.invalidURL
         }
 
-        let container: PlexLiveTVGuideContainer = try await request(
+        print("🌐 PlexNetwork: Fetching EPG from: \(url.absoluteString)")
+
+        // The grid returns flat programs with channel info in each program's Media array
+        // We need to parse this and group by channel
+        struct GridEPGContainer: Codable {
+            let MediaContainer: GridEPGMediaContainer
+        }
+        struct GridEPGMediaContainer: Codable {
+            let size: Int?
+            let Metadata: [GridEPGProgram]?
+        }
+        struct GridEPGProgram: Codable {
+            let ratingKey: String?
+            let key: String?
+            let guid: String?
+            let type: String?
+            let title: String?
+            let grandparentTitle: String?
+            let parentTitle: String?
+            let summary: String?
+            let thumb: String?
+            let art: String?
+            let year: Int?
+            let originallyAvailableAt: String?
+            let Media: [GridEPGMedia]?
+        }
+        struct GridEPGMedia: Codable {
+            let channelCallSign: String?
+            let channelIdentifier: String?
+            let channelThumb: String?
+            let channelTitle: String?
+            let channelVcn: String?
+            let beginsAt: Int?
+            let endsAt: Int?
+        }
+
+        let container: GridEPGContainer = try await request(
             url,
             headers: plexHeaders(authToken: authToken)
         )
 
-        return container.MediaContainer.Metadata ?? []
+        let programs = container.MediaContainer.Metadata ?? []
+        print("🌐 PlexNetwork: EPG returned \(programs.count) programs")
+
+        // Group programs by channel and convert to PlexLiveTVGuideChannel format
+        // Each program can have multiple Media entries representing different time slots
+        var channelPrograms: [String: (channel: GridEPGMedia, programs: [PlexLiveTVProgram])] = [:]
+
+        for program in programs {
+            guard let mediaList = program.Media, !mediaList.isEmpty else {
+                continue
+            }
+
+            // Iterate over ALL Media entries - each represents a time slot
+            for media in mediaList {
+                guard let channelId = media.channelIdentifier else {
+                    continue
+                }
+
+                // Convert to PlexLiveTVProgram for this time slot
+                let liveTVProgram = PlexLiveTVProgram(
+                    ratingKey: program.ratingKey,
+                    key: program.key,
+                    guid: program.guid,
+                    type: program.type,
+                    title: program.title ?? "Unknown",
+                    grandparentTitle: program.grandparentTitle,
+                    parentTitle: program.parentTitle,
+                    summary: program.summary,
+                    thumb: program.thumb,
+                    art: program.art,
+                    year: program.year,
+                    originallyAvailableAt: program.originallyAvailableAt,
+                    beginsAt: media.beginsAt,
+                    endsAt: media.endsAt,
+                    onAir: nil,
+                    live: nil,
+                    premiere: nil,
+                    Genre: nil,
+                    Media: nil
+                )
+
+                if channelPrograms[channelId] == nil {
+                    channelPrograms[channelId] = (channel: media, programs: [])
+                }
+                channelPrograms[channelId]?.programs.append(liveTVProgram)
+            }
+        }
+
+        // Convert to PlexLiveTVGuideChannel array
+        let guideChannels = channelPrograms.map { (channelId, data) -> PlexLiveTVGuideChannel in
+            PlexLiveTVGuideChannel(
+                ratingKey: channelId,
+                key: nil,
+                guid: nil,
+                channelIdentifier: channelId,
+                channelTitle: data.channel.channelTitle,
+                channelNumber: data.channel.channelVcn,
+                channelThumb: data.channel.channelThumb,
+                Metadata: data.programs
+            )
+        }
+
+        print("🌐 PlexNetwork: EPG grouped into \(guideChannels.count) channels")
+        return guideChannels
     }
 
     /// Build Live TV stream URL for a channel
@@ -1408,7 +1702,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
     // MARK: - Helper Methods
 
-    private func plexHeaders(authToken: String) -> [String: String] {
+    func plexHeaders(authToken: String) -> [String: String] {
         [
             "X-Plex-Token": authToken,
             "X-Plex-Client-Identifier": PlexAPI.clientIdentifier,

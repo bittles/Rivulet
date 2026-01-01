@@ -63,19 +63,22 @@ struct LiveTVSourceDetailSheet: View {
                     .padding(.bottom, 60)
                 }
             }
-
-            // Delete confirmation overlay
-            if showDeleteConfirmation {
-                deleteConfirmationOverlay
+        }
+        .confirmationDialog(
+            "Remove Source?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) {
+                removeSource()
             }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will remove \"\(source.displayName)\" and all its channels from Live TV.")
         }
         #if os(tvOS)
         .onExitCommand {
-            if showDeleteConfirmation {
-                showDeleteConfirmation = false
-            } else {
-                dismiss()
-            }
+            dismiss()
         }
         #endif
     }
@@ -187,66 +190,6 @@ struct LiveTVSourceDetailSheet: View {
         }
     }
 
-    // MARK: - Delete Confirmation Overlay
-
-    private var deleteConfirmationOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.8)
-                .ignoresSafeArea()
-
-            VStack(spacing: 32) {
-                // Warning icon
-                ZStack {
-                    Circle()
-                        .fill(.red.opacity(0.15))
-                        .frame(width: 100, height: 100)
-
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.red)
-                }
-
-                // Text
-                VStack(spacing: 12) {
-                    Text("Remove Source?")
-                        .font(.system(size: 34, weight: .bold))
-                        .foregroundStyle(.white)
-
-                    Text("This will remove \"\(source.displayName)\" and all its channels from Live TV.")
-                        .font(.system(size: 22))
-                        .foregroundStyle(.white.opacity(0.6))
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 500)
-                }
-
-                // Buttons
-                HStack(spacing: 24) {
-                    // Cancel button
-                    DeleteConfirmButton(
-                        title: "Cancel",
-                        isDestructive: false
-                    ) {
-                        showDeleteConfirmation = false
-                    }
-
-                    // Remove button
-                    DeleteConfirmButton(
-                        title: "Remove",
-                        isDestructive: true
-                    ) {
-                        removeSource()
-                    }
-                }
-            }
-            .padding(48)
-            .background(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .fill(Color(white: 0.12))
-            )
-            .padding(60)
-        }
-    }
-
     // MARK: - Actions
 
     private func refreshSource() {
@@ -336,44 +279,6 @@ private struct SourceActionButton: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: isFocused)
-    }
-}
-
-// MARK: - Delete Confirm Button
-
-private struct DeleteConfirmButton: View {
-    let title: String
-    let isDestructive: Bool
-    let action: () -> Void
-
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        Button {
-            action()
-        } label: {
-            Text(title)
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 40)
-                .padding(.vertical, 18)
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(backgroundColor)
-                )
-                .scaleEffect(isFocused ? 1.05 : 1.0)
-        }
-        .buttonStyle(.plain)
-        .focused($isFocused)
-        .animation(.easeOut(duration: 0.15), value: isFocused)
-    }
-
-    private var backgroundColor: Color {
-        if isDestructive {
-            return isFocused ? .red : .red.opacity(0.85)
-        } else {
-            return isFocused ? .white.opacity(0.25) : .white.opacity(0.15)
-        }
     }
 }
 

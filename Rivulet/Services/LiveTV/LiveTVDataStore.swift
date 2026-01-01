@@ -146,7 +146,7 @@ class LiveTVDataStore: ObservableObject {
     /// Add a Plex Live TV source
     func addPlexSource(provider: any LiveTVProvider) async {
         providers[provider.sourceId] = provider
-        // Note: Plex sources are recreated from PlexAuthManager on launch, not persisted here
+        saveSources()
         await updateSourceInfo()
         print("📺 LiveTVDataStore: Added Plex Live TV source")
     }
@@ -207,8 +207,25 @@ class LiveTVDataStore: ObservableObject {
                     print("📺 LiveTVDataStore: Restored M3U source '\(config.name)'")
                 }
 
+            case "plex":
+                // Restore Plex source using PlexAuthManager's saved credentials
+                if let serverURL = config.baseURL {
+                    let authManager = PlexAuthManager.shared
+                    if let authToken = authManager.authToken {
+                        let serverName = authManager.savedServerName ?? "Plex"
+                        let provider = PlexLiveTVProvider(
+                            serverURL: serverURL,
+                            authToken: authToken,
+                            serverName: serverName
+                        )
+                        providers[config.id] = provider
+                        print("📺 LiveTVDataStore: Restored Plex Live TV source '\(config.name)'")
+                    } else {
+                        print("📺 LiveTVDataStore: Skipping Plex source - not authenticated")
+                    }
+                }
+
             default:
-                // Plex sources are handled separately via PlexAuthManager
                 break
             }
         }
@@ -250,8 +267,16 @@ class LiveTVDataStore: ObservableObject {
                 }
 
             case .plex:
-                // Plex sources are recreated from PlexAuthManager, not persisted here
-                break
+                if let plexProvider = provider as? PlexLiveTVProvider {
+                    configs.append(SourceConfiguration(
+                        id: id,
+                        type: "plex",
+                        name: provider.displayName,
+                        baseURL: plexProvider.serverURL,
+                        m3uURL: nil,
+                        epgURL: nil
+                    ))
+                }
             }
         }
 
@@ -431,10 +456,16 @@ class LiveTVDataStore: ObservableObject {
             // Group channels by source
             let channelsBySource = Dictionary(grouping: channels, by: { $0.sourceId })
 
+            print("📺 LiveTVDataStore: EPG fetch - channel sourceIds: \(Array(channelsBySource.keys))")
+            print("📺 LiveTVDataStore: EPG fetch - provider keys: \(Array(providers.keys))")
+
             // Fetch EPG from each provider
             await withTaskGroup(of: (String, Result<[String: [UnifiedProgram]], Error>).self) { group in
                 for (sourceId, sourceChannels) in channelsBySource {
-                    guard let provider = providers[sourceId] else { continue }
+                    guard let provider = providers[sourceId] else {
+                        print("📺 LiveTVDataStore: ⚠️ No provider found for sourceId: \(sourceId)")
+                        continue
+                    }
 
                     group.addTask {
                         do {

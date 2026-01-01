@@ -11,42 +11,39 @@ import Combine
 import GameController
 #endif
 
-// MARK: - Hold Detection Helper
+// MARK: - Simple Remote Input Handler
 
-/// Detects tap vs hold for left/right navigation on tvOS remote using GameController framework.
-/// Only responds to physical clicks (buttonA), not capacitive touches on the touchpad.
+#if os(tvOS)
+/// Simplified remote input detection using GameController.
+/// Reads dpad position synchronously when button is pressed to avoid race conditions.
 @MainActor
-final class RemoteHoldDetector: ObservableObject {
-    private var pressStartTime: Date?
-    private var pressDirection: Bool?  // true = right, false = left
+final class RemoteInputHandler: ObservableObject {
     private var holdTimer: Timer?
-    private(set) var isHolding = false
-    private(set) var isScrubbing = false  // True once scrubbing starts, until reset
-    var isEnabled = true  // Set to false to let SwiftUI handle focus navigation
+    private var clickedDirection: Bool?  // direction when click started
+    private var currentDpadDirection: Bool?  // current finger position (just tracking)
+    private var isButtonDown = false  // true while buttonA is pressed
+    private let holdThreshold: TimeInterval = 0.4
 
-    private let holdThreshold: TimeInterval = 0.4  // How long before it becomes a hold
+    // Check viewModel's scrubbing state (single source of truth)
+    var isScrubbingCheck: (() -> Bool)?
 
-    var onTap: ((Bool) -> Void)?  // forward: Bool
-    var onHoldStart: ((Bool) -> Void)?  // forward: Bool (called once when hold detected)
-    var onSpeedTap: ((Bool) -> Void)?  // forward: Bool (called for taps while scrubbing)
+    var onTap: ((Bool) -> Void)?           // forward: Bool
+    var onScrubStart: ((Bool) -> Void)?    // forward: Bool
+    var onSpeedChange: ((Bool) -> Void)?   // forward: Bool
+    var onScrubConfirm: (() -> Void)?
+    var onScrubCancel: (() -> Void)?
 
-    #if os(tvOS)
     private var controllerObserver: NSObjectProtocol?
 
-    /// Current dpad position (capacitive touch) - used to determine direction when clicking
-    private var currentDpadX: Float = 0
-    /// Last significant direction detected (persists until finger is lifted from touchpad)
-    private var lastSignificantDirection: Bool? = nil  // true = right, false = left, nil = center
+    private var isScrubbing: Bool {
+        isScrubbingCheck?() ?? false
+    }
 
     func startMonitoring() {
-        print("🎮 [GC] Starting GameController monitoring")
-
-        // Set up existing controllers
         for controller in GCController.controllers() {
             setupController(controller)
         }
 
-        // Watch for new controllers
         controllerObserver = NotificationCenter.default.addObserver(
             forName: .GCControllerDidConnect,
             object: nil,
@@ -59,200 +56,128 @@ final class RemoteHoldDetector: ObservableObject {
     }
 
     func stopMonitoring() {
-        print("🎮 [GC] Stopping GameController monitoring")
-        clearControllerHandlers()
+        for controller in GCController.controllers() {
+            controller.microGamepad?.dpad.valueChangedHandler = nil
+            controller.microGamepad?.buttonA.pressedChangedHandler = nil
+        }
         if let observer = controllerObserver {
             NotificationCenter.default.removeObserver(observer)
             controllerObserver = nil
         }
         holdTimer?.invalidate()
-    }
-
-    func pauseMonitoring() {
-        print("🎮 [GC] Pausing GameController monitoring")
-        clearControllerHandlers()
-        isEnabled = false
-    }
-
-    func resumeMonitoring() {
-        print("🎮 [GC] Resuming GameController monitoring")
-        for controller in GCController.controllers() {
-            setupController(controller)
-        }
-        isEnabled = true
-    }
-
-    private func clearControllerHandlers() {
-        for controller in GCController.controllers() {
-            controller.microGamepad?.dpad.valueChangedHandler = nil
-            controller.microGamepad?.buttonA.pressedChangedHandler = nil
-            controller.extendedGamepad?.dpad.valueChangedHandler = nil
-        }
+        holdTimer = nil
     }
 
     private func setupController(_ controller: GCController) {
-        print("🎮 [GC] Setting up controller: \(controller.vendorName ?? "Unknown")")
+        guard let micro = controller.microGamepad else { return }
+        micro.reportsAbsoluteDpadValues = true
 
-        // Use microGamepad for Siri Remote
-        if let micro = controller.microGamepad {
-            micro.reportsAbsoluteDpadValues = true
+        let threshold: Float = 0.3
 
-            // Track dpad position (capacitive touch) - this tells us WHERE the finger is
-            micro.dpad.valueChangedHandler = { [weak self] (dpad, xValue, yValue) in
-                Task { @MainActor [weak self] in
-                    guard let self = self else { return }
-                    self.currentDpadX = xValue
+        // Track dpad position (just stores where finger is, no action)
+        micro.dpad.valueChangedHandler = { [weak self] (dpad, xValue, yValue) in
+            guard let self else { return }
 
-                    // Track last significant direction (for click detection)
-                    // Direction persists until finger is clearly lifted (centered position)
-                    let threshold: Float = 0.3
-                    if xValue > threshold {
-                        self.lastSignificantDirection = true  // right
-                    } else if xValue < -threshold {
-                        self.lastSignificantDirection = false  // left
-                    } else if abs(xValue) < 0.15 && abs(yValue) < 0.15 {
-                        // Only clear when truly at rest position (finger lifted)
-                        self.lastSignificantDirection = nil
-                        // Note: Scrubbing continues until select/play is pressed or up/down cancels
-                    }
-                    // Values between 0.15 and threshold are ambiguous - keep previous direction
-                }
+            let dir: Bool? = if xValue > threshold {
+                true  // right
+            } else if xValue < -threshold {
+                false  // left
+            } else {
+                nil  // center
             }
 
-            // buttonA is the physical click on the touchpad - this is what we respond to
-            micro.buttonA.pressedChangedHandler = { [weak self] (button, value, pressed) in
-                Task { @MainActor [weak self] in
-                    self?.handleButtonA(pressed: pressed)
+            Task { @MainActor in
+                // Ignore dpad changes while button is pressed (click disrupts touch sensing)
+                guard !self.isButtonDown else { return }
+
+                if self.currentDpadDirection != dir {
+                    print("🎮 [Remote] Dpad: \(dir.map { $0 ? "RIGHT" : "LEFT" } ?? "CENTER") (x=\(xValue))")
                 }
+                self.currentDpadDirection = dir
             }
-            print("🎮 [GC] MicroGamepad handlers set (dpad for direction, buttonA for click)")
         }
 
-        // Also try extendedGamepad for other controllers (game controllers, etc.)
-        if let extended = controller.extendedGamepad {
-            extended.dpad.valueChangedHandler = { [weak self] (dpad, xValue, yValue) in
-                Task { @MainActor [weak self] in
-                    self?.handleExtendedDpad(x: xValue, y: yValue)
+        // Handle buttonA click (physical press on touchpad)
+        micro.buttonA.pressedChangedHandler = { [weak self] (button, value, pressed) in
+            guard let self else { return }
+
+            Task { @MainActor in
+                if pressed {
+                    self.isButtonDown = true
+                    // Use tracked dpad direction (captured before click disrupted sensing)
+                    self.handleClickDown(direction: self.currentDpadDirection)
+                } else {
+                    self.isButtonDown = false
+                    self.handleClickUp()
                 }
             }
-            print("🎮 [GC] ExtendedGamepad D-pad handler set")
         }
     }
 
-    /// Handle physical click on the Siri Remote touchpad
-    private func handleButtonA(pressed: Bool) {
-        // When disabled, let SwiftUI handle all input (e.g., for post-video focus navigation)
-        guard isEnabled else { return }
+    private func handleClickDown(direction: Bool?) {
+        print("🎮 [Remote] Click DOWN, direction: \(direction.map { $0 ? "RIGHT" : "LEFT" } ?? "CENTER")")
 
-        let threshold: Float = 0.3  // How far left/right counts as directional
-
-        if pressed {
-            // Button pressed - check if it's a directional click
-            // First check current position, then fall back to last known direction
-            // (handles case where dpad briefly reports center during the physical click action)
-            if currentDpadX > threshold {
-                handleDirectionPressed(forward: true)
-            } else if currentDpadX < -threshold {
-                handleDirectionPressed(forward: false)
-            } else if let direction = lastSignificantDirection {
-                // Use last known direction - it persists until finger is lifted
-                handleDirectionPressed(forward: direction)
+        guard let forward = direction else {
+            // Center click - handled by SwiftUI (play/pause) or confirm scrub
+            if isScrubbing {
+                print("🎮 [Remote] Center click confirms scrub")
+                holdTimer?.invalidate()
+                holdTimer = nil
+                onScrubConfirm?()
             }
-            // Center click with finger lifted - not a directional action
-        } else {
-            // Button released
-            handleDirectionReleased()
-        }
-    }
-
-    /// Handle extended gamepad dpad (for game controllers that have physical dpad buttons)
-    private func handleExtendedDpad(x: Float, y: Float) {
-        guard isEnabled else { return }
-
-        let threshold: Float = 0.5
-
-        if x > threshold {
-            handleDirectionPressed(forward: true)
-        } else if x < -threshold {
-            handleDirectionPressed(forward: false)
-        } else {
-            handleDirectionReleased()
-        }
-    }
-
-    private func handleDirectionPressed(forward: Bool) {
-        // If already pressing in same direction, ignore
-        if pressDirection == forward { return }
-
-        // If pressing opposite direction, treat as release first
-        if pressDirection != nil {
-            handleDirectionReleased()
-        }
-
-        // If already scrubbing, taps immediately increase speed (no hold detection needed)
-        if isScrubbing {
-            print("🎮 [GC] Speed tap while scrubbing: \(forward ? "RIGHT" : "LEFT")")
-            pressDirection = forward
-            onSpeedTap?(forward)
             return
         }
 
-        print("🎮 [GC] Direction CLICKED: \(forward ? "RIGHT" : "LEFT")")
-        pressStartTime = Date()
-        pressDirection = forward
-        isHolding = false
-
-        // Start hold timer - after threshold, it becomes a hold (starts scrubbing at 1x)
-        holdTimer?.invalidate()
-        holdTimer = Timer.scheduledTimer(withTimeInterval: holdThreshold, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self = self, self.pressDirection != nil else { return }
-                self.isHolding = true
-                self.isScrubbing = true
-                print("🎮 [GC] Hold detected - starting scrub \(forward ? "forward" : "backward") at 1x")
-                self.onHoldStart?(forward)
+        if isScrubbing {
+            // Already scrubbing - click changes speed
+            print("🎮 [Remote] Speed change while scrubbing")
+            onSpeedChange?(forward)
+        } else {
+            // Start hold detection
+            clickedDirection = forward
+            holdTimer?.invalidate()
+            holdTimer = Timer.scheduledTimer(withTimeInterval: holdThreshold, repeats: false) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.clickedDirection != nil else { return }
+                    print("🎮 [Remote] Hold detected - starting scrub")
+                    self.onScrubStart?(forward)
+                }
             }
         }
     }
 
-    private func handleDirectionReleased() {
-        guard let forward = pressDirection else { return }
+    private func handleClickUp() {
+        print("🎮 [Remote] Click UP, clickedDirection: \(clickedDirection.map { $0 ? "RIGHT" : "LEFT" } ?? "nil")")
 
-        print("🎮 [GC] Click released, wasHolding: \(isHolding), isScrubbing: \(isScrubbing)")
-        holdTimer?.invalidate()
-        holdTimer = nil
+        // If hold timer is still running, it was a tap (quick click)
+        if let timer = holdTimer, timer.isValid {
+            timer.invalidate()
+            holdTimer = nil
 
-        if isHolding || isScrubbing {
-            // Was a hold or speed tap - scrubbing remains active
-            print("🎮 [GC] Scrubbing active at current speed")
-        } else {
-            // Was a tap (not scrubbing)
-            print("🎮 [GC] Tap detected - seeking \(forward ? "+10s" : "-10s")")
-            onTap?(forward)
+            if let forward = clickedDirection, !isScrubbing {
+                print("🎮 [Remote] Tap detected - seeking \(forward ? "+10s" : "-10s")")
+                onTap?(forward)
+            }
         }
-
-        pressStartTime = nil
-        pressDirection = nil
-        isHolding = false  // Reset for next press, but keep isScrubbing
+        clickedDirection = nil
     }
-    #endif
 
     func reset() {
-        #if os(tvOS)
         holdTimer?.invalidate()
         holdTimer = nil
-        #endif
-        pressStartTime = nil
-        pressDirection = nil
-        isHolding = false
-        isScrubbing = false
+        clickedDirection = nil
+        currentDpadDirection = nil
+        isButtonDown = false
     }
 }
+#endif
 
 struct UniversalPlayerView: View {
     @StateObject private var viewModel: UniversalPlayerViewModel
     @StateObject private var focusScopeManager = FocusScopeManager()
-    @StateObject private var holdDetector = RemoteHoldDetector()
+    #if os(tvOS)
+    @StateObject private var remoteInput = RemoteInputHandler()
+    #endif
     @Environment(\.dismiss) private var dismiss
 
     @State private var hasStartedPlayback = false
@@ -323,26 +248,26 @@ struct UniversalPlayerView: View {
         }
         .onAppear {
             #if os(tvOS)
-            // Configure hold detector callbacks for tap vs hold on left/right
-            holdDetector.onTap = { [weak viewModel] forward in
+            // Wire up remote input callbacks
+            remoteInput.isScrubbingCheck = { [weak viewModel] in
+                viewModel?.isScrubbing ?? false
+            }
+            remoteInput.onTap = { [weak viewModel] forward in
                 guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
                 Task { await vm.seekRelative(by: forward ? 10 : -10) }
                 vm.showControlsTemporarily()
             }
-            holdDetector.onHoldStart = { [weak viewModel] forward in
+            remoteInput.onScrubStart = { [weak viewModel] forward in
                 guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
-                // Start scrubbing at 1x - additional taps will increase speed
                 vm.scrubInDirection(forward: forward)
                 vm.showControlsTemporarily()
             }
-            holdDetector.onSpeedTap = { [weak viewModel] forward in
+            remoteInput.onSpeedChange = { [weak viewModel] forward in
                 guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
-                // Increase scrub speed (or change direction if tapping opposite way)
                 vm.scrubInDirection(forward: forward)
                 vm.showControlsTemporarily()
             }
-            // Start GameController monitoring for D-pad
-            holdDetector.startMonitoring()
+            remoteInput.startMonitoring()
             #endif
         }
         .task {
@@ -356,9 +281,9 @@ struct UniversalPlayerView: View {
             viewModel.stopPlayback()
             reportFinalProgress()
             #if os(tvOS)
-            holdDetector.stopMonitoring()
+            remoteInput.stopMonitoring()
+            remoteInput.reset()
             #endif
-            holdDetector.reset()
             // Deactivate player scope when leaving
             focusScopeManager.deactivate()
             // Notify that Plex data should be refreshed (watch progress may have changed)
@@ -395,15 +320,8 @@ struct UniversalPlayerView: View {
         .onChange(of: viewModel.postVideoState) { _, state in
             if state != .hidden {
                 focusScopeManager.activate(.postVideo)
-                #if os(tvOS)
-                // Pause GameController monitoring so SwiftUI can handle focus navigation
-                holdDetector.pauseMonitoring()
-                #endif
             } else {
                 focusScopeManager.deactivate()
-                #if os(tvOS)
-                holdDetector.resumeMonitoring()
-                #endif
             }
         }
     }
@@ -790,7 +708,7 @@ struct UniversalPlayerView: View {
             // Show info panel (cancels any active scrubbing)
             if viewModel.isScrubbing {
                 viewModel.cancelScrub()
-                holdDetector.reset()
+                remoteInput.reset()
             }
             if !viewModel.showInfoPanel {
                 viewModel.resetSettingsPanel()
@@ -807,7 +725,7 @@ struct UniversalPlayerView: View {
             // Cancel scrubbing on up
             if viewModel.isScrubbing {
                 viewModel.cancelScrub()
-                holdDetector.reset()
+                remoteInput.reset()
             }
         @unknown default:
             break
@@ -823,7 +741,7 @@ struct UniversalPlayerView: View {
         if viewModel.isScrubbing {
             // Commit scrub position
             Task { await viewModel.commitScrub() }
-            holdDetector.reset()
+            remoteInput.reset()
         } else {
             // Normal play/pause toggle
             viewModel.togglePlayPause()

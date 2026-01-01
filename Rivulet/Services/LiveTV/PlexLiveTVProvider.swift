@@ -17,7 +17,7 @@ actor PlexLiveTVProvider: LiveTVProvider {
     let sourceId: String
     let displayName: String
 
-    private let serverURL: String
+    let serverURL: String  // Exposed for persistence
     private let authToken: String
     private let networkManager = PlexNetworkManager.shared
 
@@ -191,24 +191,47 @@ actor PlexLiveTVProvider: LiveTVProvider {
             }
         )
 
+        print("📺 PlexLiveTVProvider: Channel lookup keys: \(Array(ratingKeyToUnifiedId.keys))")
+
         // Convert to UnifiedProgram
         var unifiedEPG: [String: [UnifiedProgram]] = [:]
+        var matchedChannels = 0
+        var unmatchedChannels: [String] = []
 
         for guideChannel in guideChannels {
-            guard let ratingKey = guideChannel.ratingKey,
-                  let unifiedChannelId = ratingKeyToUnifiedId[ratingKey],
-                  let programs = guideChannel.Metadata else {
+            guard let ratingKey = guideChannel.ratingKey else {
+                print("📺 PlexLiveTVProvider: Guide channel missing ratingKey")
                 continue
             }
 
-            let unifiedPrograms = programs.compactMap { plexProgram in
-                plexProgram.toUnifiedProgram(unifiedChannelId: unifiedChannelId)
+            guard let unifiedChannelId = ratingKeyToUnifiedId[ratingKey] else {
+                unmatchedChannels.append(ratingKey)
+                continue
             }
+
+            guard let programs = guideChannel.Metadata else {
+                continue
+            }
+
+            matchedChannels += 1
+
+            let unifiedPrograms = programs.compactMap { plexProgram -> UnifiedProgram? in
+                let result = plexProgram.toUnifiedProgram(unifiedChannelId: unifiedChannelId)
+                if result == nil {
+                    print("📺 PlexLiveTVProvider: ⚠️ Failed to convert program '\(plexProgram.title)' - beginsAt: \(plexProgram.beginsAt as Any), endsAt: \(plexProgram.endsAt as Any)")
+                }
+                return result
+            }
+
+            print("📺 PlexLiveTVProvider: Channel \(ratingKey) - \(programs.count) programs, \(unifiedPrograms.count) converted")
 
             if !unifiedPrograms.isEmpty {
                 unifiedEPG[unifiedChannelId] = unifiedPrograms
             }
         }
+
+        print("📺 PlexLiveTVProvider: EPG matching complete - matched \(matchedChannels) channels, unmatched: \(unmatchedChannels)")
+        print("📺 PlexLiveTVProvider: Returning EPG for \(unifiedEPG.count) channels with \(unifiedEPG.values.reduce(0) { $0 + $1.count }) total programs")
 
         // Update cache
         cachedEPG = unifiedEPG

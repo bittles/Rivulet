@@ -16,11 +16,14 @@ struct TVSidebarView: View {
     @StateObject private var nestedNavState = NestedNavigationState()
     @StateObject private var focusScopeManager = FocusScopeManager()
     @StateObject private var deepLinkHandler = DeepLinkHandler.shared
+    @AppStorage("combineLiveTVSources") private var combineLiveTVSources = true
     @State private var selectedDestination: TVDestination = .home
     @State private var selectedLibraryKey: String?
+    @State private var selectedLiveTVSourceId: String?  // nil = all sources, non-nil = specific source
     @FocusState private var sidebarFocusedItem: String?  // Track focused item in sidebar
     @State private var pendingDestination: TVDestination?
     @State private var pendingLibraryKey: String?
+    @State private var pendingLiveTVSourceId: String?
 
     /// Computed property for sidebar visibility based on active scope
     private var isSidebarVisible: Bool {
@@ -258,14 +261,29 @@ struct TVSidebarView: View {
                             if liveTVDataStore.hasConfiguredSources {
                                 sectionHeader("LIVE TV")
 
-                                FocusableSidebarRow(
-                                    id: "liveTV",
-                                    icon: "tv.and.mediabox",
-                                    title: "Channels",
-                                    isSelected: selectedDestination == .liveTV,
-                                    onSelect: { queueNavigation(destination: .liveTV, libraryKey: nil) },
-                                    focusedItem: $sidebarFocusedItem
-                                )
+                                if combineLiveTVSources {
+                                    // Combined: Single "Channels" entry for all sources
+                                    FocusableSidebarRow(
+                                        id: "liveTV",
+                                        icon: "tv.and.mediabox",
+                                        title: "Channels",
+                                        isSelected: selectedDestination == .liveTV && selectedLiveTVSourceId == nil,
+                                        onSelect: { queueLiveTVNavigation(sourceId: nil) },
+                                        focusedItem: $sidebarFocusedItem
+                                    )
+                                } else {
+                                    // Separate: Individual entry for each source
+                                    ForEach(liveTVDataStore.sources) { source in
+                                        FocusableSidebarRow(
+                                            id: "liveTV:\(source.id)",
+                                            icon: iconForSourceType(source.sourceType),
+                                            title: source.displayName.replacingOccurrences(of: " Live TV", with: ""),
+                                            isSelected: selectedDestination == .liveTV && selectedLiveTVSourceId == source.id,
+                                            onSelect: { queueLiveTVNavigation(sourceId: source.id) },
+                                            focusedItem: $sidebarFocusedItem
+                                        )
+                                    }
+                                }
                             }
 
                             Spacer(minLength: 60)
@@ -320,7 +338,11 @@ struct TVSidebarView: View {
         switch selectedDestination {
         case .search: return "search"
         case .home: return "home"
-        case .liveTV: return "liveTV"
+        case .liveTV:
+            if let sourceId = selectedLiveTVSourceId {
+                return "liveTV:\(sourceId)"
+            }
+            return "liveTV"
         case .settings: return "settings"
         }
     }
@@ -357,7 +379,7 @@ struct TVSidebarView: View {
                         welcomeView
                     }
                 case .liveTV:
-                    LiveTVContainerView()
+                    LiveTVContainerView(sourceIdFilter: selectedLiveTVSourceId)
                 case .settings:
                     SettingsView()
                 }
@@ -391,6 +413,15 @@ struct TVSidebarView: View {
     private func queueNavigation(destination: TVDestination, libraryKey: String?) {
         pendingDestination = destination
         pendingLibraryKey = libraryKey
+        pendingLiveTVSourceId = nil
+        closeSidebar()
+    }
+
+    /// Queue Live TV navigation with optional source filter
+    private func queueLiveTVNavigation(sourceId: String?) {
+        pendingDestination = .liveTV
+        pendingLibraryKey = nil
+        pendingLiveTVSourceId = sourceId
         closeSidebar()
     }
 
@@ -409,13 +440,14 @@ struct TVSidebarView: View {
         case .search:
             navigateToSearch()
         case .liveTV:
-            navigateToLiveTV()
+            navigateToLiveTV(sourceId: pendingLiveTVSourceId)
         case .settings:
             navigateToSettings()
         }
 
         pendingDestination = nil
         pendingLibraryKey = nil
+        pendingLiveTVSourceId = nil
     }
 
     private func openSidebar() {
@@ -470,9 +502,18 @@ struct TVSidebarView: View {
         selectedDestination = .home
     }
 
-    private func navigateToLiveTV() {
+    private func navigateToLiveTV(sourceId: String? = nil) {
         selectedDestination = .liveTV
         selectedLibraryKey = nil
+        selectedLiveTVSourceId = sourceId
+    }
+
+    private func iconForSourceType(_ sourceType: LiveTVSourceType) -> String {
+        switch sourceType {
+        case .plex: return "play.rectangle.fill"
+        case .dispatcharr: return "antenna.radiowaves.left.and.right"
+        case .genericM3U: return "list.bullet.rectangle"
+        }
     }
 
     private func navigateToSettings() {

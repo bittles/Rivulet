@@ -8,16 +8,27 @@
 import SwiftUI
 
 struct ChannelListView: View {
+    /// Optional source ID to filter channels. nil = show all sources.
+    var sourceIdFilter: String?
+
     @StateObject private var dataStore = LiveTVDataStore.shared
     @State private var searchText = ""
     @State private var selectedChannel: UnifiedChannel?
 
+    /// Channels filtered by source (if specified)
+    private var sourceChannels: [UnifiedChannel] {
+        if let sourceId = sourceIdFilter {
+            return dataStore.channels.filter { $0.sourceId == sourceId }
+        }
+        return dataStore.channels
+    }
+
     private var filteredChannels: [UnifiedChannel] {
         if searchText.isEmpty {
-            return dataStore.channels
+            return sourceChannels
         }
         let query = searchText.lowercased()
-        return dataStore.channels.filter { channel in
+        return sourceChannels.filter { channel in
             channel.name.lowercased().contains(query) ||
             (channel.callSign?.lowercased().contains(query) ?? false) ||
             (channel.channelNumber.map { String($0).contains(query) } ?? false)
@@ -28,9 +39,9 @@ struct ChannelListView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if dataStore.isLoadingChannels && dataStore.channels.isEmpty {
+            if dataStore.isLoadingChannels && sourceChannels.isEmpty {
                 loadingView
-            } else if dataStore.channels.isEmpty {
+            } else if sourceChannels.isEmpty {
                 emptyView
             } else {
                 channelGrid

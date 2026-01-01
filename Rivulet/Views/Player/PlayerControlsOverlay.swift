@@ -583,7 +583,7 @@ private struct TransportProgressBar: View {
 
                     // Marker highlights (on top of progress bar, only show unplayed portion)
                     if showMarkers && duration > 0 {
-                        ForEach(markers) { marker in
+                        ForEach(Array(markers.enumerated()), id: \.offset) { _, marker in
                             let startProgress = max(0, marker.startTimeSeconds / duration)
                             let endProgress = min(1, marker.endTimeSeconds / duration)
                             // Only show if marker has valid range

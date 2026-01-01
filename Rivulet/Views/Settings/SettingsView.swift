@@ -64,6 +64,7 @@ struct SettingsView: View {
     @AppStorage("liveTVPlayerEngine") private var liveTVPlayerEngineRaw = LiveTVPlayerEngine.mpv.rawValue
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
     @AppStorage("allowFourStreams") private var allowFourStreams = false
+    @AppStorage("combineLiveTVSources") private var combineLiveTVSources = true
     @AppStorage("showSkipButton") private var showSkipButton = true
     @AppStorage("autoSkipIntro") private var autoSkipIntro = false
     @AppStorage("autoSkipCredits") private var autoSkipCredits = false
@@ -210,6 +211,14 @@ struct SettingsView: View {
 
                         // Live TV section
                         SettingsSection(title: "Live TV") {
+                            SettingsToggleRow(
+                                icon: "square.stack.3d.down.right",
+                                iconColor: .purple,
+                                title: "Combine Sources",
+                                subtitle: "Show all sources in one Channels view, or separate sidebar entries",
+                                isOn: $combineLiveTVSources
+                            )
+
                             SettingsPickerRow(
                                 icon: "tv",
                                 iconColor: .green,

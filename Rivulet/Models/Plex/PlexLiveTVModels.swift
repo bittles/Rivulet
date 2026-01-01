@@ -67,6 +67,7 @@ struct PlexLiveTVChannel: Codable, Identifiable, Sendable {
     let channelThumb: String?
     let channelTitle: String?
     let channelNumber: String?
+    let streamURL: String?  // HDHomeRun stream URL
 
     var id: String { ratingKey }
 
@@ -185,6 +186,14 @@ struct PlexDVR: Codable, Sendable {
     let status: String?
     let lineup: String?
     let epgIdentifier: String?
+    let Device: [PlexDVRDevice]?
+}
+
+struct PlexDVRDevice: Codable, Sendable {
+    let key: String?
+    let uuid: String?
+    let uri: String?
+    let parentID: Int?
 }
 
 // MARK: - Converters
@@ -198,16 +207,22 @@ extension PlexLiveTVChannel {
             channelId: ratingKey
         )
 
-        // Build the stream URL for this channel
-        let streamURL = buildPlexLiveTVStreamURL(
-            serverURL: serverURL,
-            authToken: authToken,
-            channelKey: key
-        )
+        // Use the HDHomeRun stream URL if available
+        let streamURLValue: URL? = {
+            if let hdhrURL = streamURL {
+                return URL(string: hdhrURL)
+            }
+            return nil
+        }()
 
-        // Build logo URL
+        // Build logo URL - handle both external URLs and Plex paths
         let logoURL: URL? = {
             guard let thumb = channelThumb ?? thumb else { return nil }
+            // Check if it's already an absolute URL (external)
+            if thumb.hasPrefix("http://") || thumb.hasPrefix("https://") {
+                return URL(string: thumb)
+            }
+            // Otherwise it's a Plex server path
             return URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(authToken)")
         }()
 
@@ -219,23 +234,11 @@ extension PlexLiveTVChannel {
             name: channelTitle ?? title,
             callSign: channelCallSign ?? channelShortTitle,
             logoURL: logoURL,
-            streamURL: streamURL,
+            streamURL: streamURLValue,
             tvgId: channelIdentifier ?? ratingKey,
             groupTitle: nil,
             isHD: isHD
         )
-    }
-
-    private func buildPlexLiveTVStreamURL(serverURL: String, authToken: String, channelKey: String) -> URL {
-        // Plex Live TV uses HLS streaming
-        var components = URLComponents(string: "\(serverURL)\(channelKey)")!
-        components.queryItems = [
-            URLQueryItem(name: "X-Plex-Token", value: authToken),
-            URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
-            URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform),
-            URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName)
-        ]
-        return components.url!
     }
 }
 

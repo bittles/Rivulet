@@ -43,7 +43,7 @@ struct UnifiedChannel: Identifiable, Hashable, Sendable {
     let name: String
     let callSign: String?
     let logoURL: URL?
-    let streamURL: URL
+    let streamURL: URL?
     let tvgId: String?
     let groupTitle: String?
     let isHD: Bool
@@ -56,7 +56,7 @@ struct UnifiedChannel: Identifiable, Hashable, Sendable {
         name: String,
         callSign: String? = nil,
         logoURL: URL? = nil,
-        streamURL: URL,
+        streamURL: URL? = nil,
         tvgId: String? = nil,
         groupTitle: String? = nil,
         isHD: Bool = false

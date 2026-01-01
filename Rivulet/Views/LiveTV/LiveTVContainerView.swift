@@ -20,6 +20,9 @@ enum LiveTVLayout: String, CaseIterable, CustomStringConvertible {
 // MARK: - Live TV Container View
 
 struct LiveTVContainerView: View {
+    /// Optional source ID to filter channels. nil = show all sources.
+    var sourceIdFilter: String?
+
     @AppStorage("liveTVLayout") private var liveTVLayoutRaw = "Channels"
     @StateObject private var dataStore = LiveTVDataStore.shared
 
@@ -31,9 +34,9 @@ struct LiveTVContainerView: View {
         Group {
             switch layout {
             case .channels:
-                ChannelListView()
+                ChannelListView(sourceIdFilter: sourceIdFilter)
             case .guide:
-                GuideLayoutView()
+                GuideLayoutView(sourceIdFilter: sourceIdFilter)
             }
         }
         .task {
