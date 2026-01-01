@@ -116,7 +116,9 @@ struct PlexAuthView: View {
                 LazyVStack(spacing: 12) {
                     ForEach(servers, id: \.clientIdentifier) { server in
                         ServerRowButton(server: server) {
-                            authManager.selectServer(server)
+                            Task {
+                                await authManager.selectServer(server)
+                            }
                         }
                     }
                 }

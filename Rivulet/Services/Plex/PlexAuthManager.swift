@@ -60,6 +60,7 @@ class PlexAuthManager: ObservableObject {
 
     private let networkManager = PlexNetworkManager.shared
     private var pollingTask: Task<Void, Never>?
+    private var serverSelectionTask: Task<Bool, Never>?
     private let userDefaults = UserDefaults.standard
 
     // UserDefaults keys
@@ -127,11 +128,16 @@ class PlexAuthManager: ObservableObject {
     }
 
     /// Select a server from the list
-    func selectServer(_ server: PlexDevice) {
+    /// Returns true if connection was successful, false otherwise
+    @discardableResult
+    func selectServer(_ server: PlexDevice) async -> Bool {
+        // Cancel any in-progress server selection
+        serverSelectionTask?.cancel()
+
         selectedServer = server
 
-        // Find the best working connection
-        Task {
+        // Create a tracked task for the connection test
+        let task = Task { @MainActor () -> Bool in
             if let workingURL = await findBestConnection(for: server) {
                 selectedServerURL = workingURL
                 userDefaults.set(selectedServerURL, forKey: serverURLKey)
@@ -140,13 +146,18 @@ class PlexAuthManager: ObservableObject {
                 connectionError = nil
                 state = .authenticated
                 print("🔐 PlexAuthManager: Selected connection: \(workingURL)")
+                return true
             } else {
                 isConnected = false
                 connectionError = "Could not connect to server. Check your network."
                 state = .error(message: "Could not connect to server. Check your network.")
-                scheduleErrorDismissal()
+                // Don't auto-dismiss - let user see the error and retry
+                return false
             }
         }
+
+        serverSelectionTask = task
+        return await task.value
     }
 
     /// Find the best working connection for a server
@@ -318,7 +329,8 @@ class PlexAuthManager: ObservableObject {
             do {
                 let servers = try await networkManager.getServers(authToken: token)
                 if servers.count == 1 {
-                    selectServer(servers[0])
+                    // Await server selection to ensure URL is set before returning
+                    await selectServer(servers[0])
                 } else if servers.count > 1 {
                     state = .selectingServer(servers: servers)
                 }
@@ -433,8 +445,8 @@ class PlexAuthManager: ObservableObject {
                 state = .error(message: "No Plex servers found on your account")
                 scheduleErrorDismissal()
             } else if servers.count == 1 {
-                // Auto-select if only one server
-                selectServer(servers[0])
+                // Auto-select if only one server - await to ensure connection is established
+                await selectServer(servers[0])
             } else {
                 // Show server selection
                 state = .selectingServer(servers: servers)

@@ -9,6 +9,16 @@ This project has fairly *opinionated* designs and logic, with a few focal points
 - **Vertical Scrolling** - I have never liked scrolling sideways. I use horizontal scrolling for some of the "infinite" lists, but use vertical scrolling whenever practical.
 - **Apple-esque** - I like most of Apple's designs. I want this to feel *somewhat* native.
 
+## Screenshots
+
+| Home | Detail |
+|------|--------|
+| ![Home](Screenshots/home.png) | ![Detail](Screenshots/detail.png) |
+
+| Seasons & Episodes | Sidebar |
+|--------------------|---------|
+| ![Seasons](Screenshots/seasons.png) | ![Sidebar](Screenshots/sidebar.png) |
+
 <a href="https://testflight.apple.com/join/TcCsF5As">
   <img src="https://developer.apple.com/assets/elements/icons/testflight/testflight-64x64_2x.png" alt="TestFlight" height="50">
   <br>
