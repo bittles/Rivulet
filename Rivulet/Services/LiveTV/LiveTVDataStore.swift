@@ -211,7 +211,7 @@ class LiveTVDataStore: ObservableObject {
                 // Restore Plex source using PlexAuthManager's saved credentials
                 if let serverURL = config.baseURL {
                     let authManager = PlexAuthManager.shared
-                    if let authToken = authManager.authToken {
+                    if let authToken = authManager.selectedServerToken {
                         let serverName = authManager.savedServerName ?? "Plex"
                         let provider = PlexLiveTVProvider(
                             serverURL: serverURL,

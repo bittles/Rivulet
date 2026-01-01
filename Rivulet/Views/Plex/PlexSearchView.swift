@@ -459,7 +459,7 @@ struct PlexSearchView: View {
     }
 
     private var authToken: String {
-        authManager.authToken ?? ""
+        authManager.selectedServerToken ?? ""
     }
 
     private func scheduleSearch(for rawQuery: String) {
@@ -516,7 +516,7 @@ struct PlexSearchView: View {
 
     private func performSearch(query: String, token: Int) async {
         guard let serverURL = authManager.selectedServerURL,
-              let authToken = authManager.authToken else {
+              let authToken = authManager.selectedServerToken else {
             return
         }
 

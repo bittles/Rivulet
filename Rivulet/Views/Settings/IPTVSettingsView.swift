@@ -91,7 +91,7 @@ struct IPTVSettingsView: View {
     private func checkPlexDVRAvailability() async {
         guard authManager.isAuthenticated,
               let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               !hasPlexLiveTVSource else {
             plexDVRAvailable = false
             return
@@ -114,7 +114,7 @@ struct IPTVSettingsView: View {
 
     private func addPlexLiveTV() {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let serverName = authManager.savedServerName else {
             plexAddError = "Plex server not connected"
             return

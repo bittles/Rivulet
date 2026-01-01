@@ -201,7 +201,7 @@ struct PlexHomeView: View {
                 do {
                     let metadata = try await PlexNetworkManager.shared.getMetadata(
                         serverURL: authManager.selectedServerURL ?? "",
-                        authToken: authManager.authToken ?? "",
+                        authToken: authManager.selectedServerToken ?? "",
                         ratingKey: ratingKey
                     )
                     await MainActor.run {
@@ -257,7 +257,7 @@ struct PlexHomeView: View {
                     HeroView(
                         item: hero,
                         serverURL: authManager.selectedServerURL ?? "",
-                        authToken: authManager.authToken ?? "",
+                        authToken: authManager.selectedServerToken ?? "",
                         focusTarget: $focusedItemId,
                         targetValue: "hero"
                     ) {
@@ -276,7 +276,7 @@ struct PlexHomeView: View {
                                 initialItems: items,
                                 hubKey: hub.key ?? hub.hubKey,
                                 serverURL: authManager.selectedServerURL ?? "",
-                                authToken: authManager.authToken ?? "",
+                                authToken: authManager.selectedServerToken ?? "",
                                 contextMenuSource: isContinueWatching ? .continueWatching : .other,
                                 onItemSelected: { item in
                                     selectedItem = item

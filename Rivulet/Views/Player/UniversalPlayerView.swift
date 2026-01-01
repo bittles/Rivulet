@@ -797,7 +797,7 @@ extension UniversalPlayerView {
         self.init(
             metadata: metadata,
             serverURL: authManager.selectedServerURL ?? "",
-            authToken: authManager.authToken ?? "",
+            authToken: authManager.selectedServerToken ?? "",
             startOffset: startOffset
         )
     }

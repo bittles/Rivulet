@@ -50,6 +50,11 @@ class PlexAuthManager: ObservableObject {
     @Published var selectedServer: PlexDevice?
     @Published var selectedServerURL: String?
 
+    /// The access token to use for the selected server
+    /// For shared/friend's servers, this is the server-specific accessToken
+    /// For owned servers, this falls back to the user's authToken
+    @Published var selectedServerToken: String?
+
     /// Whether we can currently reach the Plex server (separate from authentication)
     @Published var isConnected: Bool = true
 
@@ -68,6 +73,7 @@ class PlexAuthManager: ObservableObject {
     private let usernameKey = "plexUsername"
     private let serverURLKey = "selectedServerURL"
     private let serverNameKey = "selectedServerName"
+    private let serverTokenKey = "selectedServerToken"
 
     // MARK: - Initialization
 
@@ -77,8 +83,13 @@ class PlexAuthManager: ObservableObject {
         username = userDefaults.string(forKey: usernameKey)
         selectedServerURL = userDefaults.string(forKey: serverURLKey)
 
+        // Load server-specific token, fall back to user's auth token for owned servers
+        let savedServerToken = userDefaults.string(forKey: serverTokenKey)
+        selectedServerToken = savedServerToken ?? authToken
+
         print("🔐 PlexAuthManager: Initialized")
         print("🔐 PlexAuthManager: Token present: \(authToken != nil)")
+        print("🔐 PlexAuthManager: Server token present: \(selectedServerToken != nil)")
         print("🔐 PlexAuthManager: Username: \(username ?? "nil")")
         print("🔐 PlexAuthManager: Server URL: \(selectedServerURL ?? "nil")")
         print("🔐 PlexAuthManager: isAuthenticated: \(authToken != nil && selectedServerURL != nil)")
@@ -142,10 +153,21 @@ class PlexAuthManager: ObservableObject {
                 selectedServerURL = workingURL
                 userDefaults.set(selectedServerURL, forKey: serverURLKey)
                 userDefaults.set(server.name, forKey: serverNameKey)
+
+                // Save the correct token for this server
+                // For shared servers, use server-specific accessToken; for owned, use user's authToken
+                let tokenForServer = server.accessToken ?? authToken
+                selectedServerToken = tokenForServer
+                if let token = tokenForServer {
+                    userDefaults.set(token, forKey: serverTokenKey)
+                }
+
+                let isShared = server.owned == false
+                print("🔐 PlexAuthManager: Selected connection: \(workingURL) (shared: \(isShared))")
+
                 isConnected = true
                 connectionError = nil
                 state = .authenticated
-                print("🔐 PlexAuthManager: Selected connection: \(workingURL)")
                 return true
             } else {
                 isConnected = false
@@ -172,11 +194,18 @@ class PlexAuthManager: ObservableObject {
             return score1 > score2
         }
 
+        // For shared servers (not owned by user), use server-specific accessToken
+        let tokenToUse = server.accessToken
+        let isShared = server.owned == false
+
         print("🔐 PlexAuthManager: Testing \(sortedConnections.count) connections (filtered from \(server.connections.count))")
+        if isShared {
+            print("🔐 PlexAuthManager: Using server-specific token for shared server")
+        }
 
         for connection in sortedConnections {
             print("🔐 PlexAuthManager: Testing \(connection.uri)...")
-            if await testConnection(connection.uri) {
+            if await testConnection(connection.uri, serverToken: tokenToUse) {
                 print("🔐 PlexAuthManager: ✅ Connection works: \(connection.uri)")
                 return connection.uri
             } else {
@@ -187,7 +216,7 @@ class PlexAuthManager: ObservableObject {
         // If all filtered connections fail, try relay as last resort
         if let relayConnection = server.connections.first(where: { $0.relay }) {
             print("🔐 PlexAuthManager: Trying relay as fallback: \(relayConnection.uri)")
-            if await testConnection(relayConnection.uri) {
+            if await testConnection(relayConnection.uri, serverToken: tokenToUse) {
                 return relayConnection.uri
             }
         }
@@ -243,8 +272,11 @@ class PlexAuthManager: ObservableObject {
     }
 
     /// Test if a connection URL is reachable
-    private func testConnection(_ urlString: String) async -> Bool {
-        guard let token = authToken,
+    /// - Parameters:
+    ///   - urlString: The connection URL to test
+    ///   - serverToken: Server-specific access token (for shared servers), falls back to user's authToken
+    private func testConnection(_ urlString: String, serverToken: String? = nil) async -> Bool {
+        guard let token = serverToken ?? authToken,
               let url = URL(string: "\(urlString)/identity") else {
             return false
         }
@@ -285,6 +317,7 @@ class PlexAuthManager: ObservableObject {
         username = nil
         selectedServer = nil
         selectedServerURL = nil
+        selectedServerToken = nil
         isConnected = true  // Reset to default
         connectionError = nil
 
@@ -292,6 +325,7 @@ class PlexAuthManager: ObservableObject {
         userDefaults.removeObject(forKey: usernameKey)
         userDefaults.removeObject(forKey: serverURLKey)
         userDefaults.removeObject(forKey: serverNameKey)
+        userDefaults.removeObject(forKey: serverTokenKey)
 
         state = .idle
     }
@@ -348,11 +382,11 @@ class PlexAuthManager: ObservableObject {
             return
         }
 
-        // Test current connection
+        // Test current connection using the saved server token
         guard let currentURL = selectedServerURL else { return }
         print("🔐 PlexAuthManager: Verifying current connection: \(currentURL)")
 
-        if await testConnection(currentURL) {
+        if await testConnection(currentURL, serverToken: selectedServerToken) {
             print("🔐 PlexAuthManager: ✅ Current connection is working")
             isConnected = true
             connectionError = nil
@@ -373,6 +407,14 @@ class PlexAuthManager: ObservableObject {
                         selectedServerURL = workingURL
                         userDefaults.set(selectedServerURL, forKey: serverURLKey)
                         userDefaults.set(currentServer.name, forKey: serverNameKey)
+
+                        // Update server token for new server
+                        let tokenForServer = currentServer.accessToken ?? authToken
+                        selectedServerToken = tokenForServer
+                        if let newToken = tokenForServer {
+                            userDefaults.set(newToken, forKey: serverTokenKey)
+                        }
+
                         isConnected = true
                         connectionError = nil
                         state = .authenticated

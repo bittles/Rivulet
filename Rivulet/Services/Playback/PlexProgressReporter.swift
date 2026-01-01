@@ -130,7 +130,7 @@ actor PlexProgressReporter {
         await MainActor.run {
             let authManager = PlexAuthManager.shared
             guard let address = authManager.selectedServerURL,
-                  let token = authManager.authToken else {
+                  let token = authManager.selectedServerToken else {
                 return nil
             }
             return (address, token)

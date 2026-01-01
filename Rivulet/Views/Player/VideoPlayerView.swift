@@ -117,7 +117,7 @@ struct VideoPlayerView: View {
 
     private func startPlayback() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else {
+              let token = authManager.selectedServerToken else {
             hasError = true
             errorMessage = "Not authenticated"
             isLoading = false
@@ -138,7 +138,7 @@ struct VideoPlayerView: View {
     
     private func loadDetailedMetadata(showOverlay: Bool = true) async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let ratingKey = item.ratingKey else {
             detailedMetadata = item
             if showOverlay { showVideoInfo = true }
