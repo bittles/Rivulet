@@ -409,7 +409,7 @@ struct PlexLibraryView: View {
             HeroView(
                 item: hero,
                 serverURL: authManager.selectedServerURL ?? "",
-                authToken: authManager.authToken ?? "",
+                authToken: authManager.selectedServerToken ?? "",
                 focusTarget: $focusedItemId,
                 targetValue: "hero"
             ) {
@@ -436,7 +436,7 @@ struct PlexLibraryView: View {
                             initialItems: hubItems,
                             hubKey: hub.key ?? hub.hubKey,
                             serverURL: authManager.selectedServerURL ?? "",
-                            authToken: authManager.authToken ?? "",
+                            authToken: authManager.selectedServerToken ?? "",
                             contextMenuSource: isContinueWatching ? .continueWatching : .library,
                             onItemSelected: { item in
                                 selectedItem = item
@@ -471,7 +471,7 @@ struct PlexLibraryView: View {
                             initialItems: hubItems,
                             hubKey: hub.key ?? hub.hubKey,
                             serverURL: authManager.selectedServerURL ?? "",
-                            authToken: authManager.authToken ?? "",
+                            authToken: authManager.selectedServerToken ?? "",
                             contextMenuSource: .library,
                             onItemSelected: { item in
                                 selectedItem = item
@@ -558,7 +558,7 @@ struct PlexLibraryView: View {
             EquatableView(content: MediaPosterCard(
                 item: item,
                 serverURL: authManager.selectedServerURL ?? "",
-                authToken: authManager.authToken ?? ""
+                authToken: authManager.selectedServerToken ?? ""
             ))
         }
         #if os(tvOS)
@@ -582,7 +582,7 @@ struct PlexLibraryView: View {
         .mediaItemContextMenu(
             item: item,
             serverURL: authManager.selectedServerURL ?? "",
-            authToken: authManager.authToken ?? "",
+            authToken: authManager.selectedServerToken ?? "",
             source: .library,
             onRefreshNeeded: {
                 await refresh()
@@ -748,7 +748,7 @@ struct PlexLibraryView: View {
     /// Full load with loading state (used when no cache exists)
     private func loadItems() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else {
+              let token = authManager.selectedServerToken else {
             error = "Not authenticated"
             items = []
             hubs = []
@@ -767,7 +767,7 @@ struct PlexLibraryView: View {
     /// Background refresh without loading state (used when cache exists)
     private func loadItemsInBackground() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return }
+              let token = authManager.selectedServerToken else { return }
 
         // Fetch both items and hubs silently in background
         async let itemsFetch: () = fetchFromServer(serverURL: serverURL, token: token, updateLoading: false)
@@ -890,7 +890,7 @@ struct PlexLibraryView: View {
         guard hasMoreItems,
               !isLoadingMore,
               let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return }
+              let token = authManager.selectedServerToken else { return }
 
         isLoadingMore = true
 
@@ -1001,7 +1001,7 @@ struct PlexLibraryView: View {
 
     private func refresh() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return }
+              let token = authManager.selectedServerToken else { return }
 
         isLoading = true
         async let itemsFetch: () = fetchFromServer(serverURL: serverURL, token: token, updateLoading: true)
@@ -1016,7 +1016,7 @@ struct PlexLibraryView: View {
     private func prefetchImages() {
         guard !items.isEmpty,
               let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return }
+              let token = authManager.selectedServerToken else { return }
 
         hasPrefetched = true
 
@@ -1042,7 +1042,7 @@ struct PlexLibraryView: View {
     /// Called frequently to ensure images are loaded before user reaches them
     private func prefetchImagesAhead(from index: Int) {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return }
+              let token = authManager.selectedServerToken else { return }
 
         // Prefetch the next 30 items (~5 rows of 6) ahead of current position
         let prefetchStart = index + 3  // Start just ahead of current position

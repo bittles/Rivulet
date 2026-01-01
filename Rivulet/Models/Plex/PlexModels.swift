@@ -47,6 +47,10 @@ struct PlexDevice: Codable, Sendable {
     let natLoopbackSupported: Bool?
     let connections: [PlexConnection]
 
+    /// The 32-char server identifier used for plex.direct URLs
+    /// This is fetched separately from pms/servers.xml
+    var machineIdentifier: String?
+
     enum CodingKeys: String, CodingKey {
         case name, product, productVersion, platform, platformVersion, device
         case clientIdentifier, createdAt, lastSeenAt, provides, ownerId

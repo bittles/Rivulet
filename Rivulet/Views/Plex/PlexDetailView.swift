@@ -133,7 +133,7 @@ struct PlexDetailView: View {
                         cast: metadata.cast,
                         directors: metadata.Director ?? [],
                         serverURL: authManager.selectedServerURL ?? "",
-                        authToken: authManager.authToken ?? ""
+                        authToken: authManager.selectedServerToken ?? ""
                     )
                     .padding(.top, 32)
                 }
@@ -409,14 +409,14 @@ struct PlexDetailView: View {
     private var artistThumbURL: URL? {
         guard let thumb = fullMetadata?.thumb ?? item.thumb,
               let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return nil }
+              let token = authManager.selectedServerToken else { return nil }
         return URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(token)")
     }
 
     /// Load and play all tracks for an artist
     private func playAllArtistTracks() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let ratingKey = item.ratingKey else { return }
 
         isLoadingArtistTracks = true
@@ -804,7 +804,7 @@ struct PlexDetailView: View {
                                     season: season,
                                     isSelected: selectedSeason?.ratingKey == season.ratingKey,
                                     serverURL: authManager.selectedServerURL ?? "",
-                                    authToken: authManager.authToken ?? "",
+                                    authToken: authManager.selectedServerToken ?? "",
                                     focusedSeasonId: $focusedSeasonId
                                 ) {
                                     selectedSeason = season
@@ -818,7 +818,7 @@ struct PlexDetailView: View {
                                     season: season,
                                     isSelected: selectedSeason?.ratingKey == season.ratingKey,
                                     serverURL: authManager.selectedServerURL ?? "",
-                                    authToken: authManager.authToken ?? ""
+                                    authToken: authManager.selectedServerToken ?? ""
                                 ) {
                                     selectedSeason = season
                                     Task {
@@ -870,7 +870,7 @@ struct PlexDetailView: View {
                             EpisodeRow(
                                 episode: episode,
                                 serverURL: authManager.selectedServerURL ?? "",
-                                authToken: authManager.authToken ?? "",
+                                authToken: authManager.selectedServerToken ?? "",
                                 focusedEpisodeId: $focusedEpisodeId,
                                 onPlay: {
                                     selectedEpisode = episode
@@ -888,7 +888,7 @@ struct PlexDetailView: View {
                             EpisodeRow(
                                 episode: episode,
                                 serverURL: authManager.selectedServerURL ?? "",
-                                authToken: authManager.authToken ?? "",
+                                authToken: authManager.selectedServerToken ?? "",
                                 onPlay: {
                                     selectedEpisode = episode
                                     playFromBeginning = false
@@ -931,7 +931,7 @@ struct PlexDetailView: View {
                         EpisodeRow(
                             episode: episode,
                             serverURL: authManager.selectedServerURL ?? "",
-                            authToken: authManager.authToken ?? "",
+                            authToken: authManager.selectedServerToken ?? "",
                             focusedEpisodeId: $focusedEpisodeId,
                             onPlay: {
                                 selectedEpisode = episode
@@ -949,7 +949,7 @@ struct PlexDetailView: View {
                         EpisodeRow(
                             episode: episode,
                             serverURL: authManager.selectedServerURL ?? "",
-                            authToken: authManager.authToken ?? "",
+                            authToken: authManager.selectedServerToken ?? "",
                             onPlay: {
                                 selectedEpisode = episode
                                 playFromBeginning = false
@@ -992,7 +992,7 @@ struct PlexDetailView: View {
                             track: track,
                             trackNumber: track.index ?? (index + 1),
                             serverURL: authManager.selectedServerURL ?? "",
-                            authToken: authManager.authToken ?? "",
+                            authToken: authManager.selectedServerToken ?? "",
                             focusedId: $focusedTrackId,
                             onPlay: {
                                 savedTrackFocus = track.ratingKey
@@ -1005,7 +1005,7 @@ struct PlexDetailView: View {
                             track: track,
                             trackNumber: track.index ?? (index + 1),
                             serverURL: authManager.selectedServerURL ?? "",
-                            authToken: authManager.authToken ?? ""
+                            authToken: authManager.selectedServerToken ?? ""
                         ) {
                             selectedTrack = track
                             showPlayer = true
@@ -1037,7 +1037,7 @@ struct PlexDetailView: View {
                         AlbumRowButton(
                             album: album,
                             serverURL: authManager.selectedServerURL ?? "",
-                            authToken: authManager.authToken ?? "",
+                            authToken: authManager.selectedServerToken ?? "",
                             focusedAlbumId: $focusedAlbumId,
                             onSelect: {
                                 savedAlbumFocus = album.ratingKey
@@ -1051,7 +1051,7 @@ struct PlexDetailView: View {
                             ArtistAlbumRow(
                                 album: album,
                                 serverURL: authManager.selectedServerURL ?? "",
-                                authToken: authManager.authToken ?? ""
+                                authToken: authManager.selectedServerToken ?? ""
                             )
                         }
                         .buttonStyle(.plain)
@@ -1083,7 +1083,7 @@ struct PlexDetailView: View {
                             MediaPosterCard(
                                 item: relatedItem,
                                 serverURL: authManager.selectedServerURL ?? "",
-                                authToken: authManager.authToken ?? ""
+                                authToken: authManager.selectedServerToken ?? ""
                             )
                         }
                         .buttonStyle(.plain)
@@ -1116,7 +1116,7 @@ struct PlexDetailView: View {
                 let viewModel = UniversalPlayerViewModel(
                     metadata: playItem,
                     serverURL: authManager.selectedServerURL ?? "",
-                    authToken: authManager.authToken ?? "",
+                    authToken: authManager.selectedServerToken ?? "",
                     startOffset: resumeOffset != nil && resumeOffset! > 0 ? resumeOffset : nil,
                     loadingArtImage: artImage,
                     loadingThumbImage: thumbImage
@@ -1152,7 +1152,7 @@ struct PlexDetailView: View {
     /// Get art and poster images for the player loading screen (from cache or fetch)
     private func getPlayerImages(for metadata: PlexMetadata) async -> (UIImage?, UIImage?) {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return (nil, nil) }
+              let token = authManager.selectedServerToken else { return (nil, nil) }
 
         // For episodes, use the show's art (displayed on detail page)
         let art = (metadata.type == "episode" && selectedEpisode != nil) ? item.bestArt : metadata.bestArt
@@ -1174,7 +1174,7 @@ struct PlexDetailView: View {
 
     private func loadFullMetadata() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let ratingKey = item.ratingKey else { return }
 
         isLoadingExtras = true
@@ -1195,7 +1195,7 @@ struct PlexDetailView: View {
 
     private func loadRelatedItems() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let ratingKey = item.ratingKey else { return }
 
         do {
@@ -1213,7 +1213,7 @@ struct PlexDetailView: View {
 
     private func loadAndPlayTrailer() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let trailer = fullMetadata?.trailer,
               let ratingKey = trailer.ratingKey else { return }
 
@@ -1233,7 +1233,7 @@ struct PlexDetailView: View {
 
     private func toggleWatched() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let ratingKey = item.ratingKey else { return }
 
         do {
@@ -1258,7 +1258,7 @@ struct PlexDetailView: View {
 
     private func toggleStarRating() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let ratingKey = item.ratingKey else { return }
 
         do {
@@ -1281,7 +1281,7 @@ struct PlexDetailView: View {
     /// Navigate to the parent season of the current episode
     private func navigateToParentSeason() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let seasonKey = item.parentRatingKey else { return }
 
         isLoadingNavigation = true
@@ -1302,7 +1302,7 @@ struct PlexDetailView: View {
     /// Navigate to the parent show of the current episode
     private func navigateToParentShow() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let showKey = item.grandparentRatingKey else { return }
 
         isLoadingNavigation = true
@@ -1323,7 +1323,7 @@ struct PlexDetailView: View {
     /// Navigate to the parent show from a season (season's parent is the show)
     private func navigateToParentShowFromSeason() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let showKey = item.parentRatingKey else { return }
 
         isLoadingNavigation = true
@@ -1343,7 +1343,7 @@ struct PlexDetailView: View {
 
     private func loadSeasons() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let ratingKey = item.ratingKey else { return }
 
         isLoadingSeasons = true
@@ -1370,7 +1370,7 @@ struct PlexDetailView: View {
 
     private func loadEpisodes(for season: PlexMetadata) async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let ratingKey = season.ratingKey else { return }
 
         isLoadingEpisodes = true
@@ -1392,7 +1392,7 @@ struct PlexDetailView: View {
     /// Load episodes when viewing a season directly
     private func loadEpisodesForSeason() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let ratingKey = item.ratingKey else { return }
 
         isLoadingEpisodes = true
@@ -1416,7 +1416,7 @@ struct PlexDetailView: View {
     private func refreshEpisodeWatchStatus(ratingKey: String?) async {
         guard let ratingKey = ratingKey,
               let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return }
+              let token = authManager.selectedServerToken else { return }
 
         do {
             // Fetch fresh metadata for just this episode
@@ -1438,7 +1438,7 @@ struct PlexDetailView: View {
 
     private func loadTracks() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let ratingKey = item.ratingKey else { return }
 
         isLoadingTracks = true
@@ -1459,7 +1459,7 @@ struct PlexDetailView: View {
 
     private func loadAlbums() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let ratingKey = item.ratingKey else {
             print("🎵 Missing required data for loading albums")
             return
@@ -1506,7 +1506,7 @@ struct PlexDetailView: View {
     private var artURL: URL? {
         guard let art = item.bestArt,
               let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return nil }
+              let token = authManager.selectedServerToken else { return nil }
         return URL(string: "\(serverURL)\(art)?X-Plex-Token=\(token)")
     }
 
@@ -1523,14 +1523,14 @@ struct PlexDetailView: View {
 
         guard let thumbPath = thumb,
               let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return nil }
+              let token = authManager.selectedServerToken else { return nil }
         return URL(string: "\(serverURL)\(thumbPath)?X-Plex-Token=\(token)")
     }
 
     private var thumbURL: URL? {
         guard let thumb = item.thumb,
               let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return nil }
+              let token = authManager.selectedServerToken else { return nil }
         return URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(token)")
     }
 }

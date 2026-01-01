@@ -107,7 +107,7 @@ struct TVSidebarView: View {
             }
         }
         .task(id: authManager.hasCredentials) {
-            if authManager.authToken != nil {
+            if authManager.selectedServerToken != nil {
                 // Verify connection first to avoid 500 errors from stale/invalid server URLs
                 await authManager.verifyAndFixConnection()
                 // Then load data (will use cache first, then background refresh)
@@ -143,7 +143,7 @@ struct TVSidebarView: View {
                 let viewModel = UniversalPlayerViewModel(
                     metadata: metadata,
                     serverURL: authManager.selectedServerURL ?? "",
-                    authToken: authManager.authToken ?? "",
+                    authToken: authManager.selectedServerToken ?? "",
                     startOffset: metadata.viewOffset.map { Double($0) / 1000.0 },
                     loadingArtImage: artImage,
                     loadingThumbImage: thumbImage
@@ -172,7 +172,7 @@ struct TVSidebarView: View {
     /// Get art and poster images for the player loading screen (from cache or fetch)
     private func getPlayerImages(for metadata: PlexMetadata) async -> (UIImage?, UIImage?) {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return (nil, nil) }
+              let token = authManager.selectedServerToken else { return (nil, nil) }
 
         let art = metadata.bestArt
         let thumb = metadata.thumb ?? metadata.bestThumb

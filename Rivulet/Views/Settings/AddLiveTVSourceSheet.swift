@@ -175,7 +175,7 @@ struct AddLiveTVSourceSheet: View {
 
     private func checkPlexLiveTV() {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else {
+              let token = authManager.selectedServerToken else {
             plexError = "Plex server not connected"
             return
         }
@@ -362,7 +362,7 @@ private struct PlexLiveTVConfigForm: View {
 
     private func addPlexLiveTV() {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken,
+              let token = authManager.selectedServerToken,
               let serverName = authManager.savedServerName else {
             errorMessage = "Plex server not connected"
             return

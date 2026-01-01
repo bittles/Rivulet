@@ -107,8 +107,8 @@ class PlexDataStore: ObservableObject {
         print("📦 PlexDataStore: Starting hubs load...")
 
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else {
-            print("📦 PlexDataStore: Not authenticated - serverURL: \(authManager.selectedServerURL ?? "nil"), token: \(authManager.authToken != nil ? "present" : "nil")")
+              let token = authManager.selectedServerToken else {
+            print("📦 PlexDataStore: Not authenticated - serverURL: \(authManager.selectedServerURL ?? "nil"), token: \(authManager.selectedServerToken != nil ? "present" : "nil")")
             hubsError = "Not authenticated"
             return
         }
@@ -186,7 +186,7 @@ class PlexDataStore: ObservableObject {
 
     func refreshHubs() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return }
+              let token = authManager.selectedServerToken else { return }
 
         print("📦 PlexDataStore: Refreshing hubs...")
         isLoadingHubs = true
@@ -213,7 +213,7 @@ class PlexDataStore: ObservableObject {
         print("📦 PlexDataStore: Starting libraries load...")
 
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else {
+              let token = authManager.selectedServerToken else {
             print("📦 PlexDataStore: Not authenticated for libraries")
             librariesError = "Not authenticated"
             return
@@ -305,7 +305,7 @@ class PlexDataStore: ObservableObject {
 
     func refreshLibraries() async {
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else { return }
+              let token = authManager.selectedServerToken else { return }
 
         print("📦 PlexDataStore: Refreshing libraries...")
         isLoadingLibraries = true
@@ -354,7 +354,7 @@ class PlexDataStore: ObservableObject {
         prefetchTask?.cancel()
 
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else {
+              let token = authManager.selectedServerToken else {
             print("📦 PlexDataStore: Cannot prefetch - not authenticated")
             return
         }
@@ -599,7 +599,7 @@ class PlexDataStore: ObservableObject {
         print("TopShelf: updateTopShelfCache called")
 
         guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.authToken else {
+              let token = authManager.selectedServerToken else {
             print("TopShelf: No server URL or token available")
             return
         }
