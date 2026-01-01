@@ -189,12 +189,34 @@ struct PlexDVR: Codable, Sendable {
     let Device: [PlexDVRDevice]?
 }
 
-struct PlexDVRDevice: Codable, Sendable {
+struct PlexDVRDevice: Sendable {
     let key: String?
     let uuid: String?
     let uri: String?
-    let parentID: Int?
+    let parentID: String?  // Can be Int or String from Plex API
 }
+
+extension PlexDVRDevice: Decodable {
+    private enum CodingKeys: String, CodingKey {
+        case key, uuid, uri, parentID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        key = try container.decodeIfPresent(String.self, forKey: .key)
+        uuid = try container.decodeIfPresent(String.self, forKey: .uuid)
+        uri = try container.decodeIfPresent(String.self, forKey: .uri)
+
+        // parentID can be Int or String from Plex API
+        if let intValue = try? container.decodeIfPresent(Int.self, forKey: .parentID) {
+            parentID = String(intValue)
+        } else {
+            parentID = try container.decodeIfPresent(String.self, forKey: .parentID)
+        }
+    }
+}
+
+extension PlexDVRDevice: Encodable {}
 
 // MARK: - Converters
 

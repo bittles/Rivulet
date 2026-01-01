@@ -637,13 +637,23 @@ final class MPVMetalViewController: UIViewController {
             }
 
         case MPV_EVENT_END_FILE:
-            let reason = event.data.assumingMemoryBound(to: mpv_event_end_file.self).pointee.reason
+            let endFile = event.data.assumingMemoryBound(to: mpv_event_end_file.self).pointee
+            let reason = endFile.reason
             DispatchQueue.main.async { [weak self] in
                 if reason == MPV_END_FILE_REASON_EOF {
                     self?.updateState(.ended)
                 } else if reason == MPV_END_FILE_REASON_ERROR {
-                    self?.updateState(.error("Playback error"))
-                    self?.delegate?.mpvPlayerDidEncounterError("Playback ended with error")
+                    // Capture detailed error from MPV
+                    let errorCode = endFile.error
+                    let errorString: String
+                    if let cString = mpv_error_string(errorCode) {
+                        errorString = String(cString: cString)
+                    } else {
+                        errorString = "Unknown error (code: \(errorCode))"
+                    }
+                    let detailedError = "MPV error: \(errorString)"
+                    self?.updateState(.error(detailedError))
+                    self?.delegate?.mpvPlayerDidEncounterError(detailedError)
                 }
             }
 

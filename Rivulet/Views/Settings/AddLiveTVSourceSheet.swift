@@ -559,7 +559,9 @@ private struct DispatcharrConfigForm: View {
     }
 
     private func validateServer() {
-        guard let service = DispatcharrService.create(from: serverURL) else {
+        // Sanitize URL before validation (fixes common typos like "hhttp://")
+        let cleanedURL = sanitizeURL(serverURL)
+        guard let service = DispatcharrService.create(from: cleanedURL) else {
             validationStatus = .invalid("Invalid URL format")
             return
         }
@@ -584,18 +586,8 @@ private struct DispatcharrConfigForm: View {
     }
 
     private func addDispatcharr() {
-        // Use the same URL normalization as DispatcharrService.create()
-        var cleanedURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Remove trailing slash
-        if cleanedURL.hasSuffix("/") {
-            cleanedURL = String(cleanedURL.dropLast())
-        }
-
-        // Add http:// if no scheme
-        if !cleanedURL.hasPrefix("http://") && !cleanedURL.hasPrefix("https://") {
-            cleanedURL = "http://" + cleanedURL
-        }
+        // Sanitize URL (fixes common typos like "hhttp://")
+        let cleanedURL = sanitizeURL(serverURL)
 
         guard let url = URL(string: cleanedURL) else {
             errorMessage = "Invalid URL"
@@ -731,24 +723,18 @@ private struct M3UConfigForm: View {
     }
 
     private func addM3U() {
-        // Normalize M3U URL
-        var cleanedM3U = m3uURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !cleanedM3U.hasPrefix("http://") && !cleanedM3U.hasPrefix("https://") {
-            cleanedM3U = "http://" + cleanedM3U
-        }
+        // Sanitize M3U URL (fixes common typos like "hhttp://")
+        let cleanedM3U = sanitizeURL(m3uURL)
 
         guard let m3u = URL(string: cleanedM3U) else {
             errorMessage = "Invalid M3U URL"
             return
         }
 
-        // Normalize EPG URL if provided
+        // Sanitize EPG URL if provided
         var epg: URL? = nil
         if !epgURL.isEmpty {
-            var cleanedEPG = epgURL.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !cleanedEPG.hasPrefix("http://") && !cleanedEPG.hasPrefix("https://") {
-                cleanedEPG = "http://" + cleanedEPG
-            }
+            let cleanedEPG = sanitizeURL(epgURL)
             epg = URL(string: cleanedEPG)
         }
 
@@ -771,6 +757,44 @@ private struct M3UConfigForm: View {
             }
         }
     }
+}
+
+// MARK: - URL Sanitization
+
+/// Sanitize user-entered URLs to fix common typos
+private func sanitizeURL(_ input: String) -> String {
+    var url = input.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    // Remove common typos in protocol prefix
+    // e.g., "hhttp://", "htttp://", "http:/http://", "http://http://"
+    let typoPatterns = [
+        "http://http://", "https://https://",
+        "http://https://", "https://http://",
+        "hhttp://", "htttp://", "hhtp://", "htpp://",
+        "httpss://", "htps://"
+    ]
+
+    for typo in typoPatterns {
+        if url.lowercased().hasPrefix(typo) {
+            // Replace typo with correct protocol
+            let isSecure = typo.contains("https") || url.lowercased().hasPrefix("https")
+            let correctProtocol = isSecure ? "https://" : "http://"
+            url = correctProtocol + String(url.dropFirst(typo.count))
+            break
+        }
+    }
+
+    // Add http:// if no valid scheme present
+    if !url.lowercased().hasPrefix("http://") && !url.lowercased().hasPrefix("https://") {
+        url = "http://" + url
+    }
+
+    // Remove trailing slash for consistency
+    if url.hasSuffix("/") {
+        url = String(url.dropLast())
+    }
+
+    return url
 }
 
 // MARK: - TV Text Field
