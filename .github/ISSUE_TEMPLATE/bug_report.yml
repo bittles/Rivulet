@@ -1,0 +1,30 @@
+name: Bug Report
+description: Report a bug
+labels: [bug]
+body:
+  - type: checkboxes
+    id: search-check
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have searched for existing issues
+          required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to replicate
+      placeholder: |
+        1. Go to...
+        2. Click on...
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      placeholder: A clear description of what the bug is
+    validations:
+      required: true

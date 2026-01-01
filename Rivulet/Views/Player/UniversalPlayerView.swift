@@ -298,6 +298,7 @@ struct UniversalPlayerView: View {
         .animation(.spring(response: 0.25, dampingFraction: 0.9), value: viewModel.showInfoPanel)
         .animation(.easeInOut(duration: 0.3), value: viewModel.showSkipButton)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: viewModel.seekIndicator)
+        .animation(.easeInOut(duration: 0.5), value: viewModel.showPausedPoster)
         #if os(tvOS)
         .onPlayPauseCommand {
             // Skip button handles its own press via Button action
@@ -420,13 +421,13 @@ struct UniversalPlayerView: View {
             playerLayer
                 .ignoresSafeArea()
 
-            // Loading State
-            if viewModel.playbackState == .loading || viewModel.playbackState == .idle {
+            // Loading State or Paused Poster (shows after 5s pause)
+            if viewModel.playbackState == .loading || viewModel.playbackState == .idle || viewModel.showPausedPoster {
                 loadingView
                     .transition(
                         .asymmetric(
                             insertion: .opacity.animation(.easeIn(duration: 1.0)),
-                            removal: .opacity.animation(.easeOut(duration: 1.0))
+                            removal: .opacity.animation(.easeOut(duration: 0.5))
                         )
                     )
             }
@@ -615,13 +616,15 @@ struct UniversalPlayerView: View {
 
                     Spacer()
 
-                    // Loading indicator
-                    HStack(spacing: 12) {
-                        ProgressView()
-                            .tint(.white)
-                        Text("Loading...")
-                            .font(.callout)
-                            .foregroundStyle(.white.opacity(0.7))
+                    // Loading indicator (only show when actually loading, not when paused)
+                    if !viewModel.showPausedPoster {
+                        HStack(spacing: 12) {
+                            ProgressView()
+                                .tint(.white)
+                            Text("Loading...")
+                                .font(.callout)
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
                     }
                 }
                 .frame(maxWidth: 700, alignment: .leading)
@@ -768,6 +771,9 @@ struct UniversalPlayerView: View {
 
     #if os(tvOS)
     private func handleMoveCommand(_ direction: MoveCommandDirection) {
+        // Hide paused poster on any d-pad input
+        viewModel.hidePausedPoster()
+
         switch direction {
         case .left, .right:
             // Left/right are handled by GameController via RemoteHoldDetector

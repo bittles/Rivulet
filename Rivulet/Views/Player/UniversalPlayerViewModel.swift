@@ -231,6 +231,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published var showControls = true
     @Published var showInfoPanel = false
     @Published var isScrubbing = false
+    @Published var showPausedPoster = false
 
     // MARK: - Seek Indicator State
     /// Shows a brief indicator when user taps left/right to skip 10 seconds
@@ -360,6 +361,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var scrubTimer: Timer?
     private let scrubUpdateInterval: TimeInterval = 0.1  // 100ms updates for smooth scrubbing
     private var seekIndicatorTimer: Timer?
+    private var pausedPosterTimer: Timer?
+    private let pausedPosterDelay: TimeInterval = 5.0
 
     // MARK: - Playback Context
 
@@ -483,11 +486,20 @@ final class UniversalPlayerViewModel: ObservableObject {
                     self?.startControlsHideTimer()
                     // Prevent screensaver during playback
                     UIApplication.shared.isIdleTimerDisabled = true
+                    // Cancel paused poster timer and hide poster when resuming
+                    self?.cancelPausedPosterTimer()
                 } else {
                     self?.controlsTimer?.invalidate()
                     // Re-enable screensaver when not playing
                     if state == .paused || state == .ended || state == .idle {
                         UIApplication.shared.isIdleTimerDisabled = false
+                    }
+                    // Start paused poster timer when paused
+                    if state == .paused {
+                        self?.startPausedPosterTimer()
+                    } else {
+                        // Cancel timer for any other non-playing state
+                        self?.cancelPausedPosterTimer()
                     }
                 }
 
@@ -602,6 +614,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     func togglePlayPause() {
+        hidePausedPoster()
         if mpvPlayerWrapper.isPlaying {
             mpvPlayerWrapper.pause()
         } else {
@@ -626,6 +639,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     func seekRelative(by seconds: TimeInterval) async {
+        hidePausedPoster()
         await mpvPlayerWrapper.seekRelative(by: seconds)
         showControlsTemporarily()
 
@@ -664,6 +678,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Start or increase scrub speed in given direction
     /// - Parameter forward: true for forward, false for backward
     func scrubInDirection(forward: Bool) {
+        hidePausedPoster()
         let direction = forward ? 1 : -1
 
         if !isScrubbing {
@@ -981,6 +996,37 @@ final class UniversalPlayerViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Paused Poster Timer
+
+    /// Start timer to show poster after being paused for 5 seconds
+    private func startPausedPosterTimer() {
+        pausedPosterTimer?.invalidate()
+        pausedPosterTimer = Timer.scheduledTimer(withTimeInterval: pausedPosterDelay, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.playbackState == .paused else { return }
+                withAnimation(.easeIn(duration: 1.0)) {
+                    self.showPausedPoster = true
+                }
+            }
+        }
+    }
+
+    /// Cancel paused poster timer and hide the poster
+    private func cancelPausedPosterTimer() {
+        pausedPosterTimer?.invalidate()
+        pausedPosterTimer = nil
+        if showPausedPoster {
+            withAnimation(.easeOut(duration: 0.5)) {
+                showPausedPoster = false
+            }
+        }
+    }
+
+    /// Hide paused poster on any control input
+    func hidePausedPoster() {
+        cancelPausedPosterTimer()
     }
 
     // MARK: - Marker Detection & Skipping
