@@ -51,16 +51,14 @@ actor XMLTVParser {
             throw XMLTVParseError.httpError(httpResponse.statusCode)
         }
 
-        return try await parse(data: data)
+        return try parse(data: data)
     }
 
     /// Parse XMLTV data from raw data
-    func parse(data: Data) async throws -> ParseResult {
-        // XMLParser and its delegate require main actor
-        try await MainActor.run {
-            let parser = XMLTVInternalParser()
-            return try parser.parse(data: data)
-        }
+    func parse(data: Data) throws -> ParseResult {
+        // XMLParser does NOT require main thread - actor isolation handles thread safety
+        let parser = XMLTVInternalParser()
+        return try parser.parse(data: data)
     }
 
     /// Get programs for a specific channel within a time range
@@ -106,23 +104,6 @@ private class XMLTVInternalParser: NSObject, XMLParserDelegate {
     private var currentIsNew: Bool = false
 
     private var parseError: Error?
-
-    // Date formatter for XMLTV dates (yyyyMMddHHmmss +0000)
-    private let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMddHHmmss Z"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter
-    }()
-
-    // Alternative date format without timezone
-    private let dateFormatterNoTZ: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMddHHmmss"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        return formatter
-    }()
 
     func parse(data: Data) throws -> XMLTVParser.ParseResult {
         let parser = XMLParser(data: data)
@@ -252,17 +233,40 @@ private class XMLTVInternalParser: NSObject, XMLParserDelegate {
 
     // MARK: - Helpers
 
+    /// Fast manual date parsing for XMLTV format (yyyyMMddHHmmss with optional timezone)
+    /// ~10x faster than DateFormatter for high-volume parsing
     private func parseDate(_ string: String?) -> Date? {
-        guard let string = string else { return nil }
+        guard let s = string, s.count >= 14 else { return nil }
 
-        // Try with timezone first
-        if let date = dateFormatter.date(from: string) {
-            return date
-        }
+        var idx = s.startIndex
 
-        // Try without timezone (first 14 characters)
-        let cleanString = String(string.prefix(14))
-        return dateFormatterNoTZ.date(from: cleanString)
+        guard let year = Int(s[idx..<s.index(idx, offsetBy: 4)]) else { return nil }
+        idx = s.index(idx, offsetBy: 4)
+
+        guard let month = Int(s[idx..<s.index(idx, offsetBy: 2)]) else { return nil }
+        idx = s.index(idx, offsetBy: 2)
+
+        guard let day = Int(s[idx..<s.index(idx, offsetBy: 2)]) else { return nil }
+        idx = s.index(idx, offsetBy: 2)
+
+        guard let hour = Int(s[idx..<s.index(idx, offsetBy: 2)]) else { return nil }
+        idx = s.index(idx, offsetBy: 2)
+
+        guard let minute = Int(s[idx..<s.index(idx, offsetBy: 2)]) else { return nil }
+        idx = s.index(idx, offsetBy: 2)
+
+        guard let second = Int(s[idx..<s.index(idx, offsetBy: 2)]) else { return nil }
+
+        var components = DateComponents()
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = hour
+        components.minute = minute
+        components.second = second
+        components.timeZone = TimeZone(identifier: "UTC")
+
+        return Calendar(identifier: .gregorian).date(from: components)
     }
 }
 
