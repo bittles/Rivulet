@@ -198,10 +198,7 @@ class PlexAuthManager: ObservableObject {
         let tokenToUse = server.accessToken
         let isShared = server.owned == false
 
-        print("🔐 PlexAuthManager: Testing \(sortedConnections.count) connections (filtered from \(server.connections.count))")
-        if isShared {
-            print("🔐 PlexAuthManager: Using server-specific token for shared server")
-        }
+        print("🔐 PlexAuthManager: Testing \(sortedConnections.count) connections for \(server.name)\(isShared ? " (shared)" : "")")
 
         for connection in sortedConnections {
             print("🔐 PlexAuthManager: Testing \(connection.uri)...")
@@ -210,6 +207,36 @@ class PlexAuthManager: ObservableObject {
                 return connection.uri
             } else {
                 print("🔐 PlexAuthManager: ❌ Connection failed: \(connection.uri)")
+
+                // If HTTP failed on a non-local connection, try HTTPS and plex.direct
+                if !connection.local && connection.protocolType == "http" {
+                    // First try direct HTTPS - this will fail with cert error but we can extract the correct hash
+                    let httpsURI = connection.uri.replacingOccurrences(of: "http://", with: "https://")
+                    print("🔐 PlexAuthManager: Trying HTTPS fallback: \(httpsURI)...")
+                    let (success, certHash) = await testConnectionWithCertExtraction(httpsURI, serverToken: tokenToUse)
+                    if success {
+                        print("🔐 PlexAuthManager: ✅ HTTPS fallback works: \(httpsURI)")
+                        return httpsURI
+                    } else {
+                        print("🔐 PlexAuthManager: ❌ HTTPS fallback failed: \(httpsURI)")
+
+                        // If we extracted a plex.direct hash from the certificate, try that
+                        if let hash = certHash {
+                            let plexDirectURI = buildPlexDirectURL(
+                                address: connection.address,
+                                port: connection.port,
+                                machineIdentifier: hash
+                            )
+                            print("🔐 PlexAuthManager: Trying plex.direct (from cert): \(plexDirectURI)...")
+                            if await testConnection(plexDirectURI, serverToken: tokenToUse) {
+                                print("🔐 PlexAuthManager: ✅ plex.direct works: \(plexDirectURI)")
+                                return plexDirectURI
+                            } else {
+                                print("🔐 PlexAuthManager: ❌ plex.direct failed: \(plexDirectURI)")
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -225,22 +252,36 @@ class PlexAuthManager: ObservableObject {
     }
 
     /// Score a connection for sorting (higher = better)
+    /// Priority: Local HTTP > Local HTTPS > Remote HTTPS > Remote HTTP > Relay
+    /// - Local prefers HTTP (avoids self-signed cert issues common on home servers)
+    /// - Remote requires HTTPS (ATS blocks HTTP to public IPs)
     private func connectionScore(_ connection: PlexConnection) -> Int {
         var score = 0
 
         // Prefer non-relay (direct connections)
-        if !connection.relay { score += 100 }
+        if !connection.relay { score += 1000 }
 
         // Prefer local connections
-        if connection.local { score += 50 }
-
-        // Prefer HTTPS
-        if connection.protocolType == "https" { score += 25 }
-
-        // Prefer plex.direct domains (usually more reliable)
-        if connection.address.contains(".plex.direct") { score += 10 }
+        if connection.local {
+            score += 500
+            // For local: prefer HTTP (avoids certificate issues)
+            if connection.protocolType == "http" { score += 50 }
+        } else {
+            // For remote: prefer HTTPS (required by ATS)
+            if connection.protocolType == "https" { score += 100 }
+            // plex.direct domains are reliable for remote access
+            if connection.address.contains(".plex.direct") { score += 50 }
+        }
 
         return score
+    }
+
+    /// Build a plex.direct URL for secure remote access
+    /// Plex issues SSL certificates for *.plex.direct domains
+    /// Format: https://<ip-with-dashes>.<machineIdentifier>.plex.direct:<port>
+    private func buildPlexDirectURL(address: String, port: Int, machineIdentifier: String) -> String {
+        let ipWithDashes = address.replacingOccurrences(of: ".", with: "-")
+        return "https://\(ipWithDashes).\(machineIdentifier).plex.direct:\(port)"
     }
 
     /// Check if address is a Docker/internal bridge network
@@ -306,6 +347,70 @@ class PlexAuthManager: ObservableObject {
             print("🔐 PlexAuthManager: Connection test error: \(error.localizedDescription)")
             return false
         }
+    }
+
+    /// Test connection and extract plex.direct hash from certificate if it fails
+    /// Returns (success, extractedHash) where extractedHash is the plex.direct hash from the cert
+    private func testConnectionWithCertExtraction(_ urlString: String, serverToken: String? = nil) async -> (Bool, String?) {
+        guard let token = serverToken ?? authToken,
+              let url = URL(string: "\(urlString)/identity") else {
+            return (false, nil)
+        }
+
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 5.0
+            request.addValue("application/json", forHTTPHeaderField: "Accept")
+            request.addValue(token, forHTTPHeaderField: "X-Plex-Token")
+
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 5.0
+            config.timeoutIntervalForResource = 5.0
+
+            let session = URLSession(configuration: config, delegate: PlexCertificateDelegate(), delegateQueue: nil)
+            defer { session.invalidateAndCancel() }
+
+            let (_, response) = try await session.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse,
+               (200...299).contains(httpResponse.statusCode) {
+                return (true, nil)
+            }
+            return (false, nil)
+        } catch {
+            print("🔐 PlexAuthManager: Connection test error: \(error.localizedDescription)")
+
+            // Try to extract plex.direct hash from certificate error
+            let nsError = error as NSError
+            if nsError.code == -1200 || nsError.code == -9802 { // SSL errors
+                if let certHash = extractPlexDirectHash(from: nsError) {
+                    print("🔐 PlexAuthManager: Extracted plex.direct hash from cert: \(certHash)")
+                    return (false, certHash)
+                }
+            }
+            return (false, nil)
+        }
+    }
+
+    /// Extract the plex.direct hash from an SSL certificate error
+    /// The certificate subject contains: *.HASH.plex.direct
+    private func extractPlexDirectHash(from error: NSError) -> String? {
+        // Look in the error's userInfo for certificate chain info
+        let errorString = error.description
+
+        // Pattern: *.HASH.plex.direct where HASH is 32 hex chars
+        let pattern = #"\*\.([a-f0-9]{32})\.plex\.direct"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+            return nil
+        }
+
+        let range = NSRange(errorString.startIndex..., in: errorString)
+        if let match = regex.firstMatch(in: errorString, range: range),
+           let hashRange = Range(match.range(at: 1), in: errorString) {
+            return String(errorString[hashRange])
+        }
+
+        return nil
     }
 
     /// Sign out and clear credentials
