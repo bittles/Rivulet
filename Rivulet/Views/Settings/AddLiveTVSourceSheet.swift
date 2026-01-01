@@ -380,6 +380,7 @@ private struct PlexLiveTVConfigForm: View {
 
             await dataStore.addPlexSource(provider: provider)
             await dataStore.loadChannels()
+            await dataStore.loadEPG(startDate: Date(), hours: 6)
 
             await MainActor.run {
                 isAdding = false
@@ -611,6 +612,7 @@ private struct DispatcharrConfigForm: View {
             )
 
             await dataStore.loadChannels()
+            await dataStore.loadEPG(startDate: Date(), hours: 6)
 
             await MainActor.run {
                 isAdding = false
@@ -761,6 +763,7 @@ private struct M3UConfigForm: View {
             )
 
             await dataStore.loadChannels()
+            await dataStore.loadEPG(startDate: Date(), hours: 6)
 
             await MainActor.run {
                 isAdding = false
