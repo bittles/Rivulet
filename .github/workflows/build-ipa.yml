@@ -34,7 +34,7 @@ jobs:
         open Rivulet.xcodeproj
 
     - name: Build project 
-      run: xcodebuild -scheme Rivulet -destination 'generic/platform=tvOS' build
+      run: xcodebuild -scheme Rivulet -destination 'generic/platform=tvOS' -allowProvisioningUpdates build
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v4.6.2
       with:
