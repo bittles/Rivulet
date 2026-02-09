@@ -16,10 +16,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Open Xcode project
-      run: |
-        open Rivulet.xcodeproj
-    - name: Install xcbeautify
+    - name: Install MPVKit
       uses: Cyberbeni/install-swift-tool@v3
       with:
         url: https://github.com/mpvkit/MPVKit
@@ -29,5 +26,9 @@ jobs:
         version: '*' # optional, overridden by commit, format: https://devhints.io/semver
         #package-resolved-path: 'Package.resolved' # optional, default: 'Package.resolved', Package.resolved file path to use for resolving the version if no commit/branch/version is specified
         use-cache: true # optinal, default: true
+    - name: Open Xcode project
+      run: |
+        open Rivulet.xcodeproj
+
     - name: Build project 
       run: xcodebuild -scheme Rivulet -destination 'generic/platform=tvOS' build
