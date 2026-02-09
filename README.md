@@ -1,3 +1,5 @@
+## Use macos-26 runner to build ipa.  Currently just needs provisioning profile setup
+
 # Rivulet
 
 A native tvOS video streaming app designed for simplicity, combining **Plex** media server integration with **Live TV** support.
