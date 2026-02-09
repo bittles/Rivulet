@@ -12,7 +12,7 @@ on:
 jobs:
   build:
 
-    runs-on: macos-latest
+    runs-on: macos-26
 
     steps:
     - uses: actions/checkout@v4
@@ -35,3 +35,11 @@ jobs:
 
     - name: Build project 
       run: xcodebuild -scheme Rivulet -destination 'generic/platform=tvOS' build
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v4.6.2
+      with:
+        # Artifact name
+        name: Rivulet.ipa
+        # A file, directory or wildcard pattern that describes what to upload
+        path: ./Rivulet.ipa
+        # The desired behavior if no files are found using the provided path.
