@@ -16,16 +16,16 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Install MPVKit
-      uses: Cyberbeni/install-swift-tool@v3
-      with:
-        url: https://github.com/mpvkit/MPVKit
+#    - name: Install MPVKit
+#      uses: Cyberbeni/install-swift-tool@v3
+#      with:
+#        url: https://github.com/mpvkit/MPVKit
         # Version from Package.resolved is used if no commit/branch/version is provided.
-        commit: '613c0ccc3acf70e136aaff880a9b5fe8fdfaf5b8' # optional, commit hash
-        branch: main # optional, branch or tag, overridden by commit/version
-        version: '*' # optional, overridden by commit, format: https://devhints.io/semver
+#        commit: '613c0ccc3acf70e136aaff880a9b5fe8fdfaf5b8' # optional, commit hash
+#        branch: main # optional, branch or tag, overridden by commit/version
+#        version: '*' # optional, overridden by commit, format: https://devhints.io/semver
         #package-resolved-path: 'Package.resolved' # optional, default: 'Package.resolved', Package.resolved file path to use for resolving the version if no commit/branch/version is specified
-        use-cache: false # optinal, default: true
+#        use-cache: false # optinal, default: true
     - name: Open Xcode project
       run: |
         open Rivulet.xcodeproj
