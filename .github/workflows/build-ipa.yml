@@ -16,16 +16,19 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-#    - name: Install MPVKit
-#      uses: Cyberbeni/install-swift-tool@v3
-#      with:
-#        url: https://github.com/mpvkit/MPVKit
-        # Version from Package.resolved is used if no commit/branch/version is provided.
-#        commit: '613c0ccc3acf70e136aaff880a9b5fe8fdfaf5b8' # optional, commit hash
-#        branch: main # optional, branch or tag, overridden by commit/version
-#        version: '*' # optional, overridden by commit, format: https://devhints.io/semver
-        #package-resolved-path: 'Package.resolved' # optional, default: 'Package.resolved', Package.resolved file path to use for resolving the version if no commit/branch/version is specified
-#        use-cache: false # optinal, default: true
+    - name: Git Clone Action
+      # You may pin to the exact commit or the version.
+      # uses: sudosubin/git-clone-action@8a93ce24d47782e30077508cccacf8a05a891bae
+      uses: sudosubin/git-clone-action@v1.0.1
+      with:
+        # Repository owner and name. Ex: sudosubin/git-clone-action
+        repository: https://github.com/mpvkit/MPVKit.git # optional, default is ${{ github.repository }}
+        # Git host platform. Ex: github, gitlab, bitbucket, gitee, or else (git.suckless.org, ...)
+        #platform: # optional, default is github
+        # Git branch or tag to checkout.
+        ref: main # optional
+        # Relative path from current directory, where to clone.
+        path: ./MPVKit # optional
     - name: Open Xcode project
       run: |
         open Rivulet.xcodeproj
