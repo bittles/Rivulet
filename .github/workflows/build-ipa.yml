@@ -25,7 +25,7 @@ jobs:
         branch: main # optional, branch or tag, overridden by commit/version
         version: '*' # optional, overridden by commit, format: https://devhints.io/semver
         #package-resolved-path: 'Package.resolved' # optional, default: 'Package.resolved', Package.resolved file path to use for resolving the version if no commit/branch/version is specified
-        use-cache: true # optinal, default: true
+        use-cache: false # optinal, default: true
     - name: Open Xcode project
       run: |
         open Rivulet.xcodeproj
