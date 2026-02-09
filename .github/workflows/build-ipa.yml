@@ -5,8 +5,8 @@ name: Build IPA
 
 on:
   push:
-    tags: 
-      - 'build**'
+    branches: 
+      - 'main'
 
 jobs:
   build:
