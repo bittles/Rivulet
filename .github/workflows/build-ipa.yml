@@ -5,7 +5,8 @@ name: Build IPA
 
 on:
   push:
-    branches-ignore: [ "main" ]
+    tags: 
+      - 'build**'
 
 jobs:
   build:
